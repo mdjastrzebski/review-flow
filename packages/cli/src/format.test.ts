@@ -34,7 +34,7 @@ function makeVerdict(overrides: Partial<Verdict> = {}): Verdict {
 
 const summary = {
   base: "main",
-  runDir: "/repo/.review-flow/runs/x",
+  reportPath: "/repo/.review-flow/runs/x/report.md",
   costUsd: 0.183,
   durationMs: 62_000,
 };
@@ -109,6 +109,11 @@ describe("formatFindings", () => {
       plain,
     );
     expect(text).toContain("  Verifier  It happens.\n\n");
+  });
+
+  it("omits the cost when unknown", () => {
+    const text = formatFindings({ ...summary, costUsd: null, findings: [], verdicts: {} }, plain);
+    expect(text).toContain("main...HEAD · 1m 2s\n");
   });
 
   it("says so when there are no findings", () => {

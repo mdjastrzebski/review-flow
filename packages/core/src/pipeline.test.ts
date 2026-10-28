@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
-import { runReview } from "./pipeline.ts";
+import { NoChangesError, runReview } from "./pipeline.ts";
 import type { Finding, ReviewOutput, Verdict } from "./schemas.ts";
 
 let repo: string;
@@ -130,6 +130,21 @@ describe("runReview", () => {
       "reviewer",
       "verifier-F-001",
     ]);
+
+    const report = await readFile(runDir.reportPath, "utf8");
+    expect(report).toContain("### [ ] F-001 · medium · confirmed (high) · `a.txt:2`");
+    expect(report).toContain("**Cost:** $1.00");
+  });
+
+  it("records the cost as unknown when no task reports one", async () => {
+    const { runAgent: base } = stubAgent();
+    const runAgent: RunAgent = async (task) => ({ ...(await base(task)), costUsd: null });
+    const result = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    expect(result.costUsd).toBeNull();
+    const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
+    expect(run.costUsd).toBeNull();
+    expect(await readFile(result.runDir.reportPath, "utf8")).not.toContain("Cost");
   });
 
   it("verifies every finding in a fresh task and writes verdicts.json", async () => {
@@ -244,7 +259,7 @@ describe("runReview", () => {
     const { runAgent, tasks } = stubAgent();
     await expect(
       runReview({ ...baseOptions, base: "feature", cwd: repo, runAgent }),
-    ).rejects.toThrow("No changes");
+    ).rejects.toBeInstanceOf(NoChangesError);
     expect(tasks).toHaveLength(0);
   });
 });

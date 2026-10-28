@@ -1,3 +1,4 @@
+import { formatLocation } from "./format.ts";
 import { codeFence, renderPrompt } from "./prompts.ts";
 import type { NormalizedFinding } from "./schemas.ts";
 
@@ -26,11 +27,6 @@ export function verifierTaskId(finding: NormalizedFinding): string {
   return `verifier-${finding.id}`;
 }
 
-function location(finding: NormalizedFinding): string {
-  const { file, lineStart, lineEnd } = finding;
-  return lineStart === lineEnd ? `${file}:${lineStart}` : `${file}:${lineStart}-${lineEnd}`;
-}
-
 function fixSection(suggestedFix: string | null): string {
   if (suggestedFix === null) return "No fix was suggested.";
   return `Suggested fix:\n\n${codeFence(truncateFix(suggestedFix).text)}`;
@@ -49,7 +45,7 @@ export function buildVerifierPrompt(
   return renderPrompt(template, {
     base: context.base,
     title: finding.title,
-    location: location(finding),
+    location: formatLocation(finding),
     claim: finding.claim,
     fix: fixSection(finding.suggestedFix),
     diffBlock: codeFence(context.diff, "diff"),

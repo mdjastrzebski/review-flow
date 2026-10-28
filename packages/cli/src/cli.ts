@@ -2,10 +2,10 @@ import { Command, Option } from "commander";
 import { getAgent } from "@review-flow/agents";
 import {
   HARNESSES,
+  NoChangesError,
   resolveModels,
   runReview,
   type Harness,
-  type ModelChoice,
 } from "@review-flow/core";
 import { formatFindings } from "./format.ts";
 
@@ -19,28 +19,29 @@ interface ReviewOptions {
   quiet: boolean;
 }
 
-function describeModel({ model, effort }: ModelChoice): string {
-  const name = model ?? "harness default";
-  return effort === null ? name : `${name} (effort: ${effort})`;
-}
-
 async function review(options: ReviewOptions): Promise<void> {
   const models = resolveModels(options.harness, {
     model: options.model ?? null,
     verifierModel: options.verifierModel ?? null,
   });
   const log = options.quiet ? () => {} : (message: string) => console.log(message);
-  log(`Reviewer: ${describeModel(models.reviewer)}`);
-  log(`Verifier: ${describeModel(models.verifier)}`);
 
-  const result = await runReview({
-    cwd: options.repo,
-    base: options.base,
-    harness: options.harness,
-    models,
-    runAgent: getAgent(options.harness, { cursorBin: options.cursorBin }),
-    log,
-  });
+  let result;
+  try {
+    result = await runReview({
+      cwd: options.repo,
+      base: options.base,
+      harness: options.harness,
+      models,
+      runAgent: getAgent(options.harness, { cursorBin: options.cursorBin }),
+      log,
+    });
+  } catch (error) {
+    if (!(error instanceof NoChangesError)) throw error;
+    // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
+    console.error(`Nothing to review: no changes between ${error.base} and HEAD.`);
+    return;
+  }
 
   if (options.quiet) {
     // Only the run dir, so scripts can do: R=$(review-flow review --quiet ...)
@@ -49,7 +50,7 @@ async function review(options: ReviewOptions): Promise<void> {
   }
   console.log(
     formatFindings(
-      { ...result, base: options.base, runDir: result.runDir.root },
+      { ...result, base: options.base, reportPath: result.runDir.reportPath },
       {
         color: process.stdout.hasColors?.() ?? false,
         width: Math.min(process.stdout.columns ?? 100, 100),

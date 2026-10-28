@@ -1,5 +1,8 @@
 import { styleText } from "node:util";
 import {
+  formatCost,
+  formatDuration,
+  formatLocation,
   rankFindings,
   type FixAssessment,
   type NormalizedFinding,
@@ -19,8 +22,8 @@ export interface FindingsSummary {
   findings: NormalizedFinding[];
   verdicts: Record<string, Verdict>;
   base: string;
-  runDir: string;
-  costUsd: number;
+  reportPath: string;
+  costUsd: number | null;
   durationMs: number;
 }
 
@@ -65,19 +68,6 @@ export function wrap(text: string, width: number): string[] {
   return lines;
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-function location(finding: NormalizedFinding): string {
-  const lines =
-    finding.lineStart === finding.lineEnd
-      ? `${finding.lineStart}`
-      : `${finding.lineStart}-${finding.lineEnd}`;
-  return `${finding.file}:${lines}`;
-}
-
 export function formatFindings(summary: FindingsSummary, options: FormatOptions): string {
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
@@ -99,7 +89,11 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
   const out: string[] = [""];
   const stats = paint(
     "dim",
-    `${summary.base}...HEAD · ${formatDuration(summary.durationMs)} · $${summary.costUsd.toFixed(2)}`,
+    [
+      `${summary.base}...HEAD`,
+      formatDuration(summary.durationMs),
+      ...(summary.costUsd === null ? [] : [formatCost(summary.costUsd)]),
+    ].join(" · "),
   );
 
   if (findings.length === 0) {
@@ -124,7 +118,9 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
     out.push(
       `${paint("bold", finding.id)} ${severity} ${status} ${paint("dim", `(${verdict.confidence} confidence)`)}  ${paint("bold", finding.title)}`,
     );
-    out.push(`${INDENT}${paint("cyan", location(finding))} ${paint("dim", finding.category)}`);
+    out.push(
+      `${INDENT}${paint("cyan", formatLocation(finding))} ${paint("dim", finding.category)}`,
+    );
     field("Claim", finding.claim);
     field("Verifier", verdict.summary);
     if (finding.suggestedFix !== null) field("Fix", finding.suggestedFix);
@@ -135,6 +131,6 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
     out.push("");
   }
 
-  out.push(paint("dim", `Details: ${summary.runDir}`), "");
+  out.push(paint("dim", `Report: ${summary.reportPath}`), "");
   return out.join("\n");
 }

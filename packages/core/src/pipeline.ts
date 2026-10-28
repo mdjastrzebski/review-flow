@@ -10,11 +10,13 @@ import {
   snapshotStatus,
   type StatusSnapshot,
 } from "./git.ts";
+import { describeModel } from "./format.ts";
 import type { Harness, Role, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
 import { applyVerdictRules } from "./rank.ts";
+import { renderReport } from "./report.ts";
 import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
 import { buildVerifierPrompt, verifierTaskId } from "./verify.ts";
 
@@ -37,7 +39,8 @@ export interface ReviewRunResult {
   findings: NormalizedFinding[];
   /** findingId → verdict, with the code-enforced rules applied. */
   verdicts: Record<string, Verdict>;
-  costUsd: number;
+  /** null when no task reported a cost (Cursor). */
+  costUsd: number | null;
   durationMs: number;
 }
 
@@ -58,7 +61,8 @@ interface RunRecord {
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
-  costUsd: number;
+  /** Sum over tasks that reported a cost; null when none did. */
+  costUsd: number | null;
   status: "running" | "ok" | "failed";
   error: string | null;
   tasks: TaskRecord[];
@@ -129,7 +133,7 @@ async function runTask<T>(
     costUsd: result.costUsd,
     durationMs: result.durationMs,
   });
-  ctx.run.costUsd += result.costUsd ?? 0;
+  if (result.costUsd !== null) ctx.run.costUsd = (ctx.run.costUsd ?? 0) + result.costUsd;
   // Agents are read-only by configuration; this is the safety net if that ever fails.
   await assertStatusUnchanged(ctx.repo, ctx.status);
   return result;
@@ -215,7 +219,15 @@ async function verifyFindings(
   );
 }
 
-/** collect → review → normalize → verify. Ranking and the report come in later steps. */
+/** The branch has no changes against the base; not a failure, just nothing to review. */
+export class NoChangesError extends Error {
+  constructor(readonly base: string) {
+    super(`No changes between ${base} and HEAD.`);
+    this.name = "NoChangesError";
+  }
+}
+
+/** collect → review → normalize → verify → rank → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const { base, harness, models, runAgent, log } = options;
   const repo = await resolveRepoRoot(options.cwd);
@@ -224,8 +236,10 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
 
   const diff = await diffAgainstBase(repo, base);
   if (diff.trim() === "") {
-    throw new Error(`No changes between ${base} and HEAD.`);
+    throw new NoChangesError(base);
   }
+  log(`Reviewer: ${describeModel(models.reviewer)}`);
+  log(`Verifier: ${describeModel(models.verifier)}`);
 
   if (await ensureGitignored(repo)) {
     log("Added .review-flow/ to .gitignore");
@@ -246,7 +260,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     startedAt: startedAt.toISOString(),
     finishedAt: null,
     durationMs: null,
-    costUsd: 0,
+    costUsd: null,
     status: "running",
     error: null,
     tasks: [],
@@ -290,14 +304,22 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     await writeJson(runDir.verdictsPath, verdicts);
     log(`Verdicts → ${runDir.verdictsPath}`);
 
-    run.status = "ok";
-    return {
-      runDir,
+    const durationMs = Date.now() - startedAt.getTime();
+    const report = renderReport({
+      harness,
+      models,
+      base: run.base,
+      head: run.head,
+      durationMs,
+      costUsd: run.costUsd,
       findings,
       verdicts,
-      costUsd: run.costUsd,
-      durationMs: Date.now() - startedAt.getTime(),
-    };
+    });
+    await writeFile(runDir.reportPath, report);
+    log(`Report → ${runDir.reportPath}`);
+
+    run.status = "ok";
+    return { runDir, findings, verdicts, costUsd: run.costUsd, durationMs };
   } catch (error) {
     run.status = "failed";
     run.error = error instanceof Error ? error.message : String(error);
