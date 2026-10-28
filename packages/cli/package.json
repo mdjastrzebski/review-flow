@@ -1,0 +1,13 @@
+{
+  "name": "@review-flow/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@review-flow/core": "workspace:*",
+    "commander": "^15.0.0"
+  }
+}

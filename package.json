@@ -3,17 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "review-flow": "tsx packages/cli/src/cli.ts",
+    "test": "pnpm -r test",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
     "oxfmt": "^0.75.0",
     "oxlint": "^1.90.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
   "engines": {
