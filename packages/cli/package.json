@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@review-flow/agents": "workspace:*",
     "@review-flow/core": "workspace:*",
     "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }

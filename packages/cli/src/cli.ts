@@ -1,18 +1,13 @@
-import { writeFile } from "node:fs/promises";
 import { Command, Option } from "commander";
+import { getAgent } from "@review-flow/agents";
 import {
-  createRunDir,
-  diffAgainstBase,
-  ensureGitignored,
   HARNESSES,
-  resolveCommit,
   resolveModels,
-  resolveRepoRoot,
-  shortSha,
-  snapshotStatus,
+  runReview,
   type Harness,
   type ModelChoice,
 } from "@review-flow/core";
+import { formatFindings } from "./format.ts";
 
 interface ReviewOptions {
   base: string;
@@ -21,6 +16,7 @@ interface ReviewOptions {
   verifierModel?: string;
   cursorBin: string;
   repo: string;
+  quiet: boolean;
 }
 
 function describeModel({ model, effort }: ModelChoice): string {
@@ -33,28 +29,33 @@ async function review(options: ReviewOptions): Promise<void> {
     model: options.model ?? null,
     verifierModel: options.verifierModel ?? null,
   });
-  const repo = await resolveRepoRoot(options.repo);
-  await resolveCommit(repo, options.base);
+  const log = options.quiet ? () => {} : (message: string) => console.log(message);
+  log(`Reviewer: ${describeModel(models.reviewer)}`);
+  log(`Verifier: ${describeModel(models.verifier)}`);
 
-  const diff = await diffAgainstBase(repo, options.base);
-  if (diff.trim() === "") {
-    throw new Error(`No changes between ${options.base} and HEAD.`);
+  const result = await runReview({
+    cwd: options.repo,
+    base: options.base,
+    harness: options.harness,
+    models,
+    runAgent: getAgent(options.harness, { cursorBin: options.cursorBin }),
+    log,
+  });
+
+  if (options.quiet) {
+    // Only the run dir, so scripts can do: R=$(review-flow review --quiet ...)
+    console.log(result.runDir.root);
+    return;
   }
-
-  if (await ensureGitignored(repo)) {
-    console.log("Added .review-flow/ to .gitignore");
-  }
-  // Taken after the .gitignore edit; agents must leave the tree exactly like this.
-  const status = await snapshotStatus(repo);
-
-  const runDir = await createRunDir(repo, await shortSha(repo, "HEAD"), new Date());
-  await writeFile(runDir.diffPath, diff);
-  console.log(`Run dir: ${runDir.root}`);
-  console.log(`Reviewer: ${describeModel(models.reviewer)}`);
-  console.log(`Verifier: ${describeModel(models.verifier)}`);
-
-  // Review and verification land in later steps.
-  void status;
+  console.log(
+    formatFindings(
+      { ...result, base: options.base, runDir: result.runDir.root },
+      {
+        color: process.stdout.hasColors?.() ?? false,
+        width: Math.min(process.stdout.columns ?? 100, 100),
+      },
+    ),
+  );
 }
 
 const program = new Command("review-flow");
@@ -70,6 +71,7 @@ program
   .option("--verifier-model <id>", "model for the verifiers")
   .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
   .option("--repo <path>", "repository to review", process.env.INIT_CWD ?? process.cwd())
+  .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)
   .action(review);
 
 try {

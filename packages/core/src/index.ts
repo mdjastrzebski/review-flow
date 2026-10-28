@@ -3,3 +3,7 @@ export * from "./rank.ts";
 export * from "./git.ts";
 export * from "./run-dir.ts";
 export * from "./models.ts";
+export * from "./agent.ts";
+export * from "./normalize.ts";
+export * from "./prompts.ts";
+export * from "./pipeline.ts";
