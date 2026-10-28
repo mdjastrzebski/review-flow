@@ -24,3 +24,13 @@ export function renderPrompt(template: string, vars: Record<string, string>): st
   if (unused.length > 0) throw new Error(`Prompt has no placeholder for: ${unused.join(", ")}`);
   return rendered;
 }
+
+/**
+ * Wraps text in a Markdown code fence longer than any backtick run inside it, so the content
+ * can't close the fence early.
+ */
+export function codeFence(text: string, lang = ""): string {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `${fence}${lang}\n${text}\n${fence}`;
+}

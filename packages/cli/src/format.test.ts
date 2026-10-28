@@ -1,4 +1,4 @@
-import type { NormalizedFinding } from "@review-flow/core";
+import type { NormalizedFinding, Verdict } from "@review-flow/core";
 import { describe, expect, it } from "vitest";
 import { formatFindings, wrap } from "./format.ts";
 
@@ -15,6 +15,19 @@ function makeFinding(overrides: Partial<NormalizedFinding>): NormalizedFinding {
     claim: "Claim text.",
     rationale: "Rationale.",
     suggestedFix: null,
+    ...overrides,
+  };
+}
+
+function makeVerdict(overrides: Partial<Verdict> = {}): Verdict {
+  return {
+    verdict: "confirmed",
+    severity: "medium",
+    confidence: "high",
+    fixCost: "small",
+    evidence: [{ kind: "code_ref", file: "src/a.ts", line: 3, detail: "here" }],
+    summary: "It happens.",
+    fix: { assessment: "sound", detail: "Works.", betterFix: null },
     ...overrides,
   };
 }
@@ -38,42 +51,77 @@ describe("wrap", () => {
 });
 
 describe("formatFindings", () => {
-  it("orders findings by severity and shows the breakdown and stats", () => {
+  it("ranks by verdict, then verifier severity, and shows the breakdown and stats", () => {
     const text = formatFindings(
       {
         ...summary,
         findings: [
-          makeFinding({ id: "F-001", severity: "low" }),
-          makeFinding({ id: "F-002", severity: "critical" }),
+          makeFinding({ id: "F-001", severity: "critical" }),
+          makeFinding({ id: "F-002" }),
+          makeFinding({ id: "F-003" }),
         ],
+        verdicts: {
+          "F-001": makeVerdict({ verdict: "refuted", severity: "critical" }),
+          "F-002": makeVerdict({ severity: "low" }),
+          "F-003": makeVerdict({ severity: "high" }),
+        },
       },
       plain,
     );
-    expect(text.indexOf("F-002")).toBeLessThan(text.indexOf("F-001"));
-    expect(text).toContain("2 findings  1 critical · 1 low  main...HEAD · 1m 2s · $0.18");
+    const order = ["F-003", "F-002", "F-001"].map((id) => text.indexOf(id));
+    expect(order).toEqual(order.toSorted((a, b) => a - b));
+    expect(text).toContain("3 findings  2 confirmed · 1 refuted  main...HEAD · 1m 2s · $0.18");
+    expect(text).toContain("F-003  HIGH  confirmed (high confidence)  Title");
   });
 
-  it("shows location, claim and fix, and omits a null fix", () => {
+  it("shows location, claim, verifier summary, fix and fix check", () => {
     const text = formatFindings(
       {
         ...summary,
-        findings: [
-          makeFinding({ id: "F-001", lineEnd: 9, suggestedFix: "Do X." }),
-          makeFinding({ id: "F-002", file: "src/b.ts" }),
-        ],
+        findings: [makeFinding({ id: "F-001", lineEnd: 9, suggestedFix: "Do X." })],
+        verdicts: {
+          "F-001": makeVerdict({
+            fix: { assessment: "incomplete", detail: "Misses Y.", betterFix: "Do X and Y." },
+          }),
+        },
       },
       plain,
     );
-    expect(text).toContain("  src/a.ts:3-9\n  Claim  Claim text.\n  Fix    Do X.");
-    expect(text).toContain("  src/b.ts:3\n  Claim  Claim text.\n\n");
+    expect(text).toContain(
+      [
+        "  src/a.ts:3-9 correctness",
+        "  Claim     Claim text.",
+        "  Verifier  It happens.",
+        "  Fix       Do X.",
+        "  Fix check incomplete: Misses Y.",
+        "  Better    Do X and Y.",
+      ].join("\n"),
+    );
+  });
+
+  it("omits a null fix and the fix check for refuted findings", () => {
+    const text = formatFindings(
+      {
+        ...summary,
+        findings: [makeFinding({ id: "F-001" })],
+        verdicts: { "F-001": makeVerdict({ verdict: "refuted" }) },
+      },
+      plain,
+    );
+    expect(text).toContain("  Verifier  It happens.\n\n");
   });
 
   it("says so when there are no findings", () => {
-    expect(formatFindings({ ...summary, findings: [] }, plain)).toContain("No findings");
+    expect(formatFindings({ ...summary, findings: [], verdicts: {} }, plain)).toContain(
+      "No findings",
+    );
   });
 
   it("emits no ANSI codes without color", () => {
-    const text = formatFindings({ ...summary, findings: [makeFinding({})] }, plain);
+    const text = formatFindings(
+      { ...summary, findings: [makeFinding({})], verdicts: { "F-001": makeVerdict() } },
+      plain,
+    );
     expect(text).not.toContain("\u001b[");
   });
 });

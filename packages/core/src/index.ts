@@ -7,3 +7,4 @@ export * from "./agent.ts";
 export * from "./normalize.ts";
 export * from "./prompts.ts";
 export * from "./pipeline.ts";
+export * from "./verify.ts";

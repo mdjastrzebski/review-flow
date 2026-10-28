@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import pLimit from "p-limit";
 import type { AgentResult, AgentStatus, AgentTask, RunAgent } from "./agent.ts";
 import {
   assertStatusUnchanged,
@@ -11,11 +12,15 @@ import {
 } from "./git.ts";
 import type { Harness, Role, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
-import { loadPrompt, renderPrompt } from "./prompts.ts";
+import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
-import { ReviewOutput, type NormalizedFinding } from "./schemas.ts";
+import { applyVerdictRules } from "./rank.ts";
+import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
+import { buildVerifierPrompt, verifierTaskId } from "./verify.ts";
 
 const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
+const VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
+const VERIFIER_CONCURRENCY = 3;
 
 export interface ReviewRunOptions {
   /** Any directory inside the repository to review. */
@@ -30,6 +35,8 @@ export interface ReviewRunOptions {
 export interface ReviewRunResult {
   runDir: RunDir;
   findings: NormalizedFinding[];
+  /** findingId → verdict, with the code-enforced rules applied. */
+  verdicts: Record<string, Verdict>;
   costUsd: number;
   durationMs: number;
 }
@@ -128,7 +135,87 @@ async function runTask<T>(
   return result;
 }
 
-/** collect → review → normalize. Verification, ranking and the report come in later steps. */
+/**
+ * Stand-in verdict for a verifier that produced no valid output, so every finding still has a
+ * verdict. Inconclusive is the honest state: nobody checked the claim.
+ */
+export function failedVerdict(
+  finding: NormalizedFinding,
+  status: AgentStatus,
+  error: string | null,
+): Verdict {
+  return {
+    verdict: "inconclusive",
+    // Unverified, so the reviewer's own severity is all there is to rank by.
+    severity: finding.severity,
+    confidence: "low",
+    fixCost: "small",
+    evidence: [],
+    summary: `Verification failed (${status}): ${error ?? "no output"}`,
+    fix: {
+      assessment: "not_applicable",
+      detail: "Not assessed; verification failed.",
+      betterFix: null,
+    },
+  };
+}
+
+/**
+ * One fresh verifier session per finding. Agent failures become inconclusive verdicts; anything
+ * thrown (e.g. the working tree changed) stops queued tasks, aborts in-flight ones, and is
+ * rethrown once they have settled, so run.json is written after the last task.
+ */
+async function verifyFindings(
+  findings: readonly NormalizedFinding[],
+  context: { base: string; diff: string; models: RoleModels },
+  ctx: TaskContext,
+): Promise<Record<string, Verdict>> {
+  const template = await loadPrompt("verifier");
+  // rejectOnClear: otherwise cleared tasks never settle and allSettled hangs.
+  const limit = pLimit({ concurrency: VERIFIER_CONCURRENCY, rejectOnClear: true });
+  const abort = new AbortController();
+  // The first thrown error, in the order thrown; cleared tasks reject later with AbortErrors.
+  const errors: unknown[] = [];
+  const settled = await Promise.allSettled(
+    findings.map((finding) =>
+      limit(async (): Promise<[string, Verdict]> => {
+        try {
+          const result = await runTask(
+            {
+              taskId: verifierTaskId(finding),
+              role: "verifier",
+              prompt: buildVerifierPrompt(template, finding, context),
+              cwd: ctx.repo,
+              schema: Verdict,
+              model: context.models.verifier.model,
+              effort: context.models.verifier.effort,
+              timeoutMs: VERIFIER_TIMEOUT_MS,
+              signal: abort.signal,
+            },
+            ctx,
+          );
+          if (result.output === null) {
+            ctx.log(`${finding.id}: verifier failed (${result.status}); marked inconclusive.`);
+            return [finding.id, failedVerdict(finding, result.status, result.error)];
+          }
+          return [finding.id, applyVerdictRules(result.output)];
+        } catch (error) {
+          errors.push(error);
+          limit.clearQueue();
+          abort.abort();
+          throw error;
+        }
+      }),
+    ),
+  );
+
+  if (errors.length > 0) throw errors[0];
+  return Object.fromEntries(
+    settled.map((s) => (s as PromiseFulfilledResult<[string, Verdict]>).value),
+  );
+}
+
+/** collect → review → normalize → verify. Ranking and the report come in later steps. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const { base, harness, models, runAgent, log } = options;
   const repo = await resolveRepoRoot(options.cwd);
@@ -167,7 +254,10 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const ctx: TaskContext = { runDir, repo, status, run, runAgent, log };
 
   try {
-    const prompt = renderPrompt(await loadPrompt("reviewer"), { base, diff });
+    const prompt = renderPrompt(await loadPrompt("reviewer"), {
+      base,
+      diffBlock: codeFence(diff, "diff"),
+    });
     log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
     const review = await runTask(
       {
@@ -191,10 +281,20 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     await writeJson(runDir.findingsPath, findings);
     log(`Reviewer returned ${findings.length} finding(s) → ${runDir.findingsPath}`);
 
+    if (findings.length > 0) {
+      log(
+        `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
+      );
+    }
+    const verdicts = await verifyFindings(findings, { base, diff, models }, ctx);
+    await writeJson(runDir.verdictsPath, verdicts);
+    log(`Verdicts → ${runDir.verdictsPath}`);
+
     run.status = "ok";
     return {
       runDir,
       findings,
+      verdicts,
       costUsd: run.costUsd,
       durationMs: Date.now() - startedAt.getTime(),
     };

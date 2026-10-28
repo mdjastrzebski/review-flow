@@ -1,0 +1,57 @@
+import { codeFence, renderPrompt } from "./prompts.ts";
+import type { NormalizedFinding } from "./schemas.ts";
+
+/** The reviewer is asked for ≤ 3 sentences or a ≤ 10-line snippet; this is the enforced cap. */
+export const MAX_FIX_LINES = 10;
+export const MAX_FIX_CHARS = 800;
+
+const TRUNCATION_MARK = "… [truncated]";
+
+export interface TruncatedFix {
+  text: string;
+  truncated: boolean;
+}
+
+/** Caps the suggested fix so a long one can't dominate (and anchor) the verifier prompt. */
+export function truncateFix(fix: string): TruncatedFix {
+  let text = fix.trim();
+  const lines = text.split("\n");
+  if (lines.length > MAX_FIX_LINES) text = lines.slice(0, MAX_FIX_LINES).join("\n");
+  if (text.length > MAX_FIX_CHARS) text = text.slice(0, MAX_FIX_CHARS).trimEnd();
+  const truncated = text !== fix.trim();
+  return { text: truncated ? `${text}${TRUNCATION_MARK}` : text, truncated };
+}
+
+export function verifierTaskId(finding: NormalizedFinding): string {
+  return `verifier-${finding.id}`;
+}
+
+function location(finding: NormalizedFinding): string {
+  const { file, lineStart, lineEnd } = finding;
+  return lineStart === lineEnd ? `${file}:${lineStart}` : `${file}:${lineStart}-${lineEnd}`;
+}
+
+function fixSection(suggestedFix: string | null): string {
+  if (suggestedFix === null) return "No fix was suggested.";
+  return `Suggested fix:\n\n${codeFence(truncateFix(suggestedFix).text)}`;
+}
+
+/**
+ * Builds the verifier prompt from the finding's title, location, claim and (truncated) suggested
+ * fix, plus the diff. The reviewer's rationale, severity and category are deliberately left out
+ * so they can't anchor the verdict.
+ */
+export function buildVerifierPrompt(
+  template: string,
+  finding: NormalizedFinding,
+  context: { base: string; diff: string },
+): string {
+  return renderPrompt(template, {
+    base: context.base,
+    title: finding.title,
+    location: location(finding),
+    claim: finding.claim,
+    fix: fixSection(finding.suggestedFix),
+    diffBlock: codeFence(context.diff, "diff"),
+  });
+}

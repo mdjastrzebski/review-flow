@@ -12,6 +12,8 @@ export interface AgentTask<T> {
   model: string | null;
   effort: Effort | null;
   timeoutMs: number;
+  /** Aborting stops the session early; the result comes back with status "error". */
+  signal?: AbortSignal;
   /** Called as the agent works, so long-running tasks visibly make progress. */
   onProgress: (event: AgentProgress) => void;
 }

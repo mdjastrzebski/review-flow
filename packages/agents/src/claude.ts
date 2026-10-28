@@ -54,18 +54,25 @@ export async function runClaudeAgent<T>(task: AgentTask<T>): Promise<AgentResult
   const startedAt = Date.now();
   const messages: SDKMessage[] = [];
   const denied: string[] = [];
+  const finish = (fields: Omit<AgentResult<T>, "raw" | "durationMs">): AgentResult<T> => ({
+    ...fields,
+    raw: { messages, deniedToolCalls: denied },
+    durationMs: Date.now() - startedAt,
+  });
+  const cancelled = () =>
+    finish({ status: "error", output: null, rawText: "", error: "Cancelled", costUsd: null });
+
+  // Covers a task dequeued just before its caller aborted.
+  if (task.signal?.aborted) return cancelled();
+
   const abortController = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     abortController.abort();
   }, task.timeoutMs);
-
-  const finish = (fields: Omit<AgentResult<T>, "raw" | "durationMs">): AgentResult<T> => ({
-    ...fields,
-    raw: { messages, deniedToolCalls: denied },
-    durationMs: Date.now() - startedAt,
-  });
+  const onAbort = () => abortController.abort();
+  task.signal?.addEventListener("abort", onAbort, { once: true });
 
   let result: SDKResultMessage | null = null;
   try {
@@ -92,6 +99,7 @@ export async function runClaudeAgent<T>(task: AgentTask<T>): Promise<AgentResult
       if (message.type === "result") result = message;
     }
   } catch (error) {
+    if (!timedOut && task.signal?.aborted) return cancelled();
     const message = error instanceof Error ? error.message : String(error);
     return finish({
       status: timedOut ? "timeout" : "error",
@@ -102,9 +110,11 @@ export async function runClaudeAgent<T>(task: AgentTask<T>): Promise<AgentResult
     });
   } finally {
     clearTimeout(timer);
+    task.signal?.removeEventListener("abort", onAbort);
   }
 
   if (result === null) {
+    if (!timedOut && task.signal?.aborted) return cancelled();
     return finish({
       status: timedOut ? "timeout" : "error",
       output: null,

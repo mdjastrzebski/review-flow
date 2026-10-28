@@ -1,5 +1,11 @@
 import { styleText } from "node:util";
-import type { NormalizedFinding, Severity } from "@review-flow/core";
+import {
+  rankFindings,
+  type FixAssessment,
+  type NormalizedFinding,
+  type Severity,
+  type Verdict,
+} from "@review-flow/core";
 
 type Style = Parameters<typeof styleText>[0];
 
@@ -11,13 +17,12 @@ export interface FormatOptions {
 
 export interface FindingsSummary {
   findings: NormalizedFinding[];
+  verdicts: Record<string, Verdict>;
   base: string;
   runDir: string;
   costUsd: number;
   durationMs: number;
 }
-
-const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low"];
 
 const SEVERITY_STYLE: Record<Severity, Style> = {
   critical: ["bold", "white", "bgRed"],
@@ -26,7 +31,20 @@ const SEVERITY_STYLE: Record<Severity, Style> = {
   low: ["bold", "blue"],
 };
 
-const LABEL_WIDTH = 7;
+const VERDICT_STYLE: Record<Verdict["verdict"], Style> = {
+  confirmed: ["bold", "red"],
+  inconclusive: ["bold", "yellow"],
+  refuted: ["dim"],
+};
+
+const FIX_LABEL: Record<FixAssessment["assessment"], string> = {
+  sound: "sound",
+  flawed: "flawed",
+  incomplete: "incomplete",
+  not_applicable: "n/a",
+};
+
+const LABEL_WIDTH = 10;
 const INDENT = "  ";
 
 /** Greedy word wrap; words longer than the width are kept whole rather than split. */
@@ -64,16 +82,18 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
 
-  const findings = summary.findings.toSorted(
-    (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity),
+  const items = rankFindings(
+    summary.findings.flatMap((finding) => {
+      const verdict = summary.verdicts[finding.id];
+      return verdict === undefined ? [] : [{ finding, verdict }];
+    }),
   );
+  const findings = items.map((item) => item.finding);
 
-  const counts = SEVERITY_ORDER.map((severity) => ({
-    severity,
-    count: findings.filter((f) => f.severity === severity).length,
-  })).filter(({ count }) => count > 0);
-  const breakdown = counts
-    .map(({ severity, count }) => paint(SEVERITY_STYLE[severity], `${count} ${severity}`))
+  const breakdown = (["confirmed", "inconclusive", "refuted"] as const)
+    .map((kind) => ({ kind, count: items.filter((i) => i.verdict.verdict === kind).length }))
+    .filter(({ count }) => count > 0)
+    .map(({ kind, count }) => paint(VERDICT_STYLE[kind], `${count} ${kind}`))
     .join(paint("dim", " · "));
 
   const out: string[] = [""];
@@ -86,8 +106,7 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
     out.push(`${paint(["bold", "green"], "No findings")}  ${stats}`, "");
   } else {
     const title = paint("bold", `${findings.length} finding${findings.length === 1 ? "" : "s"}`);
-    out.push(`${title}  ${breakdown}  ${stats}`);
-    out.push(paint("dim", "Unverified: the reviewer's claims have not been checked yet."), "");
+    out.push(`${title}  ${breakdown}  ${stats}`, "");
   }
 
   const textWidth = Math.max(40, options.width - INDENT.length - LABEL_WIDTH);
@@ -99,14 +118,20 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
     });
   };
 
-  for (const finding of findings) {
-    const severity = paint(SEVERITY_STYLE[finding.severity], ` ${finding.severity.toUpperCase()} `);
+  for (const { finding, verdict } of items) {
+    const severity = paint(SEVERITY_STYLE[verdict.severity], ` ${verdict.severity.toUpperCase()} `);
+    const status = paint(VERDICT_STYLE[verdict.verdict], verdict.verdict);
     out.push(
-      `${paint("bold", finding.id)} ${severity} ${paint("dim", finding.category)}  ${paint("bold", finding.title)}`,
+      `${paint("bold", finding.id)} ${severity} ${status} ${paint("dim", `(${verdict.confidence} confidence)`)}  ${paint("bold", finding.title)}`,
     );
-    out.push(`${INDENT}${paint("cyan", location(finding))}`);
+    out.push(`${INDENT}${paint("cyan", location(finding))} ${paint("dim", finding.category)}`);
     field("Claim", finding.claim);
+    field("Verifier", verdict.summary);
     if (finding.suggestedFix !== null) field("Fix", finding.suggestedFix);
+    if (verdict.verdict !== "refuted") {
+      field("Fix check", `${FIX_LABEL[verdict.fix.assessment]}: ${verdict.fix.detail}`);
+      if (verdict.fix.betterFix !== null) field("Better", verdict.fix.betterFix);
+    }
     out.push("");
   }
 

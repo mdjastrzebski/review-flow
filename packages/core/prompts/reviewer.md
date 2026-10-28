@@ -31,6 +31,4 @@ Your final answer must be a single JSON object matching the required schema, wit
 
 ## The change
 
-```diff
-{{diff}}
-```
+{{diffBlock}}
