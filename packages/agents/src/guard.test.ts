@@ -49,6 +49,18 @@ describe("guardToolCall", () => {
     expect((await decide("Grep", { pattern: "x", path: outside })).allowed).toBe(false);
   });
 
+  // Claude Code expands a leading `~` in tool paths, so `~/x` is the home directory, not `repo/~/x`.
+  it.each(["~", "~/.ssh/id_rsa"])("denies a home-directory path: %s", async (home) => {
+    expect((await decide("Read", { file_path: home })).allowed).toBe(false);
+    expect((await decide("Glob", { pattern: "*", path: home })).allowed).toBe(false);
+  });
+
+  it("allows in-repo names that start with .. or ~", async () => {
+    await mkdir(path.join(repo, "..cache"));
+    expect((await decide("Read", { file_path: "..cache/a.json" })).allowed).toBe(true);
+    expect((await decide("Read", { file_path: "~notes.md" })).allowed).toBe(true);
+  });
+
   it.each(["/etc/*", "~/.ssh/*", "../outside/*", "src/../../**/*"])(
     "denies a Glob pattern that escapes the repo: %s",
     async (pattern) => {

@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 
 export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
@@ -34,10 +35,18 @@ async function realpathOfNearest(target: string): Promise<string> {
   }
 }
 
+/** Claude Code expands a leading `~` in tool paths, so `~/x` means the home directory. */
+function expandHome(candidate: string): string {
+  return candidate === "~" || /^~[\\/]/.test(candidate)
+    ? path.join(homedir(), candidate.slice(1))
+    : candidate;
+}
+
 async function isInside(realRoot: string, root: string, candidate: string): Promise<boolean> {
-  const real = await realpathOfNearest(path.resolve(root, candidate));
+  const real = await realpathOfNearest(path.resolve(root, expandHome(candidate)));
   const relative = path.relative(realRoot, real);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`);
+  return !escapes && !path.isAbsolute(relative);
 }
 
 /** Whether a path, relative to `root` or absolute, is inside `root`, following symlinks. */
