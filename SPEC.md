@@ -305,7 +305,9 @@ Each run also appends one summary line to `.review-flow/index.jsonl`: preset, co
 
 - **Bug cases.** PRs that introduced a bug a later PR fixed, from small public repos (a few MB each, so checkouts stay cheap). The fix tells us where the bug is.
 - **Clean cases.** Changes with no real defects, to measure false positives.
-- **Scores.** Recall (known bugs found, matched by file and overlapping lines), findings per clean case, and cost and time per case.
+- **Checkouts.** One clone per case repo, kept in `~/.cache/review-flow/eval/` and reused across evals. It is outside any project, so agents don't pick up the rules or `AGENTS.md` of the repo running the eval. Each case checks out its head and is reviewed against its base. Cases run one at a time.
+- **Scores.** Recall (known bugs found by a finding that wasn't refuted, in the same file with lines overlapping or at most 3 apart), reviewer recall (refuted findings count too, to show verifiers refuting real bugs), findings per clean case (not refuted), and cost and time per case. Failed cases are counted but not scored.
+- **Eval run.** A run dir with `run.json` (config, per-step totals summed over cases, scores), `cases.json` (result per case), and `cases/<id>/`, a full run dir per case.
 - **Size.** About 35 cases, with a smoke set of about 8 for quick iteration. The dataset, its sources, and its format are in [eval/](eval/README.md).
 
 `compare` shows two evals side by side. Every change to prompts, models, presets, or pipeline values is checked with an eval before it becomes a default.

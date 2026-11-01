@@ -1,8 +1,25 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import type { EvalScores } from "./eval-score.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { STATE_DIR } from "./run-dir.ts";
 import type { Verdict } from "./schemas.ts";
+
+export interface EvalIndexEntry {
+  id: string;
+  kind: "eval";
+  startedAt: string;
+  durationMs: number;
+  status: "ok" | "failed";
+  harness: Harness;
+  models: RoleModels;
+  smoke: boolean;
+  /** Cases selected; `scores.cases` counts those that ran. */
+  cases: number;
+  scores: EvalScores;
+  costUsd: number | null;
+  unknownCostCalls: number;
+}
 
 export interface DiffStats {
   files: number;
@@ -13,7 +30,9 @@ export interface DiffStats {
 export type VerdictCounts = Record<Verdict["verdict"], number>;
 
 /** One line of `.review-flow/index.jsonl`: a run summary. Details stay in the run dir. */
-export interface IndexEntry {
+export type IndexEntry = ReviewIndexEntry | EvalIndexEntry;
+
+export interface ReviewIndexEntry {
   /** The run dir name under `.review-flow/runs/`. */
   id: string;
   kind: "review";
@@ -100,7 +119,8 @@ async function isDirectory(file: string): Promise<boolean> {
 }
 
 /**
- * Finds a run dir from a path, a run id, or a unique part of one (such as the short SHA).
+ * Finds a run dir from a path (from `cwd` or `.review-flow/runs/`, such as an eval case's
+ * `<eval id>/cases/<case id>`), a run id, or a unique part of one (such as the short SHA).
  * Run dirs that predate the index still resolve by id.
  */
 export async function resolveRun(
@@ -108,8 +128,9 @@ export async function resolveRun(
   ref: string,
   cwd: string,
 ): Promise<{ id: string; root: string }> {
-  const asPath = path.resolve(cwd, ref);
-  if (await isDirectory(asPath)) {
+  const runs = runsPath(repo);
+  for (const asPath of [path.resolve(cwd, ref), path.resolve(runs, ref)]) {
+    if (!(await isDirectory(asPath))) continue;
     try {
       await stat(path.join(asPath, "run.json"));
       return { id: path.basename(asPath), root: asPath };
@@ -118,7 +139,6 @@ export async function resolveRun(
     }
   }
 
-  const runs = runsPath(repo);
   const dirs = (await isDirectory(runs)) ? await readdir(runs) : [];
   const ids = [...new Set([...(await readIndex(repo)).map((e) => e.id), ...dirs])];
   const matches = ids.includes(ref) ? [ref] : ids.filter((id) => id.includes(ref));

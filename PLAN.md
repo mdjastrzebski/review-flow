@@ -11,7 +11,7 @@ Goal: know what a review costs, where the money goes, and how good it is.
 - [x] **Cursor harness and computed cost (9, 10).** An `agent -p` profile with read-only flags, a tool-call check after the fact, JSON parsing with one repair turn, and token parsing. A dated price table gives `computed` cost from tokens. Default model is Grok 4.7 low. Done when: a Cursor run on the Claude comparison diff records cost and time per step.
 - [x] **Run index (10).** `index.jsonl`, `review-flow runs`, and `review-flow compare`. Done when: `compare` shows per-step cost and time and the finding differences between two runs.
 - [x] **Eval dataset (11).** 25 bug cases and 10 clean cases mined from 19 small repos with a one-off script, 8 marked as the smoke set, in our own format with source and license noted ([eval/](eval/README.md)). Done when: the dataset is in the repo with its source and license noted.
-- [ ] **Eval command (11).** `review-flow eval [--smoke]` keeps its own checkout per case repo, runs the pipeline with each case's base and head, and scores recall (same file, overlapping lines, small tolerance), findings per clean case, cost, and time. Results are saved as an eval run. Done when: `compare` works on two eval runs.
+- [x] **Eval command (11).** `review-flow eval [--smoke]` keeps its own checkout per case repo, runs the pipeline with each case's base and head, and scores recall (same file, overlapping lines, small tolerance), findings per clean case, cost, and time. Results are saved as an eval run. Done when: `compare` works on two eval runs.
 - [ ] **Baseline.** Run today's pipeline 3 times on the full set. Done when: the mean and spread are in the decision log.
 
 ## Phase 2: Cost and quality

@@ -68,8 +68,11 @@ export function runDirPaths(root: string): RunDir {
 export async function createRunDir(repo: string, shortSha: string, now: Date): Promise<RunDir> {
   const runsDir = path.join(repo, STATE_DIR, "runs");
   await mkdir(runsDir, { recursive: true });
+  return createRunDirAt(path.join(runsDir, `${formatRunTimestamp(now)}-${shortSha}`));
+}
 
-  const root = path.join(runsDir, `${formatRunTimestamp(now)}-${shortSha}`);
+/** Creates a run dir at `root`, whose parent must exist, with its prompts/ and raw/ subdirs. */
+export async function createRunDirAt(root: string): Promise<RunDir> {
   // Non-recursive so two runs in the same second fail loudly instead of sharing a directory.
   await mkdir(root);
   await mkdir(path.join(root, "prompts"));

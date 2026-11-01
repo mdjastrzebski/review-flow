@@ -1,6 +1,18 @@
 # Eval dataset
 
-35 cases from 19 small open-source repos: 25 bug cases and 10 clean cases. 8 of them are marked `smoke`. Used by `review-flow eval` (spec 11).
+35 cases from 19 small open-source repos: 25 bug cases and 10 clean cases. 8 of them are marked `smoke`. Used by `review-flow eval` (spec 11):
+
+```bash
+pnpm review-flow eval --harness claude --smoke   # 8 cases; drop --smoke for all 35
+```
+
+For a quick check that the eval runs end to end (too few cases to judge quality), pick a few small cases and a cheap model:
+
+```bash
+pnpm review-flow eval --harness claude --case click-2829 h3-1372 werkzeug-3163 --model claude-haiku-5-5 --effort low
+```
+
+These are the smallest smoke cases: two bugs (Python, TypeScript) and one clean case.
 
 ## Source
 

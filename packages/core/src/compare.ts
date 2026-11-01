@@ -1,11 +1,14 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Step, TimedTotals } from "./calls.ts";
+import { evalRunPaths, type EvalRunRecord } from "./eval.ts";
+import type { CaseResult } from "./eval-score.ts";
+import { readJsonOrNull } from "./json.ts";
 import type { RunRecord } from "./pipeline.ts";
 import { runDirPaths } from "./run-dir.ts";
 import type { NormalizedFinding, Verdict } from "./schemas.ts";
 
 export interface LoadedRun {
+  kind: "review";
   id: string;
   run: RunRecord;
   /** null when the run failed before the reviewer returned. */
@@ -14,25 +17,28 @@ export interface LoadedRun {
   verdicts: Record<string, Verdict> | null;
 }
 
-async function readJsonOrNull<T>(file: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(file, "utf8")) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+export interface LoadedEval {
+  kind: "eval";
+  id: string;
+  run: EvalRunRecord;
+  cases: CaseResult[];
 }
 
-export async function loadRun(root: string): Promise<LoadedRun> {
+export async function loadRun(root: string): Promise<LoadedRun | LoadedEval> {
   const paths = runDirPaths(root);
-  const run = await readJsonOrNull<RunRecord>(paths.runJsonPath);
+  const run = await readJsonOrNull<RunRecord | EvalRunRecord>(paths.runJsonPath);
   if (run === null) throw new Error(`No run.json in ${root}`);
   if (run.steps === undefined || run.totals === undefined) {
     throw new Error(`${root}/run.json predates per-step records and can't be compared.`);
   }
+  if ("kind" in run) {
+    const cases = await readJsonOrNull<CaseResult[]>(evalRunPaths(root).casesPath);
+    return { kind: "eval", id: path.basename(root), run, cases: cases ?? [] };
+  }
   return {
+    kind: "review",
     id: path.basename(root),
-    run,
+    run: run as RunRecord,
     findings: await readJsonOrNull(paths.findingsPath),
     verdicts: await readJsonOrNull(paths.verdictsPath),
   };
@@ -45,7 +51,10 @@ export interface StepComparison {
 }
 
 /** Steps in run order (a's first, then any only b ran), then the run totals. */
-export function compareSteps(a: RunRecord, b: RunRecord): StepComparison[] {
+export function compareSteps(
+  a: Pick<RunRecord, "steps" | "totals">,
+  b: Pick<RunRecord, "steps" | "totals">,
+): StepComparison[] {
   const steps = [...new Set([...Object.keys(a.steps), ...Object.keys(b.steps)])] as Step[];
   return [
     ...steps.map((step) => ({ step, a: a.steps[step] ?? null, b: b.steps[step] ?? null })),

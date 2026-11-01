@@ -13,11 +13,12 @@ import {
   type StatusSnapshot,
 } from "./git.ts";
 import { describeModel } from "./format.ts";
+import { writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
 import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
-import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
+import { createRunDir, createRunDirAt, ensureGitignored, type RunDir } from "./run-dir.ts";
 import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
@@ -36,6 +37,11 @@ export interface ReviewRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  /**
+   * Where to create the run dir (an eval case). By default it goes in the repo's
+   * `.review-flow/runs/` and is indexed; with a path, the repo's .gitignore and index are left alone.
+   */
+  runRoot?: string;
 }
 
 export interface ReviewRunResult {
@@ -60,10 +66,6 @@ export interface RunRecord {
   error: string | null;
   steps: Partial<Record<Step, TimedTotals>>;
   totals: TimedTotals;
-}
-
-async function writeJson(file: string, value: unknown): Promise<void> {
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -269,7 +271,7 @@ export class NoChangesError extends Error {
 
 /** collect → review → normalize → verify → rank → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
-  const { base, harness, models, runAgent, log } = options;
+  const { base, harness, models, runAgent, log, runRoot } = options;
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
   const baseSha = await resolveCommit(repo, base);
@@ -282,13 +284,16 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   log(`Reviewer: ${describeModel(models.reviewer)}`);
   log(`Verifier: ${describeModel(models.verifier)}`);
 
-  if (await ensureGitignored(repo)) {
+  if (runRoot === undefined && (await ensureGitignored(repo))) {
     log("Added .review-flow/ to .gitignore");
   }
   // Taken after the .gitignore edit; agents must leave the tree exactly like this.
   const status = await snapshotStatus(repo);
 
-  const runDir = await createRunDir(repo, await shortSha(repo, "HEAD"), startedAt);
+  const runDir =
+    runRoot === undefined
+      ? await createRunDir(repo, await shortSha(repo, "HEAD"), startedAt)
+      : await createRunDirAt(runRoot);
   await writeFile(runDir.diffPath, diff);
   log(`Run dir: ${runDir.root}`);
 
@@ -384,21 +389,23 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       ...rollUp(calls, stepDurations, finishedAt.getTime() - startedAt.getTime()),
     };
     await writeJson(runDir.runJsonPath, run);
-    await appendIndexEntry(repo, {
-      id: path.basename(runDir.root),
-      kind: "review",
-      startedAt: run.startedAt,
-      durationMs: run.totals.durationMs,
-      status: run.status,
-      harness,
-      models,
-      base: run.base,
-      head: run.head,
-      diff: diffStats(diff),
-      findings: findingCount,
-      verdicts: verdictCounts,
-      costUsd: run.totals.costUsd,
-      unknownCostCalls: run.totals.unknownCostCalls,
-    });
+    if (runRoot === undefined) {
+      await appendIndexEntry(repo, {
+        id: path.basename(runDir.root),
+        kind: "review",
+        startedAt: run.startedAt,
+        durationMs: run.totals.durationMs,
+        status: run.status,
+        harness,
+        models,
+        base: run.base,
+        head: run.head,
+        diff: diffStats(diff),
+        findings: findingCount,
+        verdicts: verdictCounts,
+        costUsd: run.totals.costUsd,
+        unknownCostCalls: run.totals.unknownCostCalls,
+      });
+    }
   }
 }

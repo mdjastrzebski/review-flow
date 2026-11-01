@@ -103,6 +103,16 @@ describe("resolveRun", () => {
     expect(result.id).toBe(ids[1]);
   });
 
+  it("resolves an eval case's run dir under the runs dir", async () => {
+    const caseRoot = path.join(runsPath(repo), ids[2] as string, "cases", "click-2829");
+    await mkdir(caseRoot, { recursive: true });
+    await writeFile(path.join(caseRoot, "run.json"), "{}");
+    expect(await resolveRun(repo, `${ids[2]}/cases/click-2829`, "/")).toEqual({
+      id: "click-2829",
+      root: caseRoot,
+    });
+  });
+
   it("rejects unknown and ambiguous refs", async () => {
     await expect(resolveRun(repo, "nope", repo)).rejects.toThrow('No run matches "nope"');
     await expect(resolveRun(repo, "abc1234", repo)).rejects.toThrow("matches 2 runs");

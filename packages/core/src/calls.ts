@@ -73,3 +73,27 @@ export function rollUp(
   }
   return { steps, totals: { ...sumCalls(calls), durationMs } };
 }
+
+export const EMPTY_TOTALS: TimedTotals = {
+  calls: 0,
+  costUsd: null,
+  unknownCostCalls: 0,
+  usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
+  durationMs: 0,
+};
+
+/** Sums two totals, such as one step across eval cases. */
+export function addTotals(a: TimedTotals, b: TimedTotals): TimedTotals {
+  return {
+    calls: a.calls + b.calls,
+    costUsd: a.costUsd === null && b.costUsd === null ? null : (a.costUsd ?? 0) + (b.costUsd ?? 0),
+    unknownCostCalls: a.unknownCostCalls + b.unknownCostCalls,
+    usage: {
+      input: a.usage.input + b.usage.input,
+      cacheRead: a.usage.cacheRead + b.usage.cacheRead,
+      cacheWrite: a.usage.cacheWrite + b.usage.cacheWrite,
+      output: a.usage.output + b.usage.output,
+    },
+    durationMs: a.durationMs + b.durationMs,
+  };
+}

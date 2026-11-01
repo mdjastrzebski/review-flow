@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { mkdir, realpath, rename, rm, stat } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -7,6 +9,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
     maxBuffer: 256 * 1024 * 1024,
+    // Fail instead of waiting for credentials (clone and fetch of eval repos).
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
   return stdout;
 }
@@ -21,6 +25,48 @@ export async function resolveCommit(repo: string, ref: string): Promise<string> 
   } catch {
     throw new Error(`Unknown git ref: ${ref}`);
   }
+}
+
+async function hasCommit(repo: string, sha: string): Promise<boolean> {
+  try {
+    await git(repo, ["cat-file", "-e", `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Makes `dir` a clone of `url` that has all `commits`: cloned when missing (into a temp dir, so
+ * an interrupted clone isn't mistaken for a finished one), fetched when a commit is missing.
+ */
+export async function ensureClone(
+  url: string,
+  dir: string,
+  commits: readonly string[],
+): Promise<void> {
+  try {
+    await stat(dir);
+  } catch {
+    await mkdir(path.dirname(dir), { recursive: true });
+    const temp = `${dir}.partial-${process.pid}`;
+    await rm(temp, { recursive: true, force: true });
+    await git(path.dirname(dir), ["clone", "--quiet", "--no-checkout", url, temp]);
+    await rename(temp, dir);
+  }
+  const root = await resolveRepoRoot(dir).catch(() => null);
+  if (root !== (await realpath(dir))) throw new Error(`${dir} exists but is not a git clone.`);
+  for (const sha of commits) {
+    if (await hasCommit(dir, sha)) continue;
+    await git(dir, ["fetch", "--quiet", "origin"]);
+    if (!(await hasCommit(dir, sha))) throw new Error(`${url} has no commit ${sha}.`);
+  }
+}
+
+/** Checks out `sha` detached, dropping any local changes and untracked or ignored files. */
+export async function checkoutDetached(repo: string, sha: string): Promise<void> {
+  await git(repo, ["checkout", "--quiet", "--force", "--detach", sha]);
+  await git(repo, ["clean", "--quiet", "-ffdx"]);
 }
 
 export async function shortSha(repo: string, ref: string): Promise<string> {

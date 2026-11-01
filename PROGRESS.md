@@ -8,8 +8,9 @@ A working CLI that reviews a branch with agents run through a headless CLI, `cla
 
 ```bash
 pnpm review-flow review --base main --harness claude   # or --harness cursor
-pnpm review-flow runs                                  # past runs, newest first
-pnpm review-flow compare <a> <b>                       # two runs side by side
+pnpm review-flow eval --harness claude --smoke         # score the eval dataset
+pnpm review-flow runs                                  # past runs and evals, newest first
+pnpm review-flow compare <a> <b>                       # two runs or two evals side by side
 ```
 
 ## Harnesses
@@ -59,16 +60,27 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/` (added to `.gitignore` au
 
 Steps in `run.json` are `collect`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls. A call's cost source is `reported` when the CLI gave a cost, `computed` when its tokens and model are in the price table (standard API prices for Claude 5.5 models, Grok 4.7, and Composer 2.5; fast variants and long-context surcharges are not priced), else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
 
-Each run, including a failed one, also appends a summary line to `.review-flow/index.jsonl` ([run-index.ts](packages/core/src/run-index.ts)): id (the run dir name), status, harness, models, base and head, diff size (files, added and removed lines), finding count, verdict counts, cost, unknown-cost calls, and time.
+Each run, including a failed one, also appends a summary line to `.review-flow/index.jsonl` ([run-index.ts](packages/core/src/run-index.ts)): id (the run dir name), status, harness, models, base and head, diff size (files, added and removed lines), finding count, verdict counts, cost, unknown-cost calls, and time. Eval runs add one line each, with `kind: "eval"`, the case count, and the scores; their case runs aren't indexed.
 
 ## Runs and compare
 
-- `review-flow runs [-n <count>]` lists indexed runs, newest first (default 20). A cost of `≥$x` means some calls had no cost.
-- `review-flow compare <a> <b>` takes a run id, a unique part of one (such as the short SHA), or a run dir path ([compare.ts](packages/core/src/compare.ts), [runs.ts](packages/cli/src/runs.ts)). It shows the models and diff of each run, cost, time, and calls per step with deltas, and the findings in both runs and in only one. Findings match when they are in the same file and their line ranges are at most 3 lines apart, closest pairs first. When the runs reviewed different commits, it warns that line matching is rough.
+- `review-flow runs [-n <count>]` lists indexed runs and evals, newest first (default 20). A cost of `≥$x` means some calls had no cost. Eval rows show the case count and recall in place of the diff and findings.
+- `review-flow compare <a> <b>` takes a run id, a unique part of one (such as the short SHA), or a run dir path, from the current dir or from `.review-flow/runs/` ([compare.ts](packages/core/src/compare.ts), [runs.ts](packages/cli/src/runs.ts)). Both must be review runs or both evals. It shows the models and diff of each run, cost, time, and calls per step with deltas, and the findings in both runs and in only one. Findings match when they are in the same file and their line ranges are at most 3 lines apart, closest pairs first. When the runs reviewed different commits, it warns that line matching is rough.
+
+## Eval
+
+`review-flow eval [--smoke]` reviews every case of the [dataset](eval/README.md) with the same harness and model flags as `review` ([eval.ts](packages/core/src/eval.ts), [eval-score.ts](packages/core/src/eval-score.ts)).
+
+- **Selection.** All cases, `--smoke` for the smoke set, or `--case <ids...>` for chosen ones (within the smoke set if both are given). [eval/README.md](eval/README.md) has a 3-case recipe for a quick end-to-end check.
+- **Checkouts.** One clone per case repo in `~/.cache/review-flow/eval/` (`--checkouts`), cloned on first use and fetched when a case's commit is missing. Each case checks out its head (detached, forced, `git clean -ffdx`) and is reviewed against its base. Cases run one at a time, in id order.
+- **Scoring.** A bug is found when a finding that wasn't refuted is in the same file, with lines overlapping or at most 3 apart. Reviewer recall counts refuted findings too. A failed case (clone, checkout, or reviewer failure) is counted but not scored. An agent changing a checkout stops the eval.
+- **Eval run.** `.review-flow/runs/<timestamp>-eval/` in the repo the eval is run from (`--repo`): `run.json` (harness, models, dataset, status, scores, per-step totals summed over cases, total wall time including clones), `cases.json` (outcome, finding counts, matched finding ids, cost, and time per case; rewritten after each case), and `cases/<id>/`, a normal run dir per case. Case run dirs live there, not in the checkout, so the checkout's `.gitignore` and index stay untouched.
+- **Output.** Progress per case, then a table of case outcomes (`found`, `refuted`, `missed`, `N findings`, `failed`) and the scores: recall, reviewer recall, findings per clean case, failed cases, and cost and time per case. `--quiet` prints only the eval run dir.
+- **Compare.** Two evals show their scores and per-step totals with deltas, the cases whose outcome changed, and a warning when they ran different cases. To see one case's findings in two evals: `compare <eval a>/cases/<id> <eval b>/cases/<id>`.
 
 ## Configuration
 
-CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`.
+CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`. `eval` takes the same, minus `--base`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
 
 Defaults ([models.ts](packages/core/src/models.ts)):
 
@@ -94,7 +106,7 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 
 ## Gaps against the [spec](SPEC.md)
 
-- **Usage (2):** `--base` and `--harness` are required. No PR, commit, or range targets, no uncommitted changes. Only `review`, `runs`, and `compare` exist.
+- **Usage (2):** `--base` and `--harness` are required. No PR, commit, or range targets, no uncommitted changes. Only `review`, `eval`, `runs`, and `compare` exist.
 - **Trust (3):** none. Reviews run in the developer's checkout, not a worktree.
 - **Pipeline (4):** one finder, no dedupe or filter, one verifier session per finding with the full diff each time.
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
@@ -102,5 +114,5 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 - **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
 - **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial. The root `.gitignore` is edited.
-- **Evaluation (11):** the dataset exists ([eval/](eval/README.md)): 25 bug cases, 10 clean cases, 8 in the smoke set. No `eval` command yet.
+- **Evaluation (11):** the dataset and `eval` command exist; no baseline yet. Cases run one at a time, so the full set takes about an hour. Two evals at once must use different `--checkouts`.
 - **Distribution (12):** none.
