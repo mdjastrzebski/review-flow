@@ -8,22 +8,22 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface ModelChoice {
   /** null = don't pass a model; the harness uses its own default. */
   model: string | null;
-  /** null = harness has no effort control (Cursor). */
+  /** null = don't pass an effort; the harness or model uses its own default. */
   effort: Effort | null;
 }
 
 export type RoleModels = Record<Role, ModelChoice>;
 
 // Opus 5.5 defaults to medium effort, so it is always set explicitly.
-// Cursor model ids churn; leave the choice to Cursor until we pin real ids.
+// Cursor: Composer 2.5, Cursor's own model. Grok 4.7 high timed out (20 min) as reviewer.
 export const DEFAULT_MODELS: Record<Harness, RoleModels> = {
   claude: {
     reviewer: { model: "claude-opus-5-5", effort: "high" },
     verifier: { model: "claude-opus-5-5", effort: "medium" },
   },
   cursor: {
-    reviewer: { model: null, effort: null },
-    verifier: { model: null, effort: null },
+    reviewer: { model: "composer-2.5", effort: null },
+    verifier: { model: "composer-2.5", effort: null },
   },
 };
 
@@ -35,10 +35,14 @@ export interface ModelOverrides {
 
 export function resolveModels(harness: Harness, overrides: ModelOverrides): RoleModels {
   const defaults = DEFAULT_MODELS[harness];
-  const reviewerModel = overrides.model ?? defaults.reviewer.model;
-  const verifierModel = overrides.verifierModel ?? overrides.model ?? defaults.verifier.model;
+  // Cursor model ids often carry their own effort (gpt-5.3-codex-high), and not every model
+  // accepts an effort parameter, so an overridden Cursor model gets none.
+  const choose = (role: Role, override: string | null): ModelChoice =>
+    override === null
+      ? defaults[role]
+      : { model: override, effort: harness === "cursor" ? null : defaults[role].effort };
   return {
-    reviewer: { ...defaults.reviewer, model: reviewerModel },
-    verifier: { ...defaults.verifier, model: verifierModel },
+    reviewer: choose("reviewer", overrides.model),
+    verifier: choose("verifier", overrides.verifierModel ?? overrides.model),
   };
 }

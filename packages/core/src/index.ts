@@ -5,6 +5,7 @@ export * from "./run-dir.ts";
 export * from "./models.ts";
 export * from "./agent.ts";
 export * from "./calls.ts";
+export * from "./prices.ts";
 export * from "./normalize.ts";
 export * from "./prompts.ts";
 export * from "./pipeline.ts";

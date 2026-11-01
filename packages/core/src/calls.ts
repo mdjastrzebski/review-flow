@@ -5,10 +5,10 @@ import type { Effort, Harness, Role } from "./models.ts";
 export type Step = "collect" | "review" | "verify" | "report";
 
 /**
- * `reported`: the harness reported the cost. `unknown`: it didn't. `computed` (tokens × a price
- * table, spec 9) comes with the price table.
+ * `reported`: the harness reported the cost. `computed`: tokens × the price table (prices.ts).
+ * `unknown`: neither.
  */
-export type CostSource = "reported" | "unknown";
+export type CostSource = "reported" | "computed" | "unknown";
 
 /** One model call (one agent task); a line of calls.jsonl. */
 export interface CallRecord {
@@ -26,6 +26,8 @@ export interface CallRecord {
   costSource: CostSource;
   startedAt: string;
   durationMs: number;
+  /** Reads outside the repo that ran (cursor; see AgentResult). */
+  outsideReads: string[];
 }
 
 export interface CallTotals {

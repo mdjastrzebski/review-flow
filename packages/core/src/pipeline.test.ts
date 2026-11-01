@@ -170,9 +170,23 @@ describe("runReview", () => {
     expect(report).toContain("**Cost:** $1.00");
   });
 
-  it("records the cost as unknown when no task reports one", async () => {
+  it("computes the cost from tokens when a task reports none", async () => {
     const { runAgent: base } = stubAgent();
     const runAgent: RunAgent = async (task) => ({ ...(await base(task)), costUsd: null });
+    const result = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    expect(result.costUsd).toBeGreaterThan(0);
+    const calls = await readCalls(result.runDir.callsPath);
+    expect(calls.map((c) => c.costSource)).toEqual(["computed", "computed"]);
+  });
+
+  it("records the cost as unknown without a reported cost or tokens", async () => {
+    const { runAgent: base } = stubAgent();
+    const runAgent: RunAgent = async (task) => ({
+      ...(await base(task)),
+      costUsd: null,
+      usage: null,
+    });
     const result = await runReview({ ...baseOptions, cwd: repo, runAgent });
 
     expect(result.costUsd).toBeNull();

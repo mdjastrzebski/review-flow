@@ -40,7 +40,12 @@ async function isInside(realRoot: string, root: string, candidate: string): Prom
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function globEscapes(glob: string): boolean {
+/** Whether a path, relative to `root` or absolute, is inside `root`, following symlinks. */
+export async function isInsideRoot(root: string, candidate: string): Promise<boolean> {
+  return isInside(await realpathOfNearest(path.resolve(root)), root, candidate);
+}
+
+export function globEscapes(glob: string): boolean {
   return path.isAbsolute(glob) || glob.startsWith("~") || glob.split(/[\\/]/).includes("..");
 }
 

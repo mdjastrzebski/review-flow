@@ -1,12 +1,11 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "@review-flow/core";
 import { z } from "zod";
 import { READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL } from "./guard.ts";
+import { noResultError, runCli, type CliRun } from "./process.ts";
 
 /** Headless `claude -p` profile (spec 9). */
 export interface ClaudeOptions {
@@ -14,10 +13,6 @@ export interface ClaudeOptions {
 }
 
 const GUARD_HOOK = fileURLToPath(new URL("./guard-hook.ts", import.meta.url));
-
-/** After SIGTERM, how long the CLI gets to exit before SIGKILL. */
-const KILL_GRACE_MS = 5_000;
-const STDERR_TAIL_CHARS = 4_000;
 
 /**
  * The CLI validates `--json-schema` with a validator that doesn't know zod's default
@@ -201,73 +196,37 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
     }
     args = claudeArgs(task as AgentTask<unknown>, guardSettings(task.cwd, deniedLog), contextFile);
 
-    let timedOut = false;
-    let result: StreamMessage | null = null;
-    let exit: { code: number | null; signal: NodeJS.Signals | null; error?: Error };
+    // Assigned in a callback, so the cast keeps TS from narrowing it to null.
+    let result = null as StreamMessage | null;
+    let run: CliRun;
     try {
-      const child = spawn(options.bin, args, {
+      run = await runCli({
+        bin: options.bin,
+        args,
         cwd: task.cwd,
-        stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+        input: task.prompt,
+        timeoutMs: task.timeoutMs,
+        signal: task.signal,
+        onMessage: (value) => {
+          const message = value as StreamMessage;
+          messages.push(message);
+          if (message.type === "assistant") reportToolCalls(message, task as AgentTask<unknown>);
+          if (message.type === "result") result = message;
+        },
       });
-      const stop = () => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
-      };
-      const timer = setTimeout(() => {
-        timedOut = true;
-        stop();
-      }, task.timeoutMs);
-      task.signal?.addEventListener("abort", stop, { once: true });
-      // An abort during `mkdtemp` already fired, so the listener above won't see it.
-      if (task.signal?.aborted) stop();
-
-      const exited = new Promise<typeof exit>((resolve) => {
-        child.once("error", (error) => resolve({ code: null, signal: null, error }));
-        child.once("close", (code, signal) => resolve({ code, signal }));
-      });
-      child.stdin.on("error", () => {}); // EPIPE if the CLI exits before reading the prompt.
-      child.stdin.end(task.prompt);
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
-      });
-
-      for await (const line of createInterface({ input: child.stdout })) {
-        if (line.trim() === "") continue;
-        let message: StreamMessage;
-        try {
-          message = JSON.parse(line) as StreamMessage;
-        } catch {
-          messages.push({ unparsed: line });
-          continue;
-        }
-        messages.push(message);
-        if (message.type === "assistant") reportToolCalls(message, task as AgentTask<unknown>);
-        if (message.type === "result") result = message;
-      }
-      exit = await exited;
-      clearTimeout(timer);
-      task.signal?.removeEventListener("abort", stop);
       denied = await readLines(deniedLog);
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
+    stderr = run.stderr;
 
-    if (timedOut) return failure("timeout", `Timed out after ${task.timeoutMs} ms`);
+    if (run.timedOut) return failure("timeout", `Timed out after ${task.timeoutMs} ms`);
     if (task.signal?.aborted) return failure("error", "Cancelled");
-    if (exit.error !== undefined) {
-      return failure("error", `Could not run ${options.bin}: ${exit.error.message}`);
+    if (run.error !== undefined) {
+      return failure("error", `Could not run ${options.bin}: ${run.error.message}`);
     }
-    if (result === null) {
-      const how = exit.signal === null ? `exit code ${exit.code}` : `signal ${exit.signal}`;
-      const detail = stderr.trim();
-      return failure(
-        "error",
-        `${options.bin} ended without a result (${how})${detail === "" ? "" : `: ${detail}`}`,
-      );
-    }
+    if (result === null) return failure("error", noResultError(options.bin, run));
     return finish(interpretResult(result, task.schema));
   };
 }

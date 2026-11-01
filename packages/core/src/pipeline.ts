@@ -14,6 +14,7 @@ import {
 import { describeModel } from "./format.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
+import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
 import { applyVerdictRules } from "./rank.ts";
@@ -40,7 +41,7 @@ export interface ReviewRunResult {
   findings: NormalizedFinding[];
   /** findingId → verdict, with the code-enforced rules applied. */
   verdicts: Record<string, Verdict>;
-  /** null when no task reported a cost (Cursor). */
+  /** null when no call has a reported or computed cost. */
   costUsd: number | null;
   durationMs: number;
 }
@@ -130,7 +131,9 @@ async function runTask<T>(
   } finally {
     clearInterval(heartbeat);
   }
-  line(`done: ${result.status}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(2)}`}`);
+  const computedCost = result.costUsd === null ? computeCostUsd(task.model, result.usage) : null;
+  const costUsd = result.costUsd ?? computedCost;
+  line(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`);
 
   await writeJson(ctx.runDir.rawPath(task.taskId), result.raw);
   const call: CallRecord = {
@@ -143,10 +146,12 @@ async function runTask<T>(
     status: result.status,
     error: result.error,
     usage: result.usage,
-    costUsd: result.costUsd,
-    costSource: result.costUsd === null ? "unknown" : "reported",
+    costUsd,
+    costSource:
+      result.costUsd !== null ? "reported" : computedCost !== null ? "computed" : "unknown",
     startedAt: new Date(startedAt).toISOString(),
     durationMs: result.durationMs,
+    outsideReads: result.outsideReads ?? [],
   };
   ctx.calls.push(call);
   // Appended as each call ends, so a crashed run still keeps its records.

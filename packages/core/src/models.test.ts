@@ -11,10 +11,10 @@ describe("resolveModels", () => {
     });
   });
 
-  it("leaves model and effort to the harness for cursor by default", () => {
+  it("uses Composer 2.5 for cursor by default", () => {
     expect(resolveModels("cursor", none)).toEqual({
-      reviewer: { model: null, effort: null },
-      verifier: { model: null, effort: null },
+      reviewer: { model: "composer-2.5", effort: null },
+      verifier: { model: "composer-2.5", effort: null },
     });
   });
 
@@ -35,7 +35,13 @@ describe("resolveModels", () => {
 
   it("lets --verifier-model alone keep the default reviewer", () => {
     const models = resolveModels("cursor", { model: null, verifierModel: "gpt-x" });
-    expect(models.reviewer.model).toBeNull();
+    expect(models.reviewer.model).toBe("composer-2.5");
     expect(models.verifier.model).toBe("gpt-x");
+  });
+
+  it("drops the default effort for an overridden cursor model", () => {
+    const models = resolveModels("cursor", { model: "gpt-x", verifierModel: null });
+    expect(models.reviewer).toEqual({ model: "gpt-x", effort: null });
+    expect(models.verifier).toEqual({ model: "gpt-x", effort: null });
   });
 });

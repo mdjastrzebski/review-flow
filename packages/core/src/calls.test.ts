@@ -16,6 +16,7 @@ function call(overrides: Partial<CallRecord>): CallRecord {
     costSource: "reported",
     startedAt: "2026-11-01T00:00:00.000Z",
     durationMs: 100,
+    outsideReads: [],
     ...overrides,
   };
 }

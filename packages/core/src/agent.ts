@@ -53,6 +53,11 @@ export interface AgentResult<T> {
   /** null when the harness reports no token counts. */
   usage: TokenUsage | null;
   durationMs: number;
+  /**
+   * Reads outside the repo that ran: a harness that can only check tool calls after they run
+   * (cursor) records them instead of stopping the task.
+   */
+  outsideReads?: string[];
 }
 
 export type RunAgent = <T>(task: AgentTask<T>) => Promise<AgentResult<T>>;

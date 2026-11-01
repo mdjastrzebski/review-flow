@@ -245,8 +245,8 @@ A harness runs an agent task: a prompt in, structured output and usage out. Ther
 Each CLI is described by a profile:
 
 - the command, and how the prompt is passed (argument or stdin);
-- where shared context goes: text that is the same for many calls, such as the diff, is sent where the CLI caches it across sessions (`claude`: the system prompt, with `--append-system-prompt-file`), so it is written to the cache once per run instead of once per call;
-- the model and effort flags;
+- where shared context goes: text that is the same for many calls, such as the diff, is sent where the CLI caches it across sessions (`claude`: the system prompt, with `--append-system-prompt-file`; `cursor`, which has no system prompt flag: the start of the prompt), so it is written to the cache once per run instead of once per call;
+- the model and effort flags (`cursor` puts effort in the model id: `grok-4.7-high`, `claude-opus-5-5[effort=high]`);
 - the read-only flags, and an enforcement level: `enforced` (the CLI blocks writes and shell) or `best-effort` (the agent is only asked to stay read-only);
 - structured output: the CLI's schema flag where it exists (`claude --json-schema`, `codex --output-schema`). Otherwise, parse JSON from the text, validate it, and retry once;
 - how to read tokens and cost from the output.
@@ -272,7 +272,7 @@ Totals that include `unknown` calls are shown as partial, for example "≥ $1.20
 Safety is layered, so it doesn't depend on any one CLI:
 
 1. Every review runs in a disposable worktree (see 4).
-2. Every profile passes read-only flags. For `claude`, a `PreToolUse` guard hook, passed with `--settings`, also denies other tools and paths outside the worktree, following symlinks.
+2. Every profile passes read-only flags. For `claude`, a `PreToolUse` guard hook, passed with `--settings`, also denies other tools and paths outside the worktree, following symlinks. `cursor` has no such hook, so each tool call is checked once it completes. A read outside the worktree that ran is recorded in the call record and the task goes on: the sandbox blocks the network, so what it read can only reach the report. Any other forbidden call that ran stops the task.
 3. Sessions are isolated: no user or project agent settings, no memory files, no MCP servers, no saved sessions, as far as each CLI allows.
 4. The worktree's state is snapshotted, and checked after every task. Any change aborts the run (exit `3`).
 5. Trust levels limit which profiles may run (see 3).
@@ -281,7 +281,7 @@ Safety is layered, so it doesn't depend on any one CLI:
 
 Always on. Everything goes in `.review-flow/`, which contains its own `.gitignore` (`*`). The repo's `.gitignore` is never edited.
 
-Each call records: role, step, harness, model, effort, tokens (input, cache read, cache write, output), cost and cost source, wall time, and status. Steps and runs are rolled up from these records.
+Each call records: role, step, harness, model, effort, tokens (input, cache read, cache write, output), cost and cost source, wall time, status, and reads outside the worktree that ran. Steps and runs are rolled up from these records.
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 
