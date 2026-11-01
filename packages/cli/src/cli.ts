@@ -55,7 +55,7 @@ function resolveAgent(options: AgentOptions) {
 function addAgentOptions(command: Command): Command {
   return command
     .addOption(
-      new Option("--harness <name>", "agent harness").choices(HARNESSES).makeOptionMandatory(),
+      new Option("-H, --harness <name>", "agent harness").choices(HARNESSES).makeOptionMandatory(),
     )
     .option("--model <id>", "model for the reviewer (and verifier, unless overridden)")
     .option("--verifier-model <id>", "model for the verifiers")
@@ -161,7 +161,7 @@ addAgentOptions(
   program
     .command("review")
     .description("Review the current branch against a base ref")
-    .requiredOption("--base <ref>", "base ref to diff against (merge-base...HEAD)"),
+    .requiredOption("-b, --base <ref>", "base ref to diff against (merge-base...HEAD)"),
 )
   .option("--repo <path>", "repository to review", userCwd)
   .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)

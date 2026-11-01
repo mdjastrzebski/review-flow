@@ -80,7 +80,7 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Configuration
 
-CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`. `eval` takes the same, minus `--base`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
+CLI flags only: `-b, --base`, `-H, --harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`. `eval` takes the same, minus `--base`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
 
 Defaults ([models.ts](packages/core/src/models.ts)):
 
