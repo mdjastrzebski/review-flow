@@ -35,15 +35,18 @@ pnpm review-flow review --base main --harness claude
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/` (added to `.gitignore` automatically):
 
-| File                | Content                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `diff.patch`        | Reviewed diff                                                                                            |
-| `prompts/<task>.md` | Exact prompt per task                                                                                    |
-| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                            |
-| `findings.json`     | Normalized findings                                                                                      |
-| `verdicts.json`     | Verdict per finding                                                                                      |
-| `report.md`         | Ranked report                                                                                            |
-| `run.json`          | Models, base/head SHAs, status, total cost and duration, and status, cost, tokens, and duration per task |
+| File                | Content                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `diff.patch`        | Reviewed diff                                                                                             |
+| `prompts/<task>.md` | Exact prompt per task                                                                                     |
+| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                             |
+| `calls.jsonl`       | One line per agent task: role, step, model, effort, status, tokens, cost and cost source, start, duration |
+| `findings.json`     | Normalized findings                                                                                       |
+| `verdicts.json`     | Verdict per finding                                                                                       |
+| `report.md`         | Ranked report                                                                                             |
+| `run.json`          | Models, base/head SHAs, status, and per-step and total calls, cost, tokens, and wall time                 |
+
+Steps in `run.json` are `collect`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls. A call's cost source is `reported` when the CLI gave a cost, else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
 
 ## Configuration
 
@@ -72,5 +75,5 @@ From local runs on this repo (Claude harness, default models, Oct–Nov 2026):
 - **Incremental reviews (6), posting and exit codes (7):** none.
 - **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** only the `claude` profile, hard-coded. No `codex` or `cursor` profiles, user profiles, or price table.
-- **Instrumentation (10):** cost, tokens, and time per task only. No `calls.jsonl`, cost source, per-step totals, `index.jsonl`, or `compare`. The root `.gitignore` is edited.
+- **Instrumentation (10):** no `index.jsonl`, `runs`, or `compare`. Cost source is only `reported` or `unknown` (no price table), and totals with `unknown` calls are not shown as partial. The root `.gitignore` is edited.
 - **Evaluation (11), distribution (12):** none.

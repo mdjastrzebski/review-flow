@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
+import type { CallRecord } from "./calls.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
 import { NoChangesError, runReview } from "./pipeline.ts";
@@ -105,6 +106,11 @@ function stubAgent({
   return { runAgent, tasks };
 }
 
+async function readCalls(file: string): Promise<CallRecord[]> {
+  const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+  return lines.map((line) => JSON.parse(line) as CallRecord);
+}
+
 const baseOptions = {
   base: "main",
   harness: "claude" as const,
@@ -126,12 +132,38 @@ describe("runReview", () => {
     expect(JSON.parse(await readFile(runDir.rawPath("reviewer"), "utf8"))).toEqual({ stub: true });
     expect(JSON.parse(await readFile(runDir.findingsPath, "utf8"))).toHaveLength(1);
 
-    const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
-    expect(run).toMatchObject({ status: "ok", costUsd: 1, base: { ref: "main" } });
-    expect(run.tasks.map((t: { taskId: string }) => t.taskId)).toEqual([
-      "reviewer",
-      "verifier-F-001",
+    const calls = await readCalls(runDir.callsPath);
+    expect(calls).toEqual([
+      expect.objectContaining({
+        taskId: "reviewer",
+        role: "reviewer",
+        step: "review",
+        harness: "claude",
+        model: "claude-opus-5-5",
+        effort: "high",
+        status: "ok",
+        usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 },
+        costUsd: 0.5,
+        costSource: "reported",
+        durationMs: 10,
+      }),
+      expect.objectContaining({ taskId: "verifier-F-001", step: "verify", effort: "medium" }),
     ]);
+
+    const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
+    expect(run).toMatchObject({ status: "ok", base: { ref: "main" } });
+    expect(Object.keys(run.steps)).toEqual(["collect", "review", "verify", "report"]);
+    expect(run.steps.collect).toMatchObject({ calls: 0, costUsd: null });
+    expect(run.steps.review).toMatchObject({ calls: 1, costUsd: 0.5 });
+    expect(run.steps.verify).toMatchObject({ calls: 1, costUsd: 0.5 });
+    expect(run.steps.verify.durationMs).toBeGreaterThanOrEqual(0);
+    expect(run.totals).toMatchObject({
+      calls: 2,
+      costUsd: 1,
+      unknownCostCalls: 0,
+      usage: { input: 2, cacheRead: 4, cacheWrite: 6, output: 8 },
+    });
+    expect(run.totals.durationMs).toBeGreaterThanOrEqual(run.steps.verify.durationMs);
 
     const report = await readFile(runDir.reportPath, "utf8");
     expect(report).toContain("### [ ] F-001 · medium · confirmed (high) · `a.txt:2`");
@@ -145,7 +177,9 @@ describe("runReview", () => {
 
     expect(result.costUsd).toBeNull();
     const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
-    expect(run.costUsd).toBeNull();
+    expect(run.totals).toMatchObject({ costUsd: null, unknownCostCalls: 2 });
+    const calls = await readCalls(result.runDir.callsPath);
+    expect(calls.map((c) => c.costSource)).toEqual(["unknown", "unknown"]);
     expect(await readFile(result.runDir.reportPath, "utf8")).not.toContain("Cost");
   });
 
@@ -200,9 +234,11 @@ describe("runReview", () => {
     });
     const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
     expect(run.status).toBe("ok");
-    expect(run.tasks.find((t: { taskId: string }) => t.taskId === "verifier-F-002")).toMatchObject({
+    const calls = await readCalls(runDir.callsPath);
+    expect(calls.find((c) => c.taskId === "verifier-F-002")).toMatchObject({
       status: "invalid_output",
       error: "bad json",
+      costUsd: 0.25,
     });
   });
 
@@ -246,7 +282,7 @@ describe("runReview", () => {
     expect(verifiers.every((t) => t.signal?.aborted)).toBe(true);
   });
 
-  it("aborts when an agent changes the working tree", async () => {
+  it("aborts when an agent changes the working tree, keeping the records", async () => {
     const { runAgent } = stubAgent({
       effect: async () => {
         await writeFile(path.join(repo, "a.txt"), "tampered\n");
@@ -255,6 +291,15 @@ describe("runReview", () => {
     await expect(runReview({ ...baseOptions, cwd: repo, runAgent })).rejects.toBeInstanceOf(
       WorkingTreeChangedError,
     );
+
+    const runsDir = path.join(repo, ".review-flow", "runs");
+    const [runName] = await readdir(runsDir);
+    const root = path.join(runsDir, runName ?? "");
+    const run = JSON.parse(await readFile(path.join(root, "run.json"), "utf8"));
+    expect(run.status).toBe("failed");
+    expect(Object.keys(run.steps)).toEqual(["collect", "review"]);
+    expect(run.totals).toMatchObject({ calls: 1, costUsd: 0.5 });
+    expect(await readCalls(path.join(root, "calls.jsonl"))).toHaveLength(1);
   });
 
   it("fails with a clear error on an empty diff", async () => {

@@ -42,6 +42,7 @@ export interface RunDir {
   readonly root: string;
   readonly diffPath: string;
   readonly runJsonPath: string;
+  readonly callsPath: string;
   readonly findingsPath: string;
   readonly verdictsPath: string;
   readonly reportPath: string;
@@ -54,6 +55,7 @@ export function runDirPaths(root: string): RunDir {
     root,
     diffPath: path.join(root, "diff.patch"),
     runJsonPath: path.join(root, "run.json"),
+    callsPath: path.join(root, "calls.jsonl"),
     findingsPath: path.join(root, "findings.json"),
     verdictsPath: path.join(root, "verdicts.json"),
     reportPath: path.join(root, "report.md"),

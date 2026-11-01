@@ -1,6 +1,7 @@
-import { writeFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import pLimit from "p-limit";
-import type { AgentResult, AgentStatus, AgentTask, RunAgent, TokenUsage } from "./agent.ts";
+import type { AgentResult, AgentStatus, AgentTask, RunAgent } from "./agent.ts";
+import { rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
 import {
   assertStatusUnchanged,
   diffAgainstBase,
@@ -11,7 +12,7 @@ import {
   type StatusSnapshot,
 } from "./git.ts";
 import { describeModel } from "./format.ts";
-import type { Harness, Role, RoleModels } from "./models.ts";
+import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
@@ -44,29 +45,18 @@ export interface ReviewRunResult {
   durationMs: number;
 }
 
-interface TaskRecord {
-  taskId: string;
-  role: Role;
-  status: AgentStatus;
-  error: string | null;
-  costUsd: number | null;
-  usage: TokenUsage | null;
-  durationMs: number;
-}
-
+/** run.json. Per-call detail is in calls.jsonl. */
 interface RunRecord {
   harness: Harness;
   models: RoleModels;
   base: { ref: string; sha: string };
   head: { sha: string };
   startedAt: string;
-  finishedAt: string | null;
-  durationMs: number | null;
-  /** Sum over tasks that reported a cost; null when none did. */
-  costUsd: number | null;
-  status: "running" | "ok" | "failed";
+  finishedAt: string;
+  status: "ok" | "failed";
   error: string | null;
-  tasks: TaskRecord[];
+  steps: Partial<Record<Step, TimedTotals>>;
+  totals: TimedTotals;
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> {
@@ -85,17 +75,32 @@ interface TaskContext {
   runDir: RunDir;
   repo: string;
   status: StatusSnapshot;
-  run: RunRecord;
+  harness: Harness;
+  calls: CallRecord[];
   runAgent: RunAgent;
   log: (message: string) => void;
 }
 
+/** Wall time of each step, in the order the steps ran. */
+type StepDurations = Map<Step, number>;
+
+async function timeStep<T>(durations: StepDurations, step: Step, fn: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await fn();
+  } finally {
+    durations.set(step, Date.now() - startedAt);
+  }
+}
+
 /**
- * Runs one agent task with the run's bookkeeping: prompt + raw output on disk, progress lines
- * (each tool call, plus a heartbeat when the agent is quiet), tree check after.
+ * Runs one agent task with the run's bookkeeping: prompt + raw output on disk, a line in
+ * calls.jsonl, progress lines (each tool call, plus a heartbeat when the agent is quiet), tree
+ * check after.
  */
 async function runTask<T>(
   task: Omit<AgentTask<T>, "onProgress">,
+  step: Step,
   ctx: TaskContext,
 ): Promise<AgentResult<T>> {
   await writeFile(ctx.runDir.promptPath(task.taskId), task.prompt);
@@ -126,16 +131,24 @@ async function runTask<T>(
   line(`done: ${result.status}${result.costUsd === null ? "" : `, $${result.costUsd.toFixed(2)}`}`);
 
   await writeJson(ctx.runDir.rawPath(task.taskId), result.raw);
-  ctx.run.tasks.push({
+  const call: CallRecord = {
     taskId: task.taskId,
     role: task.role,
+    step,
+    harness: ctx.harness,
+    model: task.model,
+    effort: task.effort,
     status: result.status,
     error: result.error,
-    costUsd: result.costUsd,
     usage: result.usage,
+    costUsd: result.costUsd,
+    costSource: result.costUsd === null ? "unknown" : "reported",
+    startedAt: new Date(startedAt).toISOString(),
     durationMs: result.durationMs,
-  });
-  if (result.costUsd !== null) ctx.run.costUsd = (ctx.run.costUsd ?? 0) + result.costUsd;
+  };
+  ctx.calls.push(call);
+  // Appended as each call ends, so a crashed run still keeps its records.
+  await appendFile(ctx.runDir.callsPath, `${JSON.stringify(call)}\n`);
   // Agents are read-only by configuration; this is the safety net if that ever fails.
   await assertStatusUnchanged(ctx.repo, ctx.status);
   return result;
@@ -198,6 +211,7 @@ async function verifyFindings(
               timeoutMs: VERIFIER_TIMEOUT_MS,
               signal: abort.signal,
             },
+            "verify",
             ctx,
           );
           if (result.output === null) {
@@ -232,6 +246,7 @@ export class NoChangesError extends Error {
 /** collect → review → normalize → verify → rank → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const { base, harness, models, runAgent, log } = options;
+  const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
   const baseSha = await resolveCommit(repo, base);
   const headSha = await resolveCommit(repo, "HEAD");
@@ -249,87 +264,93 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   // Taken after the .gitignore edit; agents must leave the tree exactly like this.
   const status = await snapshotStatus(repo);
 
-  const startedAt = new Date();
   const runDir = await createRunDir(repo, await shortSha(repo, "HEAD"), startedAt);
   await writeFile(runDir.diffPath, diff);
   log(`Run dir: ${runDir.root}`);
 
-  const run: RunRecord = {
-    harness,
-    models,
-    base: { ref: base, sha: baseSha },
-    head: { sha: headSha },
-    startedAt: startedAt.toISOString(),
-    finishedAt: null,
-    durationMs: null,
-    costUsd: null,
-    status: "running",
-    error: null,
-    tasks: [],
-  };
-  const ctx: TaskContext = { runDir, repo, status, run, runAgent, log };
+  const stepDurations: StepDurations = new Map([["collect", Date.now() - startedAt.getTime()]]);
+  const calls: CallRecord[] = [];
+  const ctx: TaskContext = { runDir, repo, status, harness, calls, runAgent, log };
+  let failure: string | null = null;
 
   try {
-    const prompt = renderPrompt(await loadPrompt("reviewer"), {
-      base,
-      diffBlock: codeFence(diff, "diff"),
-    });
-    log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
-    const review = await runTask(
-      {
-        taskId: "reviewer",
-        role: "reviewer",
-        prompt,
-        cwd: repo,
-        schema: ReviewOutput,
-        model: models.reviewer.model,
-        effort: models.reviewer.effort,
-        timeoutMs: REVIEWER_TIMEOUT_MS,
-      },
-      ctx,
-    );
-    if (review.output === null) {
-      throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
-    }
-
-    const { findings, notes } = normalizeFindings(review.output, repo);
-    for (const note of notes) log(note);
-    await writeJson(runDir.findingsPath, findings);
-    log(`Reviewer returned ${findings.length} finding(s) → ${runDir.findingsPath}`);
-
-    if (findings.length > 0) {
-      log(
-        `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
+    const findings = await timeStep(stepDurations, "review", async () => {
+      const prompt = renderPrompt(await loadPrompt("reviewer"), {
+        base,
+        diffBlock: codeFence(diff, "diff"),
+      });
+      log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
+      const review = await runTask(
+        {
+          taskId: "reviewer",
+          role: "reviewer",
+          prompt,
+          cwd: repo,
+          schema: ReviewOutput,
+          model: models.reviewer.model,
+          effort: models.reviewer.effort,
+          timeoutMs: REVIEWER_TIMEOUT_MS,
+        },
+        "review",
+        ctx,
       );
-    }
-    const verdicts = await verifyFindings(findings, { base, diff, models }, ctx);
-    await writeJson(runDir.verdictsPath, verdicts);
-    log(`Verdicts → ${runDir.verdictsPath}`);
+      if (review.output === null) {
+        throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
+      }
+
+      const normalized = normalizeFindings(review.output, repo);
+      for (const note of normalized.notes) log(note);
+      await writeJson(runDir.findingsPath, normalized.findings);
+      log(`Reviewer returned ${normalized.findings.length} finding(s) → ${runDir.findingsPath}`);
+      return normalized.findings;
+    });
+
+    const verdicts = await timeStep(stepDurations, "verify", async () => {
+      if (findings.length > 0) {
+        log(
+          `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
+        );
+      }
+      const result = await verifyFindings(findings, { base, diff, models }, ctx);
+      await writeJson(runDir.verdictsPath, result);
+      log(`Verdicts → ${runDir.verdictsPath}`);
+      return result;
+    });
 
     const durationMs = Date.now() - startedAt.getTime();
-    const report = renderReport({
-      harness,
-      models,
-      base: run.base,
-      head: run.head,
-      durationMs,
-      costUsd: run.costUsd,
-      findings,
-      verdicts,
+    const { costUsd } = rollUp(calls, stepDurations, durationMs).totals;
+    await timeStep(stepDurations, "report", async () => {
+      const report = renderReport({
+        harness,
+        models,
+        base: { ref: base, sha: baseSha },
+        head: { sha: headSha },
+        durationMs,
+        costUsd,
+        findings,
+        verdicts,
+      });
+      await writeFile(runDir.reportPath, report);
+      log(`Report → ${runDir.reportPath}`);
     });
-    await writeFile(runDir.reportPath, report);
-    log(`Report → ${runDir.reportPath}`);
 
-    run.status = "ok";
-    return { runDir, findings, verdicts, costUsd: run.costUsd, durationMs };
+    return { runDir, findings, verdicts, costUsd, durationMs };
   } catch (error) {
-    run.status = "failed";
-    run.error = error instanceof Error ? error.message : String(error);
+    failure = error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
     const finishedAt = new Date();
-    run.finishedAt = finishedAt.toISOString();
-    run.durationMs = finishedAt.getTime() - startedAt.getTime();
+    const run: RunRecord = {
+      harness,
+      models,
+      base: { ref: base, sha: baseSha },
+      head: { sha: headSha },
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      status: failure === null ? "ok" : "failed",
+      error: failure,
+      ...rollUp(calls, stepDurations, finishedAt.getTime() - startedAt.getTime()),
+    };
     await writeJson(runDir.runJsonPath, run);
   }
 }
