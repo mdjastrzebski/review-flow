@@ -34,20 +34,27 @@ function fixSection(suggestedFix: string | null): string {
 
 /**
  * Builds the verifier prompt from the finding's title, location, claim and (truncated) suggested
- * fix, plus the diff. The reviewer's rationale, severity and category are deliberately left out
- * so they can't anchor the verdict.
+ * fix. The reviewer's rationale, severity and category are deliberately left out so they can't
+ * anchor the verdict. The diff is not included; it goes in the shared context.
  */
 export function buildVerifierPrompt(
   template: string,
   finding: NormalizedFinding,
-  context: { base: string; diff: string },
+  base: string,
 ): string {
   return renderPrompt(template, {
-    base: context.base,
+    base,
     title: finding.title,
     location: formatLocation(finding),
     claim: finding.claim,
     fix: fixSection(finding.suggestedFix),
-    diffBlock: codeFence(context.diff, "diff"),
   });
+}
+
+/**
+ * The diff, as context shared by all verifiers. It is identical for every finding, so the harness
+ * can cache it once per run instead of once per verifier.
+ */
+export function buildChangeContext(template: string, base: string, diff: string): string {
+  return renderPrompt(template, { base, diffBlock: codeFence(diff, "diff") });
 }

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const PROMPTS_DIR = new URL("../prompts/", import.meta.url);
 
-export type PromptName = "reviewer" | "verifier";
+export type PromptName = "reviewer" | "verifier" | "change";
 
 export async function loadPrompt(name: PromptName): Promise<string> {
   return readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");

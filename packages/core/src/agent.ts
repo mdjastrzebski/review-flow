@@ -6,6 +6,11 @@ export interface AgentTask<T> {
   taskId: string;
   role: Role;
   prompt: string;
+  /**
+   * Text that is identical across a run's tasks of one role, such as the diff. A harness that can
+   * cache it across sessions sends it apart from the prompt (claude: the system prompt).
+   */
+  sharedContext: string | null;
   cwd: string;
   /** Validates the agent's final answer; adapters also derive the JSON Schema from it. */
   schema: z.ZodType<T>;

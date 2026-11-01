@@ -2,7 +2,7 @@ You are verifying a claim someone made about a code change. You did not write th
 
 ## Scope
 
-- The change is the diff between `{{base}}` and `HEAD`, shown at the end.
+- The change is the diff between `{{base}}` and `HEAD`, given to you under "The change".
 - You are in the repository root. Read the code yourself: the location named in the claim, its callers and callees, types, tests and config. Do not rely on the claim's description of the code. You have read-only access; do not try to modify files or run commands.
 
 ## Step 1: the claim
@@ -41,7 +41,3 @@ If a fix was suggested, judge whether it would actually resolve the issue you ve
 Explain why in `fix.detail`. Put a short better fix in `fix.betterFix` (at most 3 sentences, or a snippet of at most 10 lines; not a patch) when the fix is flawed or incomplete, or when no fix was suggested; otherwise use null.
 
 Your final answer must be a single JSON object matching the required schema, with no other text.
-
-## The change
-
-{{diffBlock}}

@@ -218,6 +218,37 @@ describe("runReview", () => {
     expect(prompt).toContain("Finding 2");
   });
 
+  it("gives verifiers the diff as shared context and keeps it out of their prompts", async () => {
+    const { runAgent, tasks } = stubAgent();
+    await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    const [reviewer, verifier] = tasks;
+    expect(reviewer?.sharedContext).toBeNull();
+    expect(verifier?.sharedContext).toContain("+b");
+    expect(verifier?.prompt).not.toContain("+b");
+  });
+
+  it("starts other verifiers only once the first one shows activity", async () => {
+    const review = { findings: ["1", "2", "3"].map(makeFinding) };
+    const events: string[] = [];
+    const { runAgent } = stubAgent({
+      review,
+      effect: async (task) => {
+        if (task.role !== "verifier") return;
+        events.push(`start ${task.taskId}`);
+        if (task.taskId !== "verifier-F-001") return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        events.push("activity");
+        task.onProgress({ tool: "Read", detail: null });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    });
+    await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    expect(events.slice(0, 2)).toEqual(["start verifier-F-001", "activity"]);
+    expect(events).toHaveLength(4);
+  });
+
   it("applies the verdict rules and marks failed verifiers inconclusive", async () => {
     const review = { findings: ["1", "2"].map(makeFinding) };
     const { runAgent } = stubAgent({
@@ -263,11 +294,13 @@ describe("runReview", () => {
     const { runAgent, tasks } = stubAgent({
       review,
       effect: async (task) => {
-        if (task.taskId === "verifier-F-001") {
+        if (task.taskId === "verifier-F-002") {
           await writeFile(path.join(repo, "a.txt"), "tampered\n");
           return;
         }
         if (task.role !== "verifier") return;
+        // Releases the verifiers waiting for the first one's cache write.
+        task.onProgress({ tool: "Read", detail: null });
         // Stands in for a long session: only ends once the pipeline aborts it.
         await new Promise<void>((resolve) => {
           task.signal?.addEventListener("abort", () => resolve(), { once: true });

@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { loadPrompt } from "./prompts.ts";
 import { applyVerdictRules } from "./rank.ts";
 import type { NormalizedFinding, Verdict } from "./schemas.ts";
-import { buildVerifierPrompt, MAX_FIX_CHARS, MAX_FIX_LINES, truncateFix } from "./verify.ts";
+import {
+  buildChangeContext,
+  buildVerifierPrompt,
+  MAX_FIX_CHARS,
+  MAX_FIX_LINES,
+  truncateFix,
+} from "./verify.ts";
 
 function makeFinding(overrides: Partial<NormalizedFinding> = {}): NormalizedFinding {
   return {
@@ -21,19 +27,18 @@ function makeFinding(overrides: Partial<NormalizedFinding> = {}): NormalizedFind
   };
 }
 
-const context = { base: "main", diff: "DIFF_SENTINEL" };
 const template = await loadPrompt("verifier");
-const build = (finding: NormalizedFinding) => buildVerifierPrompt(template, finding, context);
+const changeTemplate = await loadPrompt("change");
+const build = (finding: NormalizedFinding) => buildVerifierPrompt(template, finding, "main");
 
 describe("buildVerifierPrompt", () => {
-  it("includes title, location, claim, fix, base and diff", () => {
+  it("includes title, location, claim, fix and base", () => {
     const prompt = build(makeFinding());
     expect(prompt).toContain("Off-by-one in loop");
     expect(prompt).toContain("`src/a.ts:3-7`");
     expect(prompt).toContain("CLAIM_SENTINEL");
     expect(prompt).toContain("FIX_SENTINEL");
     expect(prompt).toContain("`main`");
-    expect(prompt).toContain("DIFF_SENTINEL");
   });
 
   it("never includes the reviewer's rationale", () => {
@@ -67,14 +72,22 @@ describe("buildVerifierPrompt", () => {
     expect(prompt).not.toContain(`line ${MAX_FIX_LINES + 1}`);
   });
 
-  it("fences a diff containing a closing fence so it can't end early", () => {
-    const diff = " ```\n+added";
-    const prompt = buildVerifierPrompt(template, makeFinding(), { base: "main", diff });
-    expect(prompt).toContain(`\`\`\`\`diff\n${diff}\n\`\`\`\``);
-  });
-
   it("uses a single-line location when the range is one line", () => {
     expect(build(makeFinding({ lineEnd: 3 }))).toContain("`src/a.ts:3`");
+  });
+});
+
+describe("buildChangeContext", () => {
+  it("includes the base and the diff", () => {
+    const context = buildChangeContext(changeTemplate, "main", "DIFF_SENTINEL");
+    expect(context).toContain("`main`");
+    expect(context).toContain("DIFF_SENTINEL");
+  });
+
+  it("fences a diff containing a closing fence so it can't end early", () => {
+    const diff = " ```\n+added";
+    const context = buildChangeContext(changeTemplate, "main", diff);
+    expect(context).toContain(`\`\`\`\`diff\n${diff}\n\`\`\`\``);
   });
 });
 

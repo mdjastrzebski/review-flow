@@ -40,7 +40,9 @@ else {
     subtype: "success",
     is_error: false,
     result: "done",
-    structured_output: mode === "bad" ? { nope: 1 } : { answer: "hi" },
+    structured_output: mode === "bad" ? { nope: 1 }
+      : mode === "context" ? { answer: readFileSync(flag("--append-system-prompt-file"), "utf8") }
+      : { answer: "hi" },
     total_cost_usd: 0.12,
     usage: { input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 30, output_tokens: 40 },
   });
@@ -75,6 +77,7 @@ function task(mode: string, overrides: Partial<AgentTask<{ answer: string }>> = 
       taskId: "reviewer",
       role: "reviewer",
       prompt: `mode:${mode}`,
+      sharedContext: null,
       cwd: repo,
       schema: Answer,
       model: "claude-opus-5-5",
@@ -88,7 +91,7 @@ function task(mode: string, overrides: Partial<AgentTask<{ answer: string }>> = 
 
 describe("claudeArgs", () => {
   it("passes read-only, isolation, model, and schema flags", () => {
-    const args = claudeArgs(task("ok").task as AgentTask<unknown>, "{}");
+    const args = claudeArgs(task("ok").task as AgentTask<unknown>, "{}", null);
     const value = (flag: string) => args[args.indexOf(flag) + 1];
     expect(args).toContain("-p");
     expect(value("--output-format")).toBe("stream-json");
@@ -109,12 +112,19 @@ describe("claudeArgs", () => {
     const schema = JSON.parse(value("--json-schema") ?? "") as Record<string, unknown>;
     expect(schema).toMatchObject({ type: "object", required: ["answer"] });
     expect(schema).not.toHaveProperty("$schema");
+    expect(args).not.toContain("--append-system-prompt-file");
+  });
+
+  it("appends the shared context file to the system prompt", () => {
+    const args = claudeArgs(task("ok").task as AgentTask<unknown>, "{}", "/tmp/context.md");
+    expect(args[args.indexOf("--append-system-prompt-file") + 1]).toBe("/tmp/context.md");
   });
 
   it("omits model and effort when unset", () => {
     const args = claudeArgs(
       task("ok", { model: null, effort: null }).task as AgentTask<unknown>,
       "{}",
+      null,
     );
     expect(args).not.toContain("--model");
     expect(args).not.toContain("--effort");
@@ -154,6 +164,11 @@ describe("createClaudeAgent", () => {
       usage: { input: 10, cacheRead: 20, cacheWrite: 30, output: 40 },
     });
     expect(progress).toEqual([{ tool: "Read", detail: path.join("src", "a.ts") }]);
+  });
+
+  it("hands the shared context to the CLI in a file", async () => {
+    const result = await agent()(task("context", { sharedContext: "THE DIFF" }).task);
+    expect(result.output).toEqual({ answer: "THE DIFF" });
   });
 
   it("runs the guard hook from --settings and records denials", async () => {

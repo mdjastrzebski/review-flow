@@ -19,7 +19,7 @@ import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
 import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
-import { buildVerifierPrompt, verifierTaskId } from "./verify.ts";
+import { buildChangeContext, buildVerifierPrompt, verifierTaskId } from "./verify.ts";
 
 const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
 const VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -102,6 +102,7 @@ async function runTask<T>(
   task: Omit<AgentTask<T>, "onProgress">,
   step: Step,
   ctx: TaskContext,
+  onActivity?: () => void,
 ): Promise<AgentResult<T>> {
   await writeFile(ctx.runDir.promptPath(task.taskId), task.prompt);
 
@@ -123,6 +124,7 @@ async function runTask<T>(
       onProgress: ({ tool, detail }) => {
         lastActivity = Date.now();
         line(detail === null ? tool : `${tool} ${detail}`);
+        onActivity?.();
       },
     });
   } finally {
@@ -183,6 +185,10 @@ export function failedVerdict(
  * One fresh verifier session per finding. Agent failures become inconclusive verdicts; anything
  * thrown (e.g. the working tree changed) stops queued tasks, aborts in-flight ones, and is
  * rethrown once they have settled, so run.json is written after the last task.
+ *
+ * The first verifier runs alone until it shows activity (or ends). By then its request has
+ * written the shared diff to the prompt cache, so the others read it instead of each writing it
+ * again; a cache write costs about 40× a cache read.
  */
 async function verifyFindings(
   findings: readonly NormalizedFinding[],
@@ -190,20 +196,27 @@ async function verifyFindings(
   ctx: TaskContext,
 ): Promise<Record<string, Verdict>> {
   const template = await loadPrompt("verifier");
+  const sharedContext = buildChangeContext(await loadPrompt("change"), context.base, context.diff);
+  const warm = Promise.withResolvers<void>();
   // rejectOnClear: otherwise cleared tasks never settle and allSettled hangs.
   const limit = pLimit({ concurrency: VERIFIER_CONCURRENCY, rejectOnClear: true });
   const abort = new AbortController();
   // The first thrown error, in the order thrown; cleared tasks reject later with AbortErrors.
   const errors: unknown[] = [];
   const settled = await Promise.allSettled(
-    findings.map((finding) =>
+    findings.map((finding, index) =>
       limit(async (): Promise<[string, Verdict]> => {
         try {
+          if (index > 0) {
+            await warm.promise;
+            if (abort.signal.aborted) throw abort.signal.reason;
+          }
           const result = await runTask(
             {
               taskId: verifierTaskId(finding),
               role: "verifier",
-              prompt: buildVerifierPrompt(template, finding, context),
+              prompt: buildVerifierPrompt(template, finding, context.base),
+              sharedContext,
               cwd: ctx.repo,
               schema: Verdict,
               model: context.models.verifier.model,
@@ -213,7 +226,9 @@ async function verifyFindings(
             },
             "verify",
             ctx,
+            warm.resolve,
           );
+          warm.resolve();
           if (result.output === null) {
             ctx.log(`${finding.id}: verifier failed (${result.status}); marked inconclusive.`);
             return [finding.id, failedVerdict(finding, result.status, result.error)];
@@ -223,6 +238,8 @@ async function verifyFindings(
           errors.push(error);
           limit.clearQueue();
           abort.abort();
+          // After the abort, so waiting verifiers see it and don't start.
+          warm.resolve();
           throw error;
         }
       }),
@@ -285,6 +302,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
           taskId: "reviewer",
           role: "reviewer",
           prompt,
+          sharedContext: null,
           cwd: repo,
           schema: ReviewOutput,
           model: models.reviewer.model,

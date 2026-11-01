@@ -245,6 +245,7 @@ A harness runs an agent task: a prompt in, structured output and usage out. Ther
 Each CLI is described by a profile:
 
 - the command, and how the prompt is passed (argument or stdin);
+- where shared context goes: text that is the same for many calls, such as the diff, is sent where the CLI caches it across sessions (`claude`: the system prompt, with `--append-system-prompt-file`), so it is written to the cache once per run instead of once per call;
 - the model and effort flags;
 - the read-only flags, and an enforcement level: `enforced` (the CLI blocks writes and shell) or `best-effort` (the agent is only asked to stay read-only);
 - structured output: the CLI's schema flag where it exists (`claude --json-schema`, `codex --output-schema`). Otherwise, parse JSON from the text, validate it, and retry once;

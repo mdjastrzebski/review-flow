@@ -12,7 +12,7 @@ pnpm review-flow review --base main --harness claude
 
 ## Harness
 
-`claude -p --output-format stream-json` per task ([claude.ts](packages/agents/src/claude.ts)). The prompt goes on stdin, the output schema with `--json-schema`. Tool calls in the stream drive the progress lines. The final `result` message gives the structured output, cost (`total_cost_usd`), and tokens. Timeouts and Ctrl-C send SIGTERM, then SIGKILL after 5 s. The binary is set with `--claude-bin` (default `claude`).
+`claude -p --output-format stream-json` per task ([claude.ts](packages/agents/src/claude.ts)). The prompt goes on stdin, the output schema with `--json-schema`. Shared context (the diff, for verifiers) goes in a file appended to the system prompt with `--append-system-prompt-file`, because the system prompt is cached as its own block and later sessions can read it; a shared prefix inside the user message is not reused. Tool calls in the stream drive the progress lines. The final `result` message gives the structured output, cost (`total_cost_usd`), and tokens. Timeouts and Ctrl-C send SIGTERM, then SIGKILL after 5 s. The binary is set with `--claude-bin` (default `claude`).
 
 ## Pipeline
 
@@ -21,7 +21,7 @@ pnpm review-flow review --base main --harness claude
 1. **Collect.** Diff `base...HEAD` (three-dot). Exit cleanly if there are no changes.
 2. **Review.** One agent session gets the full diff and read-only repo access, and returns findings as structured JSON ([reviewer.md](packages/core/prompts/reviewer.md)). It is told to report only concrete defects with a failure scenario, at most 15.
 3. **Normalize.** Cap at 15 findings, assign ids (`F-001`…), make paths repo-relative, fix reversed line ranges.
-4. **Verify.** One fresh agent session per finding, up to 3 in parallel ([verifier.md](packages/core/prompts/verifier.md)). The verifier tries to refute the claim and returns `confirmed`, `refuted`, or `inconclusive`, plus severity, confidence, fix cost, evidence, and an assessment of the suggested fix. To avoid anchoring, it doesn't see the reviewer's rationale, severity, or category.
+4. **Verify.** One fresh agent session per finding, up to 3 in parallel ([verifier.md](packages/core/prompts/verifier.md)). The verifier tries to refute the claim and returns `confirmed`, `refuted`, or `inconclusive`, plus severity, confidence, fix cost, evidence, and an assessment of the suggested fix. To avoid anchoring, it doesn't see the reviewer's rationale, severity, or category. The diff is shared context ([change.md](packages/core/prompts/change.md)), framed as data, not instructions. The first verifier runs alone until its first tool call, so its request has cached the diff before the others start.
 5. **Rank.** Rules enforced in code: `confirmed` without a `code_ref` is downgraded to `inconclusive`, and a failed verifier counts as `inconclusive`. Findings are sorted by verdict, then severity, then confidence ([rank.ts](packages/core/src/rank.ts)).
 6. **Report.** Markdown report plus a terminal summary.
 
@@ -65,6 +65,8 @@ From local runs on this repo (Claude harness, default models, Oct–Nov 2026):
 - **Verification can cost more than the review.** In one run, the reviewer cost $0.72 and 4 verifiers cost $2.23.
 - **`claude -p` vs Agent SDK:** on the same diff, $2.21 / 1.7 min vs $2.95 / 2.2 min, with similar findings (see the [decision log](PLAN.md#decision-log)).
 - Experimental Cursor runs took 10–27 min and reported no cost.
+- **Cache writes cost about 40× cache reads** (fitted from `calls.jsonl`: $8 vs $0.20 per million tokens, all at the 1-hour cache). A verifier that reads the diff from cache costs about $0.08 instead of $0.48 (see the [decision log](PLAN.md#decision-log)).
+- **Repeat runs on the same diff are cheaper**: the reviewer prompt stays in the 1-hour cache, so a second run within the hour skipped a $0.50 cache write. Compare first runs with first runs.
 
 ## Gaps against the [spec](SPEC.md)
 

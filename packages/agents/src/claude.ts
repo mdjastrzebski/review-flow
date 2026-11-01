@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -41,8 +41,16 @@ export function guardSettings(cwd: string, deniedLog: string): string {
   });
 }
 
-/** Flags for one task. The prompt goes on stdin, so large diffs don't hit argv limits. */
-export function claudeArgs(task: AgentTask<unknown>, settings: string): string[] {
+/**
+ * Flags for one task. The prompt goes on stdin and the shared context in a file, so large diffs
+ * don't hit argv limits. The shared context is appended to the system prompt: unlike the user
+ * message, the system prompt is cached as its own block, so later sessions read it from cache.
+ */
+export function claudeArgs(
+  task: AgentTask<unknown>,
+  settings: string,
+  contextFile: string | null,
+): string[] {
   const tools = READ_ONLY_TOOLS.join(",");
   return [
     "-p",
@@ -69,6 +77,7 @@ export function claudeArgs(task: AgentTask<unknown>, settings: string): string[]
     "--no-session-persistence",
     "--json-schema",
     JSON.stringify(toOutputSchema(task.schema)),
+    ...(contextFile === null ? [] : ["--append-system-prompt-file", contextFile]),
   ];
 }
 
@@ -185,7 +194,12 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
 
     const scratch = await mkdtemp(path.join(tmpdir(), "review-flow-claude-"));
     const deniedLog = path.join(scratch, "denied.log");
-    args = claudeArgs(task as AgentTask<unknown>, guardSettings(task.cwd, deniedLog));
+    let contextFile: string | null = null;
+    if (task.sharedContext !== null) {
+      contextFile = path.join(scratch, "context.md");
+      await writeFile(contextFile, task.sharedContext);
+    }
+    args = claudeArgs(task as AgentTask<unknown>, guardSettings(task.cwd, deniedLog), contextFile);
 
     let timedOut = false;
     let result: StreamMessage | null = null;
