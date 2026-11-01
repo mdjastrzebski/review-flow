@@ -64,7 +64,7 @@ CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless 
 Defaults ([models.ts](packages/core/src/models.ts)):
 
 - `claude`: Opus 5.5 at `high` effort for the reviewer and at `medium` effort for verifiers.
-- `cursor`: `composer-2.5` for both roles. Grok 4.7 high timed out as reviewer after 20 min (see the [decision log](PLAN.md#decision-log)). A `--model` override passes no effort, because not every Cursor model accepts one.
+- `cursor`: `grok-4.7-low` for both roles. Composer 2.5 was cheaper but missed a high-severity bug; Grok 4.7 medium and high were slow and read outside the repo (see the [decision log](PLAN.md#decision-log)). A `--model` override passes no effort, because not every Cursor model accepts one.
 
 Hard-coded: timeouts (reviewer 20 min, verifier 10 min), verifier concurrency (3), max findings (15), suggested-fix cap (10 lines / 800 chars).
 

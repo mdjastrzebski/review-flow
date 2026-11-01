@@ -15,15 +15,16 @@ export interface ModelChoice {
 export type RoleModels = Record<Role, ModelChoice>;
 
 // Opus 5.5 defaults to medium effort, so it is always set explicitly.
-// Cursor: Composer 2.5, Cursor's own model. Grok 4.7 high timed out (20 min) as reviewer.
+// Cursor: Grok 4.7 low. Composer 2.5 was cheaper but missed a high-severity bug; higher Grok
+// efforts were slower, costlier, and read outside the repo.
 export const DEFAULT_MODELS: Record<Harness, RoleModels> = {
   claude: {
     reviewer: { model: "claude-opus-5-5", effort: "high" },
     verifier: { model: "claude-opus-5-5", effort: "medium" },
   },
   cursor: {
-    reviewer: { model: "composer-2.5", effort: null },
-    verifier: { model: "composer-2.5", effort: null },
+    reviewer: { model: "grok-4.7-low", effort: null },
+    verifier: { model: "grok-4.7-low", effort: null },
   },
 };
 

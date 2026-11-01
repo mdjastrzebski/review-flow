@@ -11,10 +11,10 @@ describe("resolveModels", () => {
     });
   });
 
-  it("uses Composer 2.5 for cursor by default", () => {
+  it("uses Grok 4.7 low for cursor by default", () => {
     expect(resolveModels("cursor", none)).toEqual({
-      reviewer: { model: "composer-2.5", effort: null },
-      verifier: { model: "composer-2.5", effort: null },
+      reviewer: { model: "grok-4.7-low", effort: null },
+      verifier: { model: "grok-4.7-low", effort: null },
     });
   });
 
@@ -35,7 +35,7 @@ describe("resolveModels", () => {
 
   it("lets --verifier-model alone keep the default reviewer", () => {
     const models = resolveModels("cursor", { model: null, verifierModel: "gpt-x" });
-    expect(models.reviewer.model).toBe("composer-2.5");
+    expect(models.reviewer.model).toBe("grok-4.7-low");
     expect(models.verifier.model).toBe("gpt-x");
   });
 
