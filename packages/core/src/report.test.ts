@@ -58,8 +58,8 @@ describe("renderReport", () => {
     const report = renderReport(input);
     expect(report).toContain("# Review: main...HEAD");
     expect(report).toContain("- **Harness:** claude");
-    expect(report).toContain("- **Reviewer:** claude-opus-5-5 (effort: high)");
-    expect(report).toContain("- **Verifier:** claude-opus-5-5 (effort: medium)");
+    expect(report).toContain("- **Reviewer:** claude-sonnet-5-5 (effort: high)");
+    expect(report).toContain("- **Verifier:** claude-sonnet-5-5 (effort: high)");
     expect(report).toContain("- **Base:** `main` (`0123456`) · **Head:** `fedcba9`");
     expect(report).toContain("- **Duration:** 2m 5s · **Cost:** $1.23");
   });

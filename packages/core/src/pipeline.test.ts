@@ -124,7 +124,7 @@ describe("runReview", () => {
     const { runDir, findings } = await runReview({ ...baseOptions, cwd: repo, runAgent });
 
     expect(findings.map((f) => f.id)).toEqual(["F-001"]);
-    expect(tasks[0]?.model).toBe("claude-opus-5-5");
+    expect(tasks[0]?.model).toBe("claude-sonnet-5-5");
     expect(tasks[0]?.effort).toBe("high");
 
     const prompt = await readFile(runDir.promptPath("reviewer"), "utf8");
@@ -139,7 +139,7 @@ describe("runReview", () => {
         role: "reviewer",
         step: "review",
         harness: "claude",
-        model: "claude-opus-5-5",
+        model: "claude-sonnet-5-5",
         effort: "high",
         status: "ok",
         usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 },
@@ -147,7 +147,7 @@ describe("runReview", () => {
         costSource: "reported",
         durationMs: 10,
       }),
-      expect.objectContaining({ taskId: "verifier-F-001", step: "verify", effort: "medium" }),
+      expect.objectContaining({ taskId: "verifier-F-001", step: "verify", effort: "high" }),
     ]);
 
     const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));

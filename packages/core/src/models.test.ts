@@ -4,10 +4,10 @@ import { resolveModels } from "./models.ts";
 const none = { model: null, verifierModel: null };
 
 describe("resolveModels", () => {
-  it("uses Opus 5.5 high/medium for claude by default", () => {
+  it("uses Sonnet 5.5 high for claude by default", () => {
     expect(resolveModels("claude", none)).toEqual({
-      reviewer: { model: "claude-opus-5-5", effort: "high" },
-      verifier: { model: "claude-opus-5-5", effort: "medium" },
+      reviewer: { model: "claude-sonnet-5-5", effort: "high" },
+      verifier: { model: "claude-sonnet-5-5", effort: "high" },
     });
   });
 
@@ -18,10 +18,10 @@ describe("resolveModels", () => {
     });
   });
 
-  it("applies --model to both roles, keeping per-role effort", () => {
-    const models = resolveModels("claude", { model: "claude-sonnet-5-5", verifierModel: null });
-    expect(models.reviewer).toEqual({ model: "claude-sonnet-5-5", effort: "high" });
-    expect(models.verifier).toEqual({ model: "claude-sonnet-5-5", effort: "medium" });
+  it("applies --model to both roles, keeping the default effort", () => {
+    const models = resolveModels("claude", { model: "claude-opus-5-5", verifierModel: null });
+    expect(models.reviewer).toEqual({ model: "claude-opus-5-5", effort: "high" });
+    expect(models.verifier).toEqual({ model: "claude-opus-5-5", effort: "high" });
   });
 
   it("lets --verifier-model override only the verifier", () => {
@@ -43,5 +43,23 @@ describe("resolveModels", () => {
     const models = resolveModels("cursor", { model: "gpt-x", verifierModel: null });
     expect(models.reviewer).toEqual({ model: "gpt-x", effort: null });
     expect(models.verifier).toEqual({ model: "gpt-x", effort: null });
+  });
+
+  it("applies --effort to both roles, and --verifier-effort to the verifier only", () => {
+    expect(resolveModels("claude", { ...none, effort: "low" })).toEqual({
+      reviewer: { model: "claude-sonnet-5-5", effort: "low" },
+      verifier: { model: "claude-sonnet-5-5", effort: "low" },
+    });
+    const models = resolveModels("claude", { ...none, effort: "low", verifierEffort: "max" });
+    expect(models.verifier.effort).toBe("max");
+  });
+
+  it("passes an explicit effort with an overridden cursor model", () => {
+    const models = resolveModels("cursor", {
+      model: "claude-opus-5-5",
+      verifierModel: null,
+      effort: "high",
+    });
+    expect(models.reviewer).toEqual({ model: "claude-opus-5-5", effort: "high" });
   });
 });

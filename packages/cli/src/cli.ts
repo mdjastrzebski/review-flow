@@ -1,10 +1,12 @@
 import { Command, Option } from "commander";
 import { getAgent } from "@review-flow/agents";
 import {
+  EFFORTS,
   HARNESSES,
   NoChangesError,
   resolveModels,
   runReview,
+  type Effort,
   type Harness,
 } from "@review-flow/core";
 import { formatFindings } from "./format.ts";
@@ -14,6 +16,8 @@ interface ReviewOptions {
   harness: Harness;
   model?: string;
   verifierModel?: string;
+  effort?: Effort;
+  verifierEffort?: Effort;
   claudeBin: string;
   cursorBin: string;
   repo: string;
@@ -24,6 +28,8 @@ async function review(options: ReviewOptions): Promise<void> {
   const models = resolveModels(options.harness, {
     model: options.model ?? null,
     verifierModel: options.verifierModel ?? null,
+    effort: options.effort ?? null,
+    verifierEffort: options.verifierEffort ?? null,
   });
   const log = options.quiet ? () => {} : (message: string) => console.log(message);
 
@@ -74,6 +80,13 @@ program
   )
   .option("--model <id>", "model for the reviewer (and verifier, unless overridden)")
   .option("--verifier-model <id>", "model for the verifiers")
+  .addOption(
+    new Option(
+      "--effort <level>",
+      "effort for the reviewer (and verifier, unless overridden)",
+    ).choices(EFFORTS),
+  )
+  .addOption(new Option("--verifier-effort <level>", "effort for the verifiers").choices(EFFORTS))
   .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
   .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
   .option("--repo <path>", "repository to review", process.env.INIT_CWD ?? process.cwd())

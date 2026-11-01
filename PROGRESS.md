@@ -59,23 +59,24 @@ Steps in `run.json` are `collect`, `review` (including normalize), `verify` (inc
 
 ## Configuration
 
-CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`.
+CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`.
 
 Defaults ([models.ts](packages/core/src/models.ts)):
 
-- `claude`: Opus 5.5 at `high` effort for the reviewer and at `medium` effort for verifiers.
-- `cursor`: `grok-4.7-low` for both roles. Composer 2.5 was cheaper but missed a high-severity bug; Grok 4.7 medium and high were slow and read outside the repo (see the [decision log](PLAN.md#decision-log)). A `--model` override passes no effort, because not every Cursor model accepts one.
+- `claude`: Sonnet 5.5 at `high` effort for both roles. It matched Opus 5.5 on quality at about half the cost (see the [decision log](PLAN.md#decision-log)).
+- `cursor`: `grok-4.7-low` for both roles. Composer 2.5 was cheaper but missed a high-severity bug; Grok 4.7 medium and high were slow and read outside the repo (see the [decision log](PLAN.md#decision-log)). A `--model` override passes no effort unless `--effort` is given, because not every Cursor model accepts one.
 
 Hard-coded: timeouts (reviewer 20 min, verifier 10 min), verifier concurrency (3), max findings (15), suggested-fix cap (10 lines / 800 chars).
 
 ## Observed cost and time
 
-From local runs on this repo (Claude harness, default models, Oct–Nov 2026):
+From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults unless noted, Oct–Nov 2026):
 
 - **Cost:** $0.31–$2.95 per run. A reviewer-only run (no findings) costs $0.31–$0.65.
 - **Time:** 1–2.5 min per run.
 - **Verification can cost more than the review.** In one run, the reviewer cost $0.72 and 4 verifiers cost $2.23.
 - **`claude -p` vs Agent SDK:** on the same diff, $2.21 / 1.7 min vs $2.95 / 2.2 min, with similar findings (see the [decision log](PLAN.md#decision-log)).
+- **Claude models and effort (same effort for both roles):** Opus high $1.22, medium $0.48, low $0.58; Sonnet high $0.65, medium $0.38; 0.7–2.4 min. Costs are lower than cold because the runs shared cache; see the [decision log](PLAN.md#decision-log) for estimates.
 - **Cursor with Composer 2.5:** $0.32 / 2.3 min on the comparison diff, a third of Claude's cheapest run, but 1 finding vs Claude's 3–4, missing a high-severity one (see the [decision log](PLAN.md#decision-log)).
 - **Cursor with Grok 4.7:** low $1.37 / 9.1 min (5 findings), medium $5.41 / 31.4 min (6 findings, 77 reads outside the repo).
 - Cursor reports tokens only when a session finishes, so a task that times out or is stopped has no cost. Two Grok 4.7 high runs failed that way (15.6 and 20 min).
