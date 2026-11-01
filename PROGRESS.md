@@ -8,6 +8,8 @@ A working CLI that reviews a branch with agents run through a headless CLI, `cla
 
 ```bash
 pnpm review-flow review --base main --harness claude   # or --harness cursor
+pnpm review-flow runs                                  # past runs, newest first
+pnpm review-flow compare <a> <b>                       # two runs side by side
 ```
 
 ## Harnesses
@@ -57,6 +59,13 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/` (added to `.gitignore` au
 
 Steps in `run.json` are `collect`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls. A call's cost source is `reported` when the CLI gave a cost, `computed` when its tokens and model are in the price table (standard API prices for Claude 5.5 models, Grok 4.7, and Composer 2.5; fast variants and long-context surcharges are not priced), else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
 
+Each run, including a failed one, also appends a summary line to `.review-flow/index.jsonl` ([run-index.ts](packages/core/src/run-index.ts)): id (the run dir name), status, harness, models, base and head, diff size (files, added and removed lines), finding count, verdict counts, cost, unknown-cost calls, and time.
+
+## Runs and compare
+
+- `review-flow runs [-n <count>]` lists indexed runs, newest first (default 20). A cost of `≥$x` means some calls had no cost.
+- `review-flow compare <a> <b>` takes a run id, a unique part of one (such as the short SHA), or a run dir path ([compare.ts](packages/core/src/compare.ts), [runs.ts](packages/cli/src/runs.ts)). It shows the models and diff of each run, cost, time, and calls per step with deltas, and the findings in both runs and in only one. Findings match when they are in the same file and their line ranges are at most 3 lines apart, closest pairs first. When the runs reviewed different commits, it warns that line matching is rough.
+
 ## Configuration
 
 CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`.
@@ -85,12 +94,12 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 
 ## Gaps against the [spec](SPEC.md)
 
-- **Usage (2):** `--base` and `--harness` are required. No PR, commit, or range targets, no uncommitted changes. Only `review` exists.
+- **Usage (2):** `--base` and `--harness` are required. No PR, commit, or range targets, no uncommitted changes. Only `review`, `runs`, and `compare` exist.
 - **Trust (3):** none. Reviews run in the developer's checkout, not a worktree.
 - **Pipeline (4):** one finder, no dedupe or filter, one verifier session per finding with the full diff each time.
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
 - **Incremental reviews (6), posting and exit codes (7):** none.
 - **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
-- **Instrumentation (10):** no `index.jsonl`, `runs`, or `compare`. Totals with `unknown` calls are not shown as partial. The root `.gitignore` is edited.
+- **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial. The root `.gitignore` is edited.
 - **Evaluation (11), distribution (12):** none.

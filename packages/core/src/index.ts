@@ -2,6 +2,8 @@ export * from "./schemas.ts";
 export * from "./rank.ts";
 export * from "./git.ts";
 export * from "./run-dir.ts";
+export * from "./run-index.ts";
+export * from "./compare.ts";
 export * from "./models.ts";
 export * from "./agent.ts";
 export * from "./calls.ts";

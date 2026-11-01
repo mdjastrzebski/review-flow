@@ -8,6 +8,7 @@ import type { CallRecord } from "./calls.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
 import { NoChangesError, runReview } from "./pipeline.ts";
+import { readIndex } from "./run-index.ts";
 import type { Finding, ReviewOutput, Verdict } from "./schemas.ts";
 
 let repo: string;
@@ -168,6 +169,25 @@ describe("runReview", () => {
     const report = await readFile(runDir.reportPath, "utf8");
     expect(report).toContain("### [ ] F-001 · medium · confirmed (high) · `a.txt:2`");
     expect(report).toContain("**Cost:** $1.00");
+
+    expect(await readIndex(repo)).toEqual([
+      {
+        id: path.basename(runDir.root),
+        kind: "review",
+        startedAt: run.startedAt,
+        durationMs: run.totals.durationMs,
+        status: "ok",
+        harness: "claude",
+        models: DEFAULT_MODELS.claude,
+        base: run.base,
+        head: run.head,
+        diff: { files: 1, additions: 1, deletions: 0 },
+        findings: 1,
+        verdicts: { confirmed: 1, inconclusive: 0, refuted: 0 },
+        costUsd: 1,
+        unknownCostCalls: 0,
+      },
+    ]);
   });
 
   it("computes the cost from tokens when a task reports none", async () => {
@@ -347,6 +367,9 @@ describe("runReview", () => {
     expect(Object.keys(run.steps)).toEqual(["collect", "review"]);
     expect(run.totals).toMatchObject({ calls: 1, costUsd: 0.5 });
     expect(await readCalls(path.join(root, "calls.jsonl"))).toHaveLength(1);
+    expect(await readIndex(repo)).toEqual([
+      expect.objectContaining({ id: runName, status: "failed", findings: null, verdicts: null }),
+    ]);
   });
 
   it("fails with a clear error on an empty diff", async () => {

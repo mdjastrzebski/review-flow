@@ -4,12 +4,21 @@ import {
   EFFORTS,
   HARNESSES,
   NoChangesError,
+  loadRun,
+  readIndex,
   resolveModels,
+  resolveRepoRoot,
+  resolveRun,
   runReview,
   type Effort,
   type Harness,
 } from "@review-flow/core";
 import { formatFindings } from "./format.ts";
+import { formatCompare, formatRuns } from "./runs.ts";
+
+// pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
+const userCwd = process.env.INIT_CWD ?? process.cwd();
+const colorOptions = () => ({ color: process.stdout.hasColors?.() ?? false });
 
 interface ReviewOptions {
   base: string;
@@ -69,6 +78,21 @@ async function review(options: ReviewOptions): Promise<void> {
   );
 }
 
+async function runs(options: { repo: string; limit: string }): Promise<void> {
+  const limit = Number(options.limit);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("--limit must be a positive integer");
+  const entries = await readIndex(await resolveRepoRoot(options.repo));
+  console.log(formatRuns(entries.slice(-limit), colorOptions()));
+}
+
+async function compare(a: string, b: string, options: { repo: string }): Promise<void> {
+  const repo = await resolveRepoRoot(options.repo);
+  const [runA, runB] = await Promise.all(
+    [a, b].map(async (ref) => loadRun((await resolveRun(repo, ref, userCwd)).root)),
+  );
+  console.log(formatCompare(runA!, runB!, colorOptions()));
+}
+
 const program = new Command("review-flow");
 
 program
@@ -89,9 +113,24 @@ program
   .addOption(new Option("--verifier-effort <level>", "effort for the verifiers").choices(EFFORTS))
   .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
   .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
-  .option("--repo <path>", "repository to review", process.env.INIT_CWD ?? process.cwd())
+  .option("--repo <path>", "repository to review", userCwd)
   .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)
   .action(review);
+
+program
+  .command("runs")
+  .description("List past runs, newest first")
+  .option("-n, --limit <count>", "how many runs to show", "20")
+  .option("--repo <path>", "repository", userCwd)
+  .action(runs);
+
+program
+  .command("compare")
+  .description("Compare two runs: cost and time per step, and which findings differ")
+  .argument("<a>", "run id, a unique part of one (such as the short SHA), or a run dir path")
+  .argument("<b>", "the run to compare against A")
+  .option("--repo <path>", "repository", userCwd)
+  .action(compare);
 
 try {
   await program.parseAsync();

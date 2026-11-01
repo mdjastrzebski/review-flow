@@ -1,4 +1,5 @@
 import { appendFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import pLimit from "p-limit";
 import type { AgentResult, AgentStatus, AgentTask, RunAgent } from "./agent.ts";
 import { rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
@@ -17,6 +18,7 @@ import { normalizeFindings } from "./normalize.ts";
 import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, ensureGitignored, type RunDir } from "./run-dir.ts";
+import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
 import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
@@ -47,7 +49,7 @@ export interface ReviewRunResult {
 }
 
 /** run.json. Per-call detail is in calls.jsonl. */
-interface RunRecord {
+export interface RunRecord {
   harness: Harness;
   models: RoleModels;
   base: { ref: string; sha: string };
@@ -294,6 +296,9 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const calls: CallRecord[] = [];
   const ctx: TaskContext = { runDir, repo, status, harness, calls, runAgent, log };
   let failure: string | null = null;
+  // Outside the try, so a failed run still indexes what it got to.
+  let findingCount: number | null = null;
+  let verdictCounts: VerdictCounts | null = null;
 
   try {
     const findings = await timeStep(stepDurations, "review", async () => {
@@ -328,6 +333,8 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       return normalized.findings;
     });
 
+    findingCount = findings.length;
+
     const verdicts = await timeStep(stepDurations, "verify", async () => {
       if (findings.length > 0) {
         log(
@@ -339,6 +346,8 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       log(`Verdicts → ${runDir.verdictsPath}`);
       return result;
     });
+
+    verdictCounts = countVerdicts(verdicts);
 
     const durationMs = Date.now() - startedAt.getTime();
     const { costUsd } = rollUp(calls, stepDurations, durationMs).totals;
@@ -375,5 +384,21 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       ...rollUp(calls, stepDurations, finishedAt.getTime() - startedAt.getTime()),
     };
     await writeJson(runDir.runJsonPath, run);
+    await appendIndexEntry(repo, {
+      id: path.basename(runDir.root),
+      kind: "review",
+      startedAt: run.startedAt,
+      durationMs: run.totals.durationMs,
+      status: run.status,
+      harness,
+      models,
+      base: run.base,
+      head: run.head,
+      diff: diffStats(diff),
+      findings: findingCount,
+      verdicts: verdictCounts,
+      costUsd: run.totals.costUsd,
+      unknownCostCalls: run.totals.unknownCostCalls,
+    });
   }
 }
