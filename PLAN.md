@@ -6,7 +6,7 @@ The order of work toward [SPEC.md](SPEC.md). Measurement comes first, so every l
 
 Goal: know what a review costs, where the money goes, and how good it is.
 
-- [ ] **Headless harness (9).** Replace the Agent SDK with a `claude -p` profile: read-only flags, the guard hook passed with `--settings`, isolated sessions, `--json-schema` output, and usage parsing. Done when: the tests pass and a run on the same diff gives similar findings, with cost and time recorded.
+- [x] **Headless harness (9).** Replace the Agent SDK with a `claude -p` profile: read-only flags, the guard hook passed with `--settings`, isolated sessions, `--json-schema` output, and usage parsing. Done when: the tests pass and a run on the same diff gives similar findings, with cost and time recorded.
 - [ ] **Call records (10).** `calls.jsonl` with tokens (input, cache read, cache write, output), cost and cost source, and time per call. Per-step and per-run totals in `run.json`. Done when: `run.json` shows cost and time per step.
 - [ ] **Run index (10).** `index.jsonl`, `review-flow runs`, and `review-flow compare`. Done when: `compare` shows per-step cost and time and the finding differences between two runs.
 - [ ] **Eval dataset (11).** Check the Greptile and Tenki corpus licenses and pick one. Import 20 to 30 bug cases with a one-off script, add about 10 clean cases (merged PRs with no fix or revert afterward), and mark about 8 cases as the smoke set. Store everything in our own format. Done when: the dataset is in the repo with its source and license noted.
@@ -58,5 +58,6 @@ Goal: cover how developers actually review, in order of usefulness.
 
 Every measured decision, newest first.
 
-| Date | Change | Eval runs | Result | Decision |
-| ---- | ------ | --------- | ------ | -------- |
+| Date       | Change                          | Eval runs                                                      | Result                                                                                                                                                                                                                                                                | Decision                                                  |
+| ---------- | ------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| 2026-11-01 | Agent SDK → `claude -p` harness | 1 run on `040a17c..1dc424e`, against the SDK run of 2026-10-28 | $2.21 / 1.7 min vs $2.95 / 2.2 min. Reviewer cost about the same ($0.71 vs $0.72); verifiers a bit faster. 3 findings vs 4, all in the same area (guard escapes); 1 identical (brace expansion). Single runs, so the difference is within normal run-to-run variance. | Keep. Re-check against the baseline once the eval exists. |

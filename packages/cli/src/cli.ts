@@ -14,6 +14,7 @@ interface ReviewOptions {
   harness: Harness;
   model?: string;
   verifierModel?: string;
+  claudeBin: string;
   cursorBin: string;
   repo: string;
   quiet: boolean;
@@ -33,7 +34,10 @@ async function review(options: ReviewOptions): Promise<void> {
       base: options.base,
       harness: options.harness,
       models,
-      runAgent: getAgent(options.harness, { cursorBin: options.cursorBin }),
+      runAgent: getAgent(options.harness, {
+        claudeBin: options.claudeBin,
+        cursorBin: options.cursorBin,
+      }),
       log,
     });
   } catch (error) {
@@ -70,6 +74,7 @@ program
   )
   .option("--model <id>", "model for the reviewer (and verifier, unless overridden)")
   .option("--verifier-model <id>", "model for the verifiers")
+  .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
   .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
   .option("--repo <path>", "repository to review", process.env.INIT_CWD ?? process.cwd())
   .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)

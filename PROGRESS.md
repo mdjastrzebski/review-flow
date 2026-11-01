@@ -4,11 +4,15 @@ What is implemented so far. The target design is [SPEC.md](SPEC.md).
 
 ## Status
 
-A working CLI that reviews a branch with Claude agents: one reviewer finds issues, verifiers check each finding, and the result is a ranked report. Only the `claude` harness works. `cursor` can be selected but throws "not implemented".
+A working CLI that reviews a branch with Claude agents, run through headless `claude -p`: one reviewer finds issues, verifiers check each finding, and the result is a ranked report. Only the `claude` harness works. `cursor` can be selected but throws "not implemented".
 
 ```bash
 pnpm review-flow review --base main --harness claude
 ```
+
+## Harness
+
+`claude -p --output-format stream-json` per task ([claude.ts](packages/agents/src/claude.ts)). The prompt goes on stdin, the output schema with `--json-schema`. Tool calls in the stream drive the progress lines. The final `result` message gives the structured output, cost (`total_cost_usd`), and tokens. Timeouts and Ctrl-C send SIGTERM, then SIGKILL after 5 s. The binary is set with `--claude-bin` (default `claude`).
 
 ## Pipeline
 
@@ -23,27 +27,27 @@ pnpm review-flow review --base main --harness claude
 
 ## Safety
 
-- Agents only get `Read`, `Grep`, and `Glob`. A `PreToolUse` hook also denies any other tool and any path outside the repo, following symlinks ([guard.ts](packages/agents/src/guard.ts)).
-- Sessions are isolated: no user or project settings, no CLAUDE.md, no saved session.
+- Agents only get `Read`, `Grep`, and `Glob` (`--tools`, `--allowed-tools`, `--permission-mode dontAsk`). A `PreToolUse` command hook, passed with `--settings`, also denies any other tool and any path outside the repo, following symlinks, and fails closed ([guard.ts](packages/agents/src/guard.ts), [guard-hook.ts](packages/agents/src/guard-hook.ts)).
+- Sessions are isolated: `--setting-sources ""` (no user or project settings, CLAUDE.md, or AGENTS.md), auto-memory off, `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`.
 - `git status` is snapshotted before the run and checked after every task. Any change aborts the run.
 
 ## Run output
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/` (added to `.gitignore` automatically):
 
-| File                | Content                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------ |
-| `diff.patch`        | Reviewed diff                                                                                    |
-| `prompts/<task>.md` | Exact prompt per task                                                                            |
-| `raw/<task>.json`   | All harness messages, plus denied tool calls                                                     |
-| `findings.json`     | Normalized findings                                                                              |
-| `verdicts.json`     | Verdict per finding                                                                              |
-| `report.md`         | Ranked report                                                                                    |
-| `run.json`          | Models, base/head SHAs, status, total cost and duration, and status, cost, and duration per task |
+| File                | Content                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `diff.patch`        | Reviewed diff                                                                                            |
+| `prompts/<task>.md` | Exact prompt per task                                                                                    |
+| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                            |
+| `findings.json`     | Normalized findings                                                                                      |
+| `verdicts.json`     | Verdict per finding                                                                                      |
+| `report.md`         | Ranked report                                                                                            |
+| `run.json`          | Models, base/head SHAs, status, total cost and duration, and status, cost, tokens, and duration per task |
 
 ## Configuration
 
-CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--repo`, `--quiet`.
+CLI flags only: `--base`, `--harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--claude-bin`, `--repo`, `--quiet`.
 
 Defaults for the `claude` harness: Opus 5.5 at `high` effort for the reviewer and at `medium` effort for verifiers ([models.ts](packages/core/src/models.ts)).
 
@@ -51,11 +55,12 @@ Hard-coded: timeouts (reviewer 20 min, verifier 10 min), verifier concurrency (3
 
 ## Observed cost and time
 
-From local runs on this repo (Claude harness, default models, Oct 2026):
+From local runs on this repo (Claude harness, default models, Oct–Nov 2026):
 
 - **Cost:** $0.31–$2.95 per run. A reviewer-only run (no findings) costs $0.31–$0.65.
 - **Time:** 1–2.5 min per run.
 - **Verification can cost more than the review.** In one run, the reviewer cost $0.72 and 4 verifiers cost $2.23.
+- **`claude -p` vs Agent SDK:** on the same diff, $2.21 / 1.7 min vs $2.95 / 2.2 min, with similar findings (see the [decision log](PLAN.md#decision-log)).
 - Experimental Cursor runs took 10–27 min and reported no cost.
 
 ## Gaps against the [spec](SPEC.md)
@@ -66,6 +71,6 @@ From local runs on this repo (Claude harness, default models, Oct 2026):
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
 - **Incremental reviews (6), posting and exit codes (7):** none.
 - **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
-- **Harnesses (9):** uses the Claude Agent SDK, not headless CLIs.
-- **Instrumentation (10):** cost and time per task only. No token breakdown, per-step totals, `index.jsonl`, or `compare`. The root `.gitignore` is edited.
+- **Harnesses (9):** only the `claude` profile, hard-coded. No `codex` or `cursor` profiles, user profiles, or price table.
+- **Instrumentation (10):** cost, tokens, and time per task only. No `calls.jsonl`, cost source, per-step totals, `index.jsonl`, or `compare`. The root `.gitignore` is edited.
 - **Evaluation (11), distribution (12):** none.

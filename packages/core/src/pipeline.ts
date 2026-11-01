@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import pLimit from "p-limit";
-import type { AgentResult, AgentStatus, AgentTask, RunAgent } from "./agent.ts";
+import type { AgentResult, AgentStatus, AgentTask, RunAgent, TokenUsage } from "./agent.ts";
 import {
   assertStatusUnchanged,
   diffAgainstBase,
@@ -50,6 +50,7 @@ interface TaskRecord {
   status: AgentStatus;
   error: string | null;
   costUsd: number | null;
+  usage: TokenUsage | null;
   durationMs: number;
 }
 
@@ -131,6 +132,7 @@ async function runTask<T>(
     status: result.status,
     error: result.error,
     costUsd: result.costUsd,
+    usage: result.usage,
     durationMs: result.durationMs,
   });
   if (result.costUsd !== null) ctx.run.costUsd = (ctx.run.costUsd ?? 0) + result.costUsd;

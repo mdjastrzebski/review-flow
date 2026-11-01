@@ -24,6 +24,14 @@ export interface AgentProgress {
   detail: string | null;
 }
 
+/** Tokens for one task, summed over all its model requests. */
+export interface TokenUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}
+
 export type AgentStatus = "ok" | "invalid_output" | "error" | "timeout";
 
 export interface AgentResult<T> {
@@ -37,6 +45,8 @@ export interface AgentResult<T> {
   /** Why the task did not succeed; null when status is "ok". */
   error: string | null;
   costUsd: number | null;
+  /** null when the harness reports no token counts. */
+  usage: TokenUsage | null;
   durationMs: number;
 }
 

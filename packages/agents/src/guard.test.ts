@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readOnlyGuard } from "./guard.ts";
+import { guardToolCall } from "./guard.ts";
 
 let sandbox: string;
 let repo: string;
@@ -24,23 +24,11 @@ afterEach(async () => {
 });
 
 async function decide(toolName: string, toolInput: Record<string, unknown>, cwd = repo) {
-  const denied: string[] = [];
-  const input = {
-    hook_event_name: "PreToolUse",
-    session_id: "s",
-    transcript_path: "",
-    cwd,
-    tool_name: toolName,
-    tool_input: toolInput,
-    tool_use_id: "t",
-  } as HookInput;
-  const output = await readOnlyGuard(cwd, denied)(input, "t", {
-    signal: new AbortController().signal,
-  });
-  return { allowed: denied.length === 0, output };
+  const reason = await guardToolCall(cwd, { tool_name: toolName, tool_input: toolInput });
+  return { allowed: reason === null, reason };
 }
 
-describe("readOnlyGuard", () => {
+describe("guardToolCall", () => {
   it("allows reads and searches inside the repo", async () => {
     expect((await decide("Read", { file_path: "src/index.ts" })).allowed).toBe(true);
     expect((await decide("Read", { file_path: path.join(repo, "src/new.ts") })).allowed).toBe(true);
@@ -51,9 +39,9 @@ describe("readOnlyGuard", () => {
   });
 
   it("denies tools that aren't read-only", async () => {
-    const { allowed, output } = await decide("Bash", { command: "ls" });
+    const { allowed, reason } = await decide("Bash", { command: "ls" });
     expect(allowed).toBe(false);
-    expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+    expect(reason).toMatch(/read-only/);
   });
 
   it("denies paths outside the repo", async () => {
@@ -93,5 +81,17 @@ describe("readOnlyGuard", () => {
     expect(
       (await decide("Read", { file_path: path.join(repo, "src/index.ts") }, linkedRepo)).allowed,
     ).toBe(true);
+  });
+});
+
+describe("guard hook", () => {
+  it("blocks the call (exit 2) when the guard can't be loaded", async () => {
+    const hook = path.join(sandbox, "guard-hook.ts");
+    await copyFile(new URL("./guard-hook.ts", import.meta.url), hook);
+    const run = spawnSync(process.execPath, [hook, repo, path.join(sandbox, "denied.log")], {
+      input: JSON.stringify({ tool_name: "Read", tool_input: { file_path: "src/index.ts" } }),
+    });
+    expect(run.status).toBe(2);
+    expect(run.stderr.toString()).toContain("review-flow guard failed");
   });
 });

@@ -1,14 +1,15 @@
 import type { Harness, RunAgent } from "@review-flow/core";
-import { runClaudeAgent } from "./claude.ts";
+import { createClaudeAgent } from "./claude.ts";
 
 export interface AgentOptions {
+  claudeBin: string;
   cursorBin: string;
 }
 
-export function getAgent(harness: Harness, _options: AgentOptions): RunAgent {
+export function getAgent(harness: Harness, options: AgentOptions): RunAgent {
   switch (harness) {
     case "claude":
-      return runClaudeAgent;
+      return createClaudeAgent({ bin: options.claudeBin });
     case "cursor":
       throw new Error("The cursor harness is not implemented yet.");
   }

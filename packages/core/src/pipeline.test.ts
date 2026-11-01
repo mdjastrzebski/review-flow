@@ -87,6 +87,7 @@ function stubAgent({
         raw: { stub: true },
         error: "bad json",
         costUsd: 0.25,
+        usage: null,
         durationMs: 10,
       };
     }
@@ -97,6 +98,7 @@ function stubAgent({
       raw: { stub: true },
       error: null,
       costUsd: 0.5,
+      usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 },
       durationMs: 10,
     };
   };
