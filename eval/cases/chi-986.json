@@ -1,0 +1,16 @@
+{
+  "id": "chi-986",
+  "kind": "clean",
+  "smoke": true,
+  "title": "feat(mux): support http.Request.Pattern in Go 1.23",
+  "repo": "https://github.com/go-chi/chi",
+  "pr": "https://github.com/go-chi/chi/pull/986",
+  "base": "1c2d011f59c4b2fc2127f308f2b4171db2567f19",
+  "head": "d12cc49622f31a01c6cceea7cdb62f647660102c",
+  "diff": {
+    "files": 4,
+    "additions": 92,
+    "deletions": 0
+  },
+  "bugs": []
+}

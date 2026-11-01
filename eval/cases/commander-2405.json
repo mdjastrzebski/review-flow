@@ -1,0 +1,16 @@
+{
+  "id": "commander-2405",
+  "kind": "clean",
+  "smoke": false,
+  "title": "Make order not matter for adding combo positive/negative options",
+  "repo": "https://github.com/tj/commander.js",
+  "pr": "https://github.com/tj/commander.js/pull/2405",
+  "base": "2e96cd388764064fe271f7f452d0dff780355b42",
+  "head": "63eed4aa05435575d515311bb5efaf6d88b6be84",
+  "diff": {
+    "files": 4,
+    "additions": 65,
+    "deletions": 16
+  },
+  "bugs": []
+}

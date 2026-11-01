@@ -1,0 +1,28 @@
+{
+  "id": "starlette-3410",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Offload large GZip compression",
+  "repo": "https://github.com/Kludex/starlette",
+  "pr": "https://github.com/Kludex/starlette/pull/3410",
+  "base": "5567e274c8c4a0811fb3bc602c3b6631571b8e80",
+  "head": "cb824a1c7d67924fc762bfc12359139892385b18",
+  "diff": {
+    "files": 3,
+    "additions": 92,
+    "deletions": 9
+  },
+  "bugs": [
+    {
+      "description": "Default `thread_minimum_size` in `GZipResponder`",
+      "fix": "https://github.com/Kludex/starlette/pull/3415",
+      "locations": [
+        {
+          "file": "starlette/middleware/gzip.py",
+          "start": 156,
+          "end": 156
+        }
+      ]
+    }
+  ]
+}

@@ -102,4 +102,5 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 - **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
 - **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial. The root `.gitignore` is edited.
-- **Evaluation (11), distribution (12):** none.
+- **Evaluation (11):** the dataset exists ([eval/](eval/README.md)): 25 bug cases, 10 clean cases, 8 in the smoke set. No `eval` command yet.
+- **Distribution (12):** none.

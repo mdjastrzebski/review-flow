@@ -1,0 +1,28 @@
+{
+  "id": "werkzeug-891",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Fix #822",
+  "repo": "https://github.com/pallets/werkzeug",
+  "pr": "https://github.com/pallets/werkzeug/pull/891",
+  "base": "a7066a77a1cc86635717380d55b03497e0528a98",
+  "head": "556bdcb13516617335c10efdedf3c1bd50b31b6d",
+  "diff": {
+    "files": 3,
+    "additions": 37,
+    "deletions": 1
+  },
+  "bugs": [
+    {
+      "description": "dev server accepts two slashes at start of path",
+      "fix": "https://github.com/pallets/werkzeug/pull/1696",
+      "locations": [
+        {
+          "file": "werkzeug/serving.py",
+          "start": 128,
+          "end": 128
+        }
+      ]
+    }
+  ]
+}

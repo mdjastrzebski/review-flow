@@ -1,0 +1,16 @@
+{
+  "id": "httpx-3373",
+  "kind": "clean",
+  "smoke": false,
+  "title": "Review urlescape percent-safe set, and use + behavior for form spaces.",
+  "repo": "https://github.com/encode/httpx",
+  "pr": "https://github.com/encode/httpx/pull/3373",
+  "base": "d293374b6603816420a2bb8e7f4fe5a5f09cbfcc",
+  "head": "ba2e51215e4e619540f2a24282b84ed8a738e6fd",
+  "diff": {
+    "files": 3,
+    "additions": 28,
+    "deletions": 47
+  },
+  "bugs": []
+}

@@ -1,0 +1,38 @@
+{
+  "id": "click-3126",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Fix: Ensure fish completion handles multiline help strings correctly",
+  "repo": "https://github.com/pallets/click",
+  "pr": "https://github.com/pallets/click/pull/3126",
+  "base": "c69643b60cf971cd5d8e5d3902632807ceab9b8f",
+  "head": "19fd4d6e18bc9fce451f92f422696b11169faa57",
+  "diff": {
+    "files": 4,
+    "additions": 71,
+    "deletions": 8
+  },
+  "bugs": [
+    {
+      "description": "Properly support multiline help string and fix broken fish completion from #3126",
+      "fix": "https://github.com/pallets/click/pull/3504",
+      "locations": [
+        {
+          "file": "src/click/shell_completion.py",
+          "start": 183,
+          "end": 183
+        },
+        {
+          "file": "src/click/shell_completion.py",
+          "start": 190,
+          "end": 194
+        },
+        {
+          "file": "src/click/shell_completion.py",
+          "start": 433,
+          "end": 436
+        }
+      ]
+    }
+  ]
+}

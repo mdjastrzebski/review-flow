@@ -1,0 +1,28 @@
+{
+  "id": "hono-5133",
+  "kind": "bug",
+  "smoke": true,
+  "title": "fix(request): fix multipart boundary mismatch in `cloneRawRequest`",
+  "repo": "https://github.com/honojs/hono",
+  "pr": "https://github.com/honojs/hono/pull/5133",
+  "base": "80959d47d56ac18c2985336ad311917dc56497c5",
+  "head": "d7964503c956ae4af78597b7b11a05f9e5e73d2d",
+  "diff": {
+    "files": 2,
+    "additions": 34,
+    "deletions": 2
+  },
+  "bugs": [
+    {
+      "description": "fix(request): drop stale content length for cloned FormData",
+      "fix": "https://github.com/honojs/hono/pull/5282",
+      "locations": [
+        {
+          "file": "src/request.ts",
+          "start": 492,
+          "end": 495
+        }
+      ]
+    }
+  ]
+}

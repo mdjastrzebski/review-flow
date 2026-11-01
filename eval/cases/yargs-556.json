@@ -1,0 +1,43 @@
+{
+  "id": "yargs-556",
+  "kind": "bug",
+  "smoke": false,
+  "title": "add config lookup for .implies()",
+  "repo": "https://github.com/yargs/yargs",
+  "pr": "https://github.com/yargs/yargs/pull/556",
+  "base": "3c2e4791a38967f554412c1b8abd6dae30cb3985",
+  "head": "8d7585c385d35d85ca5d8ddf641f7b24e70c032d",
+  "diff": {
+    "files": 4,
+    "additions": 23,
+    "deletions": 4
+  },
+  "bugs": [
+    {
+      "description": "fix: do not use cwd when resolving package.json for yargs parsing config",
+      "fix": "https://github.com/yargs/yargs/pull/726",
+      "locations": [
+        {
+          "file": "lib/validation.js",
+          "start": 222,
+          "end": 227
+        },
+        {
+          "file": "lib/validation.js",
+          "start": 239,
+          "end": 239
+        },
+        {
+          "file": "lib/validation.js",
+          "start": 253,
+          "end": 253
+        },
+        {
+          "file": "yargs.js",
+          "start": 639,
+          "end": 639
+        }
+      ]
+    }
+  ]
+}

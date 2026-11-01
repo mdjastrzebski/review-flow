@@ -1,0 +1,16 @@
+{
+  "id": "attrs-1463",
+  "kind": "clean",
+  "smoke": false,
+  "title": "Improve performance of asdict in the common case",
+  "repo": "https://github.com/python-attrs/attrs",
+  "pr": "https://github.com/python-attrs/attrs/pull/1463",
+  "base": "57f0d5441c9deaac44aebbbf45e38e477651e4f2",
+  "head": "7369ad9f4b273e400478c8e65399d826ab3f3b32",
+  "diff": {
+    "files": 3,
+    "additions": 49,
+    "deletions": 7
+  },
+  "bugs": []
+}

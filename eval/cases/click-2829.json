@@ -1,0 +1,28 @@
+{
+  "id": "click-2829",
+  "kind": "bug",
+  "smoke": true,
+  "title": "Only try to set flag_value if is_flag is true",
+  "repo": "https://github.com/pallets/click",
+  "pr": "https://github.com/pallets/click/pull/2829",
+  "base": "88328fc8743d43566081d9f17acad5f5552f5a87",
+  "head": "b5464b7e065bdfd952b1532880941f1be07e4e2b",
+  "diff": {
+    "files": 3,
+    "additions": 6,
+    "deletions": 4
+  },
+  "bugs": [
+    {
+      "description": "Fix flag value set when is_flag=True and type is provided",
+      "fix": "https://github.com/pallets/click/pull/2930",
+      "locations": [
+        {
+          "file": "src/click/core.py",
+          "start": 2602,
+          "end": 2603
+        }
+      ]
+    }
+  ]
+}

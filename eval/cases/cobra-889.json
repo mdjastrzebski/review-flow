@@ -1,0 +1,38 @@
+{
+  "id": "cobra-889",
+  "kind": "bug",
+  "smoke": false,
+  "title": "bash: fix shellcheck errors",
+  "repo": "https://github.com/spf13/cobra",
+  "pr": "https://github.com/spf13/cobra/pull/889",
+  "base": "f2b07da1e2c38d5f12845a4f607e2e1018cbb1f5",
+  "head": "21f39ca07ee7bf0c29e1bbdb2ab35df70c64b4b2",
+  "diff": {
+    "files": 1,
+    "additions": 10,
+    "deletions": 4
+  },
+  "bugs": [
+    {
+      "description": "Fix regression when calling *_custom_func",
+      "fix": "https://github.com/spf13/cobra/pull/1001",
+      "locations": [
+        {
+          "file": "bash_completions.go",
+          "start": 75,
+          "end": 76
+        },
+        {
+          "file": "bash_completions.go",
+          "start": 127,
+          "end": 128
+        },
+        {
+          "file": "bash_completions.go",
+          "start": 132,
+          "end": 133
+        }
+      ]
+    }
+  ]
+}

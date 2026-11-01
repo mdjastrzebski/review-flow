@@ -1,0 +1,16 @@
+{
+  "id": "hono-4862",
+  "kind": "clean",
+  "smoke": false,
+  "title": "feat(trailing-slash): add `skip` option",
+  "repo": "https://github.com/honojs/hono",
+  "pr": "https://github.com/honojs/hono/pull/4862",
+  "base": "1aa32fb91e7bc1366811d80ebcce61ec0d0c68cb",
+  "head": "f23e97b7f300bcb8571ae864010b8f7cdb5d0d5d",
+  "diff": {
+    "files": 2,
+    "additions": 80,
+    "deletions": 2
+  },
+  "bugs": []
+}

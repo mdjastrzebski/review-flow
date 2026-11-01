@@ -1,0 +1,28 @@
+{
+  "id": "urfave-cli-2163",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Allow the user to stop processing flags after seeing N args",
+  "repo": "https://github.com/urfave/cli",
+  "pr": "https://github.com/urfave/cli/pull/2163",
+  "base": "2799fd43bd5cf6996cc5f1af206175b543c640e1",
+  "head": "b75f9c0bda65162771dd68b53c50be3c728f4f13",
+  "diff": {
+    "files": 7,
+    "additions": 353,
+    "deletions": 8
+  },
+  "bugs": [
+    {
+      "description": "fix: check the StopOnNthArg boundary before empty args and \"--\"",
+      "fix": "https://github.com/urfave/cli/pull/2455",
+      "locations": [
+        {
+          "file": "command_parse.go",
+          "start": 92,
+          "end": 96
+        }
+      ]
+    }
+  ]
+}

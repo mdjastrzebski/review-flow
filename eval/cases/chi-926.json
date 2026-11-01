@@ -1,0 +1,43 @@
+{
+  "id": "chi-926",
+  "kind": "bug",
+  "smoke": false,
+  "title": "middleware: add Discard method to WrapResponseWriter",
+  "repo": "https://github.com/go-chi/chi",
+  "pr": "https://github.com/go-chi/chi/pull/926",
+  "base": "7957c0d4ddaee560a01110145dbf2809ffdb6663",
+  "head": "67be7d9cafdaeb4e04e887ff78d09e030ee43b00",
+  "diff": {
+    "files": 2,
+    "additions": 89,
+    "deletions": 8
+  },
+  "bugs": [
+    {
+      "description": "middleware: honor Discard when flushing",
+      "fix": "https://github.com/go-chi/chi/pull/1185",
+      "locations": [
+        {
+          "file": "middleware/wrap_writer.go",
+          "start": 135,
+          "end": 137
+        },
+        {
+          "file": "middleware/wrap_writer.go",
+          "start": 144,
+          "end": 147
+        },
+        {
+          "file": "middleware/wrap_writer.go",
+          "start": 169,
+          "end": 172
+        },
+        {
+          "file": "middleware/wrap_writer.go",
+          "start": 191,
+          "end": 194
+        }
+      ]
+    }
+  ]
+}

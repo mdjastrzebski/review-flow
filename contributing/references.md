@@ -31,3 +31,18 @@ Takeaways:
 - **Keys mirror CLI flags** in camelCase, so config and flags share one vocabulary.
 - **Schema.** agent-browser publishes a `$schema` for editor autocomplete.
 - **Strict validation.** agent-device fails on unknown keys or bad values. We do the same, so a typo in a budget can't silently cost money.
+
+## AI code review benchmarks: Greptile, Tenki, Martian, Qodo
+
+<https://www.greptile.com/benchmarks>, <https://tenki.cloud/benchmarks/code-reviewer>, <https://github.com/withmartian/code-review-benchmark>, <https://huggingface.co/datasets/Qodo/PR-Review-Bench>
+
+Vendor benchmarks for PR review tools. Checked on 2026-11-01 when picking our eval dataset.
+
+Takeaways:
+
+- **One shared corpus.** Greptile's 50 PRs (5 large repos, one bug each, July 2025) are reused by Tenki (122 bugs, ground truth not fully published) and Martian (MIT, prose "golden comments" with severity and category, no file or line). Greptile and Tenki publish no data license.
+- **Large repos make evals heavy.** Sentry, Grafana, Keycloak, cal.com, and Discourse are 0.5 to 1.6 GB each. We mine small repos instead (see [eval/](../eval/README.md)).
+- **Some cases are messy.** In Greptile's Sentry fork, two PRs share one head branch, and one has 106 files.
+- **LLM judges vs line matching.** Martian and Tenki match findings to bugs with LLM judges (Tenki: 2 of 3 must agree). We match by file and line, which is free and repeatable, but needs exact locations.
+- **Qodo** injects defects into 100 real PRs (MIT). Injected bugs are less realistic than real ones.
+- **Vendor bias.** Each vendor's own tool wins its benchmark.

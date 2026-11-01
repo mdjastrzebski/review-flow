@@ -1,0 +1,28 @@
+{
+  "id": "hono-5205",
+  "kind": "bug",
+  "smoke": false,
+  "title": "fix(etag): stabilize digest across stream chunks",
+  "repo": "https://github.com/honojs/hono",
+  "pr": "https://github.com/honojs/hono/pull/5205",
+  "base": "7075369e1f6161e04a227eba37373469c09fc743",
+  "head": "26de73133b8552f56ba72e025ecd82b08900d796",
+  "diff": {
+    "files": 2,
+    "additions": 84,
+    "deletions": 1
+  },
+  "bugs": [
+    {
+      "description": "fix(etag): copy pending stream bytes",
+      "fix": "https://github.com/honojs/hono/pull/5239",
+      "locations": [
+        {
+          "file": "src/middleware/etag/digest.ts",
+          "start": 54,
+          "end": 54
+        }
+      ]
+    }
+  ]
+}

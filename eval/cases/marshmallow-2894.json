@@ -1,0 +1,28 @@
+{
+  "id": "marshmallow-2894",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Fix Constant field rejecting None values during load",
+  "repo": "https://github.com/marshmallow-code/marshmallow",
+  "pr": "https://github.com/marshmallow-code/marshmallow/pull/2894",
+  "base": "213ee3a020e24fb26ead3a2285ba0402c90080ce",
+  "head": "19ca8dce2d5bde94509a4a89e495f35c695442d5",
+  "diff": {
+    "files": 4,
+    "additions": 20,
+    "deletions": 2
+  },
+  "bugs": [
+    {
+      "description": "Fix Constant field with required=True raising ValueError",
+      "fix": "https://github.com/marshmallow-code/marshmallow/pull/2901",
+      "locations": [
+        {
+          "file": "src/marshmallow/fields.py",
+          "start": 2068,
+          "end": 2069
+        }
+      ]
+    }
+  ]
+}

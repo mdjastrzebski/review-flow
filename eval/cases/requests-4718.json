@@ -1,0 +1,28 @@
+{
+  "id": "requests-4718",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Strip Authorization header whenever root URL changes",
+  "repo": "https://github.com/psf/requests",
+  "pr": "https://github.com/psf/requests/pull/4718",
+  "base": "dd754d13de250a6af8a68a6a83a8b4419fd429c6",
+  "head": "c45d7c49ea75133e52ab22a8e9e13173938e36ff",
+  "diff": {
+    "files": 2,
+    "additions": 44,
+    "deletions": 11
+  },
+  "bugs": [
+    {
+      "description": "proper handling for default ports in auth stripping",
+      "fix": "https://github.com/psf/requests/pull/4851",
+      "locations": [
+        {
+          "file": "requests/sessions.py",
+          "start": 130,
+          "end": 132
+        }
+      ]
+    }
+  ]
+}

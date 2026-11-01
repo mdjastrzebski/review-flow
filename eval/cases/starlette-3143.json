@@ -1,0 +1,16 @@
+{
+  "id": "starlette-3143",
+  "kind": "clean",
+  "smoke": false,
+  "title": "Use CRLF line endings in multipart byterange boundaries",
+  "repo": "https://github.com/Kludex/starlette",
+  "pr": "https://github.com/Kludex/starlette/pull/3143",
+  "base": "90b805fda70db2316d79aa577f4c3eb670f9a8a1",
+  "head": "9c74ef4c7cb1b79909aebf38be0e155064c27601",
+  "diff": {
+    "files": 2,
+    "additions": 93,
+    "deletions": 24
+  },
+  "bugs": []
+}

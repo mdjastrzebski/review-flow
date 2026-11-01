@@ -1,0 +1,16 @@
+{
+  "id": "werkzeug-3163",
+  "kind": "clean",
+  "smoke": true,
+  "title": "if-range discards weak etag",
+  "repo": "https://github.com/pallets/werkzeug",
+  "pr": "https://github.com/pallets/werkzeug/pull/3163",
+  "base": "cc89c44f3819295b8f34b47b3e111ef2475cc441",
+  "head": "811b9e511e336fd122933690a50451f99ab6b0de",
+  "diff": {
+    "files": 4,
+    "additions": 26,
+    "deletions": 15
+  },
+  "bugs": []
+}

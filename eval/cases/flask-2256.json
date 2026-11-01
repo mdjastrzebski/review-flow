@@ -1,0 +1,28 @@
+{
+  "id": "flask-2256",
+  "kind": "bug",
+  "smoke": false,
+  "title": "refactor make_response to be easier to follow",
+  "repo": "https://github.com/pallets/flask",
+  "pr": "https://github.com/pallets/flask/pull/2256",
+  "base": "46f83665ef74880bbc4a1c1f17ccededa7aaa939",
+  "head": "970a8009f1842d6be8c04f3adea3c2ec97d7eff5",
+  "diff": {
+    "files": 3,
+    "additions": 207,
+    "deletions": 110
+  },
+  "bugs": [
+    {
+      "description": "fix #2736 - remove explicit check for list as a return value in make_response",
+      "fix": "https://github.com/pallets/flask/pull/2737",
+      "locations": [
+        {
+          "file": "flask/app.py",
+          "start": 1760,
+          "end": 1760
+        }
+      ]
+    }
+  ]
+}

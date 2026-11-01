@@ -1,0 +1,28 @@
+{
+  "id": "typer-1018",
+  "kind": "bug",
+  "smoke": false,
+  "title": "🐛 Ensure that `Optional[list]` values work correctly with callbacks",
+  "repo": "https://github.com/fastapi/typer",
+  "pr": "https://github.com/fastapi/typer/pull/1018",
+  "base": "13619fb4a35ee92a276215889c68ea03633c24dd",
+  "head": "53ae9eeb6f0f2d564f3a6bebfad3e4de69210117",
+  "diff": {
+    "files": 2,
+    "additions": 30,
+    "deletions": 4
+  },
+  "bugs": [
+    {
+      "description": "🐛  Fix list convertor with an empty list default factory ",
+      "fix": "https://github.com/fastapi/typer/pull/1350",
+      "locations": [
+        {
+          "file": "typer/main.py",
+          "start": 632,
+          "end": 633
+        }
+      ]
+    }
+  ]
+}

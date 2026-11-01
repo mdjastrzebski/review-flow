@@ -1,0 +1,28 @@
+{
+  "id": "h3-1372",
+  "kind": "bug",
+  "smoke": true,
+  "title": "feat(error): coerce thrown number/string to HTTPError",
+  "repo": "https://github.com/h3js/h3",
+  "pr": "https://github.com/h3js/h3/pull/1372",
+  "base": "10128d11a499ab866033de2bf6f9f8a278fc46fb",
+  "head": "351b2aa15229f10be7c04e583c1a1759f059f76c",
+  "diff": {
+    "files": 2,
+    "additions": 25,
+    "deletions": 1
+  },
+  "bugs": [
+    {
+      "description": "fix(response): do not render non-Error throws as successful responses",
+      "fix": "https://github.com/h3js/h3/pull/1485",
+      "locations": [
+        {
+          "file": "src/response.ts",
+          "start": 19,
+          "end": 19
+        }
+      ]
+    }
+  ]
+}

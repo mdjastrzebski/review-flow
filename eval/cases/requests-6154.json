@@ -1,0 +1,16 @@
+{
+  "id": "requests-6154",
+  "kind": "clean",
+  "smoke": false,
+  "title": "Add valdation for header name",
+  "repo": "https://github.com/psf/requests",
+  "pr": "https://github.com/psf/requests/pull/6154",
+  "base": "60865f21aea4eb319d5b916adcc76de10c64e506",
+  "head": "e36f34597ca96c40dbb81d63a8fe9ac0860b8dc3",
+  "diff": {
+    "files": 3,
+    "additions": 72,
+    "deletions": 62
+  },
+  "bugs": []
+}

@@ -303,10 +303,10 @@ Each run also appends one summary line to `.review-flow/index.jsonl`: preset, co
 
 `review-flow eval` runs the current config against a dataset and saves the results as an eval run.
 
-- **Bug cases.** Commits that introduced a bug a later commit fixed, from this repo and some public repos. The fix tells us where the bug is.
+- **Bug cases.** PRs that introduced a bug a later PR fixed, from small public repos (a few MB each, so checkouts stay cheap). The fix tells us where the bug is.
 - **Clean cases.** Changes with no real defects, to measure false positives.
 - **Scores.** Recall (known bugs found, matched by file and overlapping lines), findings per clean case, and cost and time per case.
-- **Size.** Start with about 20 to 30 cases.
+- **Size.** About 35 cases, with a smoke set of about 8 for quick iteration. The dataset, its sources, and its format are in [eval/](eval/README.md).
 
 `compare` shows two evals side by side. Every change to prompts, models, presets, or pipeline values is checked with an eval before it becomes a default.
 

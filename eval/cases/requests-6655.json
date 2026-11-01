@@ -1,0 +1,33 @@
+{
+  "id": "requests-6655",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Use TLS settings in selecting connection pool",
+  "repo": "https://github.com/psf/requests",
+  "pr": "https://github.com/psf/requests/pull/6655",
+  "base": "eea3bbf9ac635f465ee6c9903dc57c677952dafd",
+  "head": "a58d7f2ffb4d00b46dca2d70a3932a0b37e22fac",
+  "diff": {
+    "files": 3,
+    "additions": 65,
+    "deletions": 2
+  },
+  "bugs": [
+    {
+      "description": "Allow for overriding of specific pool key params",
+      "fix": "https://github.com/psf/requests/pull/6716",
+      "locations": [
+        {
+          "file": "src/requests/adapters.py",
+          "start": 77,
+          "end": 77
+        },
+        {
+          "file": "src/requests/adapters.py",
+          "start": 82,
+          "end": 83
+        }
+      ]
+    }
+  ]
+}

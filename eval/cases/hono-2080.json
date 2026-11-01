@@ -1,0 +1,33 @@
+{
+  "id": "hono-2080",
+  "kind": "bug",
+  "smoke": false,
+  "title": "fix(hono-base): fix not found handler calling timing when one middleware",
+  "repo": "https://github.com/honojs/hono",
+  "pr": "https://github.com/honojs/hono/pull/2080",
+  "base": "27521e68c2a0793daab82c26879b2d46e272491b",
+  "head": "4a239ad208685c348694162a68abcb8056e1a8a3",
+  "diff": {
+    "files": 3,
+    "additions": 76,
+    "deletions": 32
+  },
+  "bugs": [
+    {
+      "description": "fix: enable to return Response like object ",
+      "fix": "https://github.com/honojs/hono/pull/2085",
+      "locations": [
+        {
+          "file": "deno_dist/hono-base.ts",
+          "start": 320,
+          "end": 325
+        },
+        {
+          "file": "src/hono-base.ts",
+          "start": 320,
+          "end": 325
+        }
+      ]
+    }
+  ]
+}

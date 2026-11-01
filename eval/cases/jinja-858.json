@@ -1,0 +1,28 @@
+{
+  "id": "jinja-858",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Fix lexer being extremely slow on large amounts of whitespace. Fixes #857",
+  "repo": "https://github.com/pallets/jinja",
+  "pr": "https://github.com/pallets/jinja/pull/858",
+  "base": "381d72ace1941e6fc8675b10e4457040988bb2dc",
+  "head": "562e1782ce291aa5773a5a1873b0a6a1336503b6",
+  "diff": {
+    "files": 1,
+    "additions": 52,
+    "deletions": 58
+  },
+  "bugs": [
+    {
+      "description": "Fix unintended lstrip_blocks behavior",
+      "fix": "https://github.com/pallets/jinja/pull/1183",
+      "locations": [
+        {
+          "file": "jinja2/lexer.py",
+          "start": 656,
+          "end": 660
+        }
+      ]
+    }
+  ]
+}

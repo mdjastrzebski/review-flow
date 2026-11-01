@@ -1,0 +1,33 @@
+{
+  "id": "typer-1128",
+  "kind": "bug",
+  "smoke": true,
+  "title": "⚡️ Lazy-load `rich_utils` to reduce startup time",
+  "repo": "https://github.com/fastapi/typer",
+  "pr": "https://github.com/fastapi/typer/pull/1128",
+  "base": "ad6d4cd61f746c3e580eb79936c76749db41574b",
+  "head": "f398fb1276062f9e77575e1b3e7570d43e5d7eb6",
+  "diff": {
+    "files": 5,
+    "additions": 51,
+    "deletions": 10
+  },
+  "bugs": [
+    {
+      "description": "🐛 Make sure `rich.markup` is imported when rendering help text",
+      "fix": "https://github.com/fastapi/typer/pull/1290",
+      "locations": [
+        {
+          "file": "typer/main.py",
+          "start": 81,
+          "end": 82
+        },
+        {
+          "file": "typer/main.py",
+          "start": 91,
+          "end": 91
+        }
+      ]
+    }
+  ]
+}

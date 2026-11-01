@@ -1,0 +1,43 @@
+{
+  "id": "execa-199",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Fix timeout option not leaving early when on `sleep` mode",
+  "repo": "https://github.com/sindresorhus/execa",
+  "pr": "https://github.com/sindresorhus/execa/pull/199",
+  "base": "27c22e596c5a84da6709f4c7e1537f967611675e",
+  "head": "136b340f0e315a073170822aaefb75ba6e5686af",
+  "diff": {
+    "files": 3,
+    "additions": 92,
+    "deletions": 44
+  },
+  "bugs": [
+    {
+      "description": "Child process errors should reject the promise right away",
+      "fix": "https://github.com/sindresorhus/execa/pull/270",
+      "locations": [
+        {
+          "file": "index.js",
+          "start": 270,
+          "end": 278
+        },
+        {
+          "file": "index.js",
+          "start": 284,
+          "end": 286
+        },
+        {
+          "file": "index.js",
+          "start": 320,
+          "end": 320
+        },
+        {
+          "file": "index.js",
+          "start": 327,
+          "end": 335
+        }
+      ]
+    }
+  ]
+}

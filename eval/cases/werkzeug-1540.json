@@ -1,0 +1,33 @@
+{
+  "id": "werkzeug-1540",
+  "kind": "bug",
+  "smoke": true,
+  "title": "break cycle in chained exceptions",
+  "repo": "https://github.com/pallets/werkzeug",
+  "pr": "https://github.com/pallets/werkzeug/pull/1540",
+  "base": "777500b64647ea47b21e52e5e113ba1d86014c05",
+  "head": "bdc17e4cd10bbb17449006cef385ec953a11fc36",
+  "diff": {
+    "files": 4,
+    "additions": 23,
+    "deletions": 1
+  },
+  "bugs": [
+    {
+      "description": "Fix unhashable exception types",
+      "fix": "https://github.com/pallets/werkzeug/pull/1542",
+      "locations": [
+        {
+          "file": "src/werkzeug/debug/tbtools.py",
+          "start": 251,
+          "end": 251
+        },
+        {
+          "file": "src/werkzeug/debug/tbtools.py",
+          "start": 255,
+          "end": 255
+        }
+      ]
+    }
+  ]
+}

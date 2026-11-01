@@ -1,0 +1,28 @@
+{
+  "id": "urfave-cli-2237",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Add more tests to improve code coverage",
+  "repo": "https://github.com/urfave/cli",
+  "pr": "https://github.com/urfave/cli/pull/2237",
+  "base": "f0b939963f443f91bbbed3d9ff14513a0ceeb86d",
+  "head": "1f225b11590f48d2676a22ae8a45287406398b8c",
+  "diff": {
+    "files": 5,
+    "additions": 66,
+    "deletions": 14
+  },
+  "bugs": [
+    {
+      "description": "fix: don't print empty line to stderr when Exit message is empty",
+      "fix": "https://github.com/urfave/cli/pull/2310",
+      "locations": [
+        {
+          "file": "errors.go",
+          "start": 153,
+          "end": 156
+        }
+      ]
+    }
+  ]
+}

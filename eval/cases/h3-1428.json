@@ -1,0 +1,28 @@
+{
+  "id": "h3-1428",
+  "kind": "bug",
+  "smoke": false,
+  "title": "feat: export `resolveDotSegments` as a public path utility",
+  "repo": "https://github.com/h3js/h3",
+  "pr": "https://github.com/h3js/h3/pull/1428",
+  "base": "7df7abb6289c07a5191ed61ef04a2b20e62476f7",
+  "head": "30ca780593803741cae430a751c31a3547d4a343",
+  "diff": {
+    "files": 9,
+    "additions": 396,
+    "deletions": 30
+  },
+  "bugs": [
+    {
+      "description": "fix(serve-static): decode the resolved id before lookup",
+      "fix": "https://github.com/h3js/h3/pull/1431",
+      "locations": [
+        {
+          "file": "src/utils/static.ts",
+          "start": 87,
+          "end": 94
+        }
+      ]
+    }
+  ]
+}

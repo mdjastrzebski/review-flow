@@ -1,0 +1,28 @@
+{
+  "id": "pluggy-210",
+  "kind": "bug",
+  "smoke": false,
+  "title": "Convert hooks.varnames() to inspect.signature() on Python 3",
+  "repo": "https://github.com/pytest-dev/pluggy",
+  "pr": "https://github.com/pytest-dev/pluggy/pull/210",
+  "base": "f8af26cb315c38fb61b32f9e671dd1cf5f6af766",
+  "head": "f8108d791fb59aba2568f5ab0ef73a6afee7895c",
+  "diff": {
+    "files": 5,
+    "additions": 43,
+    "deletions": 27
+  },
+  "bugs": [
+    {
+      "description": "Fix a regression with keyword only arguments",
+      "fix": "https://github.com/pytest-dev/pluggy/pull/213",
+      "locations": [
+        {
+          "file": "src/pluggy/hooks.py",
+          "start": 181,
+          "end": 183
+        }
+      ]
+    }
+  ]
+}
