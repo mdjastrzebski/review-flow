@@ -77,6 +77,7 @@ From local runs on this repo (Claude harness, default models, Oct–Nov 2026):
 - **Verification can cost more than the review.** In one run, the reviewer cost $0.72 and 4 verifiers cost $2.23.
 - **`claude -p` vs Agent SDK:** on the same diff, $2.21 / 1.7 min vs $2.95 / 2.2 min, with similar findings (see the [decision log](PLAN.md#decision-log)).
 - **Cursor with Composer 2.5:** $0.32 / 2.3 min on the comparison diff, a third of Claude's cheapest run, but 1 finding vs Claude's 3–4, missing a high-severity one (see the [decision log](PLAN.md#decision-log)).
+- **Cursor with Grok 4.7:** low $1.37 / 9.1 min (5 findings), medium $5.41 / 31.4 min (6 findings, 77 reads outside the repo).
 - Cursor reports tokens only when a session finishes, so a task that times out or is stopped has no cost. Two Grok 4.7 high runs failed that way (15.6 and 20 min).
 - **Cache writes cost about 40× cache reads** (fitted from `calls.jsonl`: $8 vs $0.20 per million tokens, all at the 1-hour cache). A verifier that reads the diff from cache costs about $0.08 instead of $0.48 (see the [decision log](PLAN.md#decision-log)).
 - **Repeat runs on the same diff are cheaper**: the reviewer prompt stays in the 1-hour cache, so a second run within the hour skipped a $0.50 cache write. Compare first runs with first runs.
