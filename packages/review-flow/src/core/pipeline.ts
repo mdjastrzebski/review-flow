@@ -19,7 +19,7 @@ import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
 import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
-import { createRunDir, createRunDirAt, ensureGitignored, type RunDir } from "./run-dir.ts";
+import { createRunDir, createRunDirAt, ensureStateDir, type RunDir } from "./run-dir.ts";
 import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
@@ -309,10 +309,8 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   log(`Reviewer: ${describeModel(models.reviewer)}`);
   log(`Verifier: ${describeModel(models.verifier)}`);
 
-  if (runRoot === undefined && (await ensureGitignored(repo))) {
-    log("Added .review-flow/ to .gitignore");
-  }
-  // Taken after the .gitignore edit; agents must leave the tree exactly like this.
+  if (runRoot === undefined) await ensureStateDir(repo);
+  // Taken after .review-flow/ exists; agents must leave the tree exactly like this.
   const status = await snapshotStatus(repo);
 
   const runDir =

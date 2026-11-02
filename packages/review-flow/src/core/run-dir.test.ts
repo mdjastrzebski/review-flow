@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createRunDir, ensureGitignored, formatRunTimestamp } from "./run-dir.ts";
+import { createRunDir, ensureStateDir, formatRunTimestamp } from "./run-dir.ts";
 
 let repo: string;
 
@@ -14,29 +14,19 @@ afterEach(async () => {
   await rm(repo, { recursive: true, force: true });
 });
 
-describe("ensureGitignored", () => {
-  it("creates .gitignore when missing", async () => {
-    expect(await ensureGitignored(repo)).toBe(true);
-    expect(await readFile(path.join(repo, ".gitignore"), "utf8")).toBe(".review-flow/\n");
+describe("ensureStateDir", () => {
+  it("creates .review-flow/ with a .gitignore that ignores everything", async () => {
+    await ensureStateDir(repo);
+    expect(await readFile(path.join(repo, ".review-flow", ".gitignore"), "utf8")).toBe("*\n");
+    await expect(stat(path.join(repo, ".gitignore"))).rejects.toThrow();
   });
 
-  it("appends on a new line when the file lacks a trailing newline", async () => {
-    await writeFile(path.join(repo, ".gitignore"), "node_modules/");
-    expect(await ensureGitignored(repo)).toBe(true);
-    expect(await readFile(path.join(repo, ".gitignore"), "utf8")).toBe(
-      "node_modules/\n.review-flow/\n",
-    );
+  it("leaves an existing .gitignore alone", async () => {
+    await mkdir(path.join(repo, ".review-flow"));
+    await writeFile(path.join(repo, ".review-flow", ".gitignore"), "custom\n");
+    await ensureStateDir(repo);
+    expect(await readFile(path.join(repo, ".review-flow", ".gitignore"), "utf8")).toBe("custom\n");
   });
-
-  it.each([".review-flow", ".review-flow/", "/.review-flow/", "  /.review-flow  "])(
-    "leaves the file alone when %j is already present",
-    async (entry) => {
-      const content = `dist/\n${entry}\n`;
-      await writeFile(path.join(repo, ".gitignore"), content);
-      expect(await ensureGitignored(repo)).toBe(false);
-      expect(await readFile(path.join(repo, ".gitignore"), "utf8")).toBe(content);
-    },
-  );
 });
 
 describe("createRunDir", () => {

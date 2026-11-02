@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "@review-flow/core";
+import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "../core/index.ts";
 import { z } from "zod";
 import { READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL } from "./guard.ts";
 import { noResultError, runCli, type CliRun } from "./process.ts";
@@ -12,7 +12,10 @@ export interface ClaudeOptions {
   bin: string;
 }
 
-const GUARD_HOOK = fileURLToPath(new URL("./guard-hook.ts", import.meta.url));
+// guard-hook.ts from source, guard-hook.js once built: Node won't strip types inside node_modules.
+const GUARD_HOOK = fileURLToPath(
+  new URL(`./guard-hook${path.extname(import.meta.url)}`, import.meta.url),
+);
 
 /**
  * The CLI validates `--json-schema` with a validator that doesn't know zod's default

@@ -1,16 +1,18 @@
 {
-  "name": "review-flow",
+  "name": "review-flow-monorepo",
   "private": true,
   "type": "module",
   "scripts": {
-    "review-flow": "tsx packages/cli/src/cli.ts",
+    "review-flow": "tsx packages/review-flow/src/cli/cli.ts",
     "test": "pnpm -r test",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "build": "pnpm --filter review-flow build",
+    "release": "pnpm --filter review-flow release"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
-const PROMPTS_DIR = new URL("../prompts/", import.meta.url);
+// prompts/ at the package root, from both src/core/ and dist/core/.
+const PROMPTS_DIR = new URL("../../prompts/", import.meta.url);
 
 export type PromptName = "reviewer" | "verifier" | "change";
 

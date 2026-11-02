@@ -8,7 +8,7 @@ import {
   type NormalizedFinding,
   type Severity,
   type Verdict,
-} from "@review-flow/core";
+} from "../core/index.ts";
 
 type Style = Parameters<typeof styleText>[0];
 

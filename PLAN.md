@@ -46,9 +46,9 @@ Goal: zero-config reviews that are good by default, with overrides for everythin
 
 Goal: cover how developers actually review, in order of usefulness.
 
-- [ ] **Worktree (4, 10).** Review in a disposable worktree. `.review-flow/` gets its own `.gitignore`, and the root `.gitignore` is no longer edited.
+- [ ] **Worktree (4, 10).** Review in a disposable worktree. Done so far: `.review-flow/` has its own `.gitignore`, and the root `.gitignore` is no longer edited.
 - [ ] **Targets (2).** Branch, commit, `a..b`, and `a...b` targets. Done so far: uncommitted changes through a snapshot commit.
-- [ ] **Distribution (12).** The npm package `review-flow` and `review-flow doctor`.
+- [ ] **Distribution (12).** The npm package `review-flow` and `review-flow doctor`. Done so far: the bundled package and `pnpm release`.
 - [ ] **PR targets and trust (2, 3).** PR number or URL, trust levels and their policies, and `--trust`.
 - [ ] **Posting (7).** `review-flow post` with selection, editing, the stale-head check, preview, and a `COMMENT` review.
 - [ ] **Review guide (8).** `REVIEW.md`, read from the base for untrusted targets.

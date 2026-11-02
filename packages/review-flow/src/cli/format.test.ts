@@ -1,4 +1,4 @@
-import type { NormalizedFinding, Verdict } from "@review-flow/core";
+import type { NormalizedFinding, Verdict } from "../core/index.ts";
 import { describe, expect, it } from "vitest";
 import { formatFindings, wrap } from "./format.ts";
 

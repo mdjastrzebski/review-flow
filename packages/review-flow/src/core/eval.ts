@@ -15,7 +15,7 @@ import { checkoutDetached, ensureClone, resolveRepoRoot, WorkingTreeChangedError
 import { readJsonOrNull, writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { runReview, type ReviewRunResult, type RunRecord } from "./pipeline.ts";
-import { ensureGitignored, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
+import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
 import type { NormalizedFinding } from "./schemas.ts";
 
@@ -160,7 +160,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
   const { harness, models, log } = options;
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
-  if (await ensureGitignored(repo)) log("Added .review-flow/ to .gitignore");
+  await ensureStateDir(repo);
 
   await mkdir(runsPath(repo), { recursive: true });
   const root = path.join(runsPath(repo), `${formatRunTimestamp(startedAt)}-eval`);

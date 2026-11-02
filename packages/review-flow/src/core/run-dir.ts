@@ -1,31 +1,19 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const STATE_DIR = ".review-flow";
 
-const IGNORE_ENTRY = `${STATE_DIR}/`;
-const IGNORE_PATTERNS = new Set([STATE_DIR, IGNORE_ENTRY, `/${STATE_DIR}`, `/${IGNORE_ENTRY}`]);
-
 /**
- * Adds `.review-flow/` to the repo's .gitignore if missing. Returns true when the file was changed.
- * Must run before the git status snapshot, since it modifies .gitignore itself.
+ * Creates `.review-flow/` with its own `.gitignore` (`*`), so git ignores it without the repo's
+ * .gitignore being edited. Must run before the git status snapshot.
  */
-export async function ensureGitignored(repo: string): Promise<boolean> {
-  const gitignorePath = path.join(repo, ".gitignore");
-  let content = "";
-  try {
-    content = await readFile(gitignorePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-
-  if (content.split(/\r?\n/).some((line) => IGNORE_PATTERNS.has(line.trim()))) {
-    return false;
-  }
-
-  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
-  await writeFile(gitignorePath, `${content}${separator}${IGNORE_ENTRY}\n`);
-  return true;
+export async function ensureStateDir(repo: string): Promise<void> {
+  const dir = path.join(repo, STATE_DIR);
+  await mkdir(dir, { recursive: true });
+  // "wx" leaves an existing file alone.
+  await writeFile(path.join(dir, ".gitignore"), "*\n", { flag: "wx" }).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  });
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

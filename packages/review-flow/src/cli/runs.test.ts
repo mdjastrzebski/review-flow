@@ -7,7 +7,7 @@ import {
   type NormalizedFinding,
   type ReviewIndexEntry,
   type Verdict,
-} from "@review-flow/core";
+} from "../core/index.ts";
 import { describe, expect, it } from "vitest";
 import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
 

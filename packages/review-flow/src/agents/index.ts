@@ -1,4 +1,4 @@
-import type { Harness, RunAgent } from "@review-flow/core";
+import type { Harness, RunAgent } from "../core/index.ts";
 import { createClaudeAgent } from "./claude.ts";
 import { createCursorAgent } from "./cursor.ts";
 

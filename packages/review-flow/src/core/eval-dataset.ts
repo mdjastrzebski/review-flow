@@ -4,8 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-/** `eval/cases/` in this repo; the format is in eval/README.md. */
-export const DEFAULT_DATASET_DIR = fileURLToPath(new URL("../../../eval/cases/", import.meta.url));
+/**
+ * `eval/cases/` at the repo root, from both src/core/ and dist/core/. The dataset isn't published,
+ * so an installed package needs `--dataset`.
+ */
+export const DEFAULT_DATASET_DIR = fileURLToPath(
+  new URL("../../../../eval/cases/", import.meta.url),
+);
 
 /** Clones of the case repos, outside any project so agents don't see its rules or AGENTS.md. */
 export function defaultCheckoutsDir(): string {
@@ -58,7 +63,13 @@ export interface DatasetSelection {
 
 /** Every `*.json` in `dir`, sorted by id, narrowed by `selection`. */
 export async function loadDataset(dir: string, selection: DatasetSelection): Promise<EvalCase[]> {
-  const files = (await readdir(dir)).filter((file) => file.endsWith(".json")).toSorted();
+  const entries = await readdir(dir).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    throw new Error(
+      `No eval dataset at ${dir}. Pass --dataset <dir>, such as eval/cases/ in a review-flow checkout.`,
+    );
+  });
+  const files = entries.filter((file) => file.endsWith(".json")).toSorted();
   const cases = await Promise.all(
     files.map(async (file) => {
       const parsed = EvalCase.safeParse(JSON.parse(await readFile(path.join(dir, file), "utf8")));

@@ -17,7 +17,7 @@ import {
   type NormalizedFinding,
   type TimedTotals,
   type Verdict,
-} from "@review-flow/core";
+} from "../core/index.ts";
 
 type Style = Parameters<typeof styleText>[0];
 type StepTotals = Parameters<typeof compareSteps>[0];

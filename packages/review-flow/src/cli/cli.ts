@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 import { Command, Option } from "commander";
-import { getAgent } from "@review-flow/agents";
+import { getAgent } from "../agents/index.ts";
 import {
   DEFAULT_DATASET_DIR,
   EFFORTS,
@@ -20,7 +21,8 @@ import {
   userConfigPath,
   type Effort,
   type Harness,
-} from "@review-flow/core";
+} from "../core/index.ts";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { formatFindings } from "./format.ts";
@@ -216,11 +218,16 @@ async function compare(a: string, b: string, options: { repo: string }): Promise
   }
 }
 
-const program = new Command("review-flow");
+// The package.json at the package root, from both src/cli/ and dist/cli/.
+const { version } = JSON.parse(
+  await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
+
+const program = new Command("review-flow").version(version);
 
 addAgentOptions(
   program
-    .command("review")
+    .command("review", { isDefault: true })
     .description("Review the current branch against a base ref")
     .option(
       "-b, --base <ref>",

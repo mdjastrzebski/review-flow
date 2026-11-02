@@ -8,7 +8,7 @@ import type {
   Effort,
   RunAgent,
   TokenUsage,
-} from "@review-flow/core";
+} from "../core/index.ts";
 import { z } from "zod";
 import { toOutputSchema } from "./claude.ts";
 import { globEscapes, isInsideRoot } from "./guard.ts";
