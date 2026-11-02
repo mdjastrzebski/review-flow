@@ -82,6 +82,35 @@ export async function runCli(options: CliRunOptions): Promise<CliRun> {
   return { ...exit, timedOut, stderr };
 }
 
+const MAX_ARG_CHARS = 80;
+
+/** The command line for `--verbose`, with long arguments (schemas, settings) cut short. */
+export function describeCommand(bin: string, args: readonly string[]): string {
+  const shown = args.map((arg) =>
+    arg.length > MAX_ARG_CHARS ? `${arg.slice(0, MAX_ARG_CHARS)}…(${arg.length} chars)` : arg,
+  );
+  return [bin, ...shown]
+    .map((arg) => (/^[\w./:=,@+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
+    .join(" ");
+}
+
+/** How the CLI ended, e.g. `exit code 0` or `signal SIGTERM (timed out)`, plus its stderr. */
+export function describeExit(run: CliRun): string {
+  if (run.error !== undefined) return `could not start: ${run.error.message}`;
+  const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;
+  const stderr = run.stderr.trim();
+  return [
+    `exited: ${how}${run.timedOut ? " (timed out)" : ""}`,
+    ...(stderr === "" ? [] : [`stderr: ${oneLine(stderr)}`]),
+  ].join("; ");
+}
+
+/** Text squeezed onto one line and cut to `max` characters. */
+export function oneLine(text: string, max = 200): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
 /** Why a CLI ended without a result, e.g. `agent ended without a result (exit code 3): boom`. */
 export function noResultError(bin: string, run: CliRun): string {
   const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;

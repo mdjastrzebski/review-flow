@@ -30,6 +30,8 @@ npx review-flow [target]
 | `review-flow config`          | Print the resolved config and where each value came from. `config set <key> <value>` edits a config file.       |
 | `review-flow doctor`          | Check `git`, `gh`, installed agent CLIs and their auth, and which harness would be used.                        |
 
+`review` and `eval` print progress: each step and each agent tool call. `--quiet` prints only the run dir. `--verbose` adds what's needed to check the tool works: repo, base and head SHAs, diff size, each agent's command line, session and model, text, refused tool calls, exit code and stderr, tokens and time per call, and step times.
+
 ### Targets
 
 | Target                     | Reviews                                       | Base                              |

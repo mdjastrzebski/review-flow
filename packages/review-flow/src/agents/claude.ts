@@ -5,7 +5,14 @@ import { fileURLToPath } from "node:url";
 import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "../core/index.ts";
 import { z } from "zod";
 import { READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL } from "./guard.ts";
-import { noResultError, runCli, type CliRun } from "./process.ts";
+import {
+  describeCommand,
+  describeExit,
+  noResultError,
+  oneLine,
+  runCli,
+  type CliRun,
+} from "./process.ts";
 
 /** Headless `claude -p` profile (spec 9). */
 export interface ClaudeOptions {
@@ -83,7 +90,23 @@ export function claudeArgs(
 interface StreamMessage {
   type?: string;
   subtype?: string;
-  message?: { content?: { type?: string; name?: string; input?: unknown }[] };
+  message?: {
+    content?: {
+      type?: string;
+      name?: string;
+      input?: unknown;
+      text?: string;
+      thinking?: string;
+      is_error?: boolean;
+      content?: unknown;
+    }[];
+  };
+  /** On the `system`/`init` message. */
+  session_id?: string;
+  model?: string;
+  claude_code_version?: string;
+  tools?: string[];
+  num_turns?: number;
   is_error?: boolean;
   result?: string;
   errors?: string[];
@@ -164,6 +187,36 @@ function reportToolCalls(message: StreamMessage, task: AgentTask<unknown>): void
   }
 }
 
+/** `--verbose` lines for one stream message: session setup, the agent's text, tool errors, the result. */
+export function describeMessage(message: StreamMessage): string[] {
+  if (message.type === "system" && message.subtype === "init") {
+    const parts = [
+      message.model === undefined ? null : `model ${message.model}`,
+      message.claude_code_version === undefined ? null : `claude ${message.claude_code_version}`,
+      message.tools === undefined ? null : `tools ${message.tools.join(",")}`,
+    ].filter((part) => part !== null);
+    return [
+      `session ${message.session_id ?? "?"}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`,
+    ];
+  }
+  if (message.type === "result") {
+    return [`result: ${message.subtype ?? "?"}, ${message.num_turns ?? "?"} turn(s)`];
+  }
+  const lines: string[] = [];
+  for (const block of message.message?.content ?? []) {
+    if (block.type === "text" && block.text) lines.push(`text: ${oneLine(block.text)}`);
+    if (block.type === "thinking" && block.thinking) {
+      lines.push(`thinking: ${oneLine(block.thinking)}`);
+    }
+    if (block.type === "tool_result" && block.is_error === true) {
+      const content =
+        typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+      lines.push(`tool error: ${oneLine(content ?? "")}`);
+    }
+  }
+  return lines;
+}
+
 async function readLines(file: string): Promise<string[]> {
   try {
     return (await readFile(file, "utf8")).split("\n").filter((line) => line !== "");
@@ -198,6 +251,7 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
       await writeFile(contextFile, task.sharedContext);
     }
     args = claudeArgs(task as AgentTask<unknown>, guardSettings(task.cwd, deniedLog), contextFile);
+    task.onDetail?.(`command: ${describeCommand(options.bin, args)}`);
 
     // Assigned in a callback, so the cast keeps TS from narrowing it to null.
     let result = null as StreamMessage | null;
@@ -216,9 +270,12 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
           messages.push(message);
           if (message.type === "assistant") reportToolCalls(message, task as AgentTask<unknown>);
           if (message.type === "result") result = message;
+          for (const line of describeMessage(message)) task.onDetail?.(line);
         },
       });
       denied = await readLines(deniedLog);
+      task.onDetail?.(describeExit(run));
+      for (const entry of denied) task.onDetail?.(`denied: ${entry}`);
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

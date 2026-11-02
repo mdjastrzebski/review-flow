@@ -113,11 +113,20 @@ function addAgentOptions(command: Command): Command {
     .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent");
 }
 
+const verboseOption = () =>
+  new Option(
+    "-v, --verbose",
+    "more progress detail: agent commands, sessions and text, tokens per call, step times",
+  )
+    .default(false)
+    .conflicts("quiet");
+
 interface ReviewOptions extends AgentOptions {
   base?: string;
   committedOnly: boolean;
   repo: string;
   quiet: boolean;
+  verbose: boolean;
 }
 
 /** The default base, fetched from origin; in a TTY the user can confirm or replace it. */
@@ -163,6 +172,7 @@ async function reviewPr(
       base,
       committedOnly: true,
       log,
+      verbose: options.verbose,
     });
     return { ...result, base };
   } finally {
@@ -194,6 +204,7 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
           base,
           committedOnly: options.committedOnly,
           log,
+          verbose: options.verbose,
         })),
         base,
       };
@@ -250,6 +261,7 @@ interface EvalOptions extends AgentOptions {
   checkouts: string;
   repo: string;
   quiet: boolean;
+  verbose: boolean;
 }
 
 async function evaluate(options: EvalOptions): Promise<void> {
@@ -263,6 +275,7 @@ async function evaluate(options: EvalOptions): Promise<void> {
     smoke: options.smoke,
     checkoutsDir: path.resolve(userCwd, options.checkouts),
     log,
+    verbose: options.verbose,
   });
   // Like review: --quiet prints only the run dir.
   console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
@@ -309,6 +322,7 @@ addAgentOptions(
   .option("--repo <path>", "repository to review", userCwd)
   .option("--committed-only", "review HEAD only, without uncommitted changes", false)
   .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)
+  .addOption(verboseOption())
   .action(review);
 
 addAgentOptions(
@@ -322,6 +336,7 @@ addAgentOptions(
   .option("--checkouts <dir>", "where case repos are cloned and kept", defaultCheckoutsDir())
   .option("--repo <path>", "repository to save the eval run in", userCwd)
   .option("-q, --quiet", "no progress or summary output; print only the eval run dir path", false)
+  .addOption(verboseOption())
   .action(evaluate);
 
 program

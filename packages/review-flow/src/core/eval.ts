@@ -32,6 +32,7 @@ export interface EvalRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  verbose?: boolean;
 }
 
 /** run.json of an eval run. */
@@ -110,6 +111,7 @@ async function runCase(
       models: options.models,
       runAgent: options.runAgent,
       log: (message) => options.log(`  ${message}`),
+      ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,

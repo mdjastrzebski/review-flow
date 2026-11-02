@@ -27,6 +27,7 @@ It reviews the branch against `origin/main` (fetched first), including uncommitt
 | `--model`, `--effort` | Model and effort for all agents. `--verifier-model` and `--verifier-effort` override them for verifiers. |
 | `--committed-only`    | Review `HEAD` without uncommitted changes                                                                |
 | `-q, --quiet`         | Print only the run directory                                                                             |
+| `-v, --verbose`       | Print more detail: agent commands, sessions and text, exit codes, tokens per call, step times            |
 
 ### Pull requests
 

@@ -12,7 +12,14 @@ import type {
 import { z } from "zod";
 import { toOutputSchema } from "./claude.ts";
 import { globEscapes, isInsideRoot } from "./guard.ts";
-import { noResultError, runCli, type CliRun } from "./process.ts";
+import {
+  describeCommand,
+  describeExit,
+  noResultError,
+  oneLine,
+  runCli,
+  type CliRun,
+} from "./process.ts";
 
 /** Headless `agent -p` (Cursor CLI) profile (spec 9). */
 export interface CursorOptions {
@@ -268,12 +275,34 @@ interface CursorEvent {
   result?: string;
   is_error?: boolean;
   tool_call?: unknown;
+  /** On the `system`/`init` event. */
+  model?: string;
+  message?: { content?: { type?: string; text?: string }[] };
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   };
+}
+
+/** `--verbose` lines for one event: session setup, the agent's text, refused tool calls. */
+export function describeEvent(event: CursorEvent): string[] {
+  if (event.type === "system" && event.subtype === "init") {
+    return [
+      `session ${event.session_id ?? "?"}${event.model === undefined ? "" : `: model ${event.model}`}`,
+    ];
+  }
+  if (event.type === "result") return [`result: ${event.subtype ?? "?"}`];
+  if (event.type === "assistant") {
+    const text = (event.message?.content ?? []).map((block) => block.text ?? "").join("");
+    return text.trim() === "" ? [] : [`text: ${oneLine(text)}`];
+  }
+  const toolCall = event.type === "tool_call" ? parseToolCall(event.tool_call) : null;
+  if (event.subtype === "completed" && toolCall !== null && !ran(toolCall.result)) {
+    return [`refused: ${displayName(toolCall.name)} ${oneLine(JSON.stringify(toolCall.result))}`];
+  }
+  return [];
 }
 
 export function parseCursorUsage(result: CursorEvent): TokenUsage | null {
@@ -358,6 +387,7 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
         result: null,
       };
       attempts.push(current);
+      task.onDetail?.(`command: ${describeCommand(options.bin, current.args)}`);
       const run: CliRun = await runCli({
         bin: options.bin,
         args: current.args,
@@ -374,6 +404,7 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
           current.events.push(event);
           current.sessionId ??= event.session_id ?? null;
           if (event.type === "result") current.result = event;
+          for (const line of describeEvent(event)) task.onDetail?.(line);
           const toolCall = event.type === "tool_call" ? parseToolCall(event.tool_call) : null;
           if (toolCall === null) return;
           if (event.subtype === "started") task.onProgress(describeToolCall(toolCall, task.cwd));
@@ -381,6 +412,7 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
         },
       });
       await guard.settled();
+      task.onDetail?.(describeExit(run));
       current.stderr = run.stderr;
       if (current.result !== null) usage = addUsage(usage, parseCursorUsage(current.result));
       return { run, current };

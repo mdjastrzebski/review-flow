@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -297,6 +297,41 @@ describe("runReview", () => {
     expect(reviewer?.sharedContext).toBeNull();
     expect(verifier?.sharedContext).toContain("+b");
     expect(verifier?.prompt).not.toContain("+b");
+  });
+
+  it("logs setup, agent details, and tokens only when verbose", async () => {
+    const lines = async (verbose: boolean) => {
+      const logged: string[] = [];
+      const { runAgent } = stubAgent({
+        effect: async (task) => task.onDetail?.("command: fake"),
+      });
+      await runReview({
+        ...baseOptions,
+        cwd: repo,
+        runAgent,
+        verbose,
+        log: (m) => logged.push(m),
+        // Its own run dir: two runs in the same second would share a name.
+        runRoot: path.join(`${repo}-runs`, String(verbose)),
+      });
+      return logged;
+    };
+    await mkdir(`${repo}-runs`);
+    const quiet = await lines(false);
+    const verbose = await lines(true);
+    await rm(`${repo}-runs`, { recursive: true });
+    expect(quiet.some((line) => /command: fake|tokens:|^Diff:|^Steps:/.test(line))).toBe(false);
+    expect(verbose).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Diff: 1 file\(s\), \+\d+ −\d+/),
+        expect.stringMatching(/\[reviewer 0:\d\d\] prompt: \d+ chars → /),
+        expect.stringMatching(/\[reviewer 0:\d\d\] command: fake$/),
+        expect.stringMatching(
+          /tokens: in 1 · cache read 2 · cache write 3 · out 4 · 0s · cost reported/,
+        ),
+        expect.stringMatching(/^Steps: collect \d+s · review \d+s · verify \d+s · report \d+s/),
+      ]),
+    );
   });
 
   it("starts other verifiers only once the first one shows activity", async () => {

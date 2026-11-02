@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AgentProgress, AgentTask } from "../core/index.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { claudeArgs, createClaudeAgent, interpretResult } from "./claude.ts";
+import { claudeArgs, createClaudeAgent, describeMessage, interpretResult } from "./claude.ts";
 
 /**
  * Stands in for `claude -p`: reads the prompt on stdin and acts on the `mode:` it contains.
@@ -150,6 +150,32 @@ describe("interpretResult", () => {
   });
 });
 
+describe("describeMessage", () => {
+  it("describes the session, the agent's text, and tool errors", () => {
+    expect(
+      describeMessage({
+        type: "system",
+        subtype: "init",
+        session_id: "s1",
+        model: "claude-sonnet-5-5",
+        tools: ["Read", "Grep"],
+      }),
+    ).toEqual(["session s1: model claude-sonnet-5-5, tools Read,Grep"]);
+    expect(
+      describeMessage({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Looking\n  at a.ts" }] },
+      }),
+    ).toEqual(["text: Looking at a.ts"]);
+    expect(
+      describeMessage({
+        type: "user",
+        message: { content: [{ type: "tool_result", is_error: true, content: "denied" }] },
+      }),
+    ).toEqual(["tool error: denied"]);
+  });
+});
+
 describe("createClaudeAgent", () => {
   const agent = () => createClaudeAgent({ bin });
 
@@ -164,6 +190,22 @@ describe("createClaudeAgent", () => {
       usage: { input: 10, cacheRead: 20, cacheWrite: 30, output: 40 },
     });
     expect(progress).toEqual([{ tool: "Read", detail: path.join("src", "a.ts") }]);
+  });
+
+  it("reports the command, session, and exit as details", async () => {
+    const details: string[] = [];
+    await agent()(task("ok", { onDetail: (text) => details.push(text) }).task);
+    expect(details[0]).toMatch(/^command: .*fake-claude\.mjs -p --output-format stream-json/);
+    expect(details[0]).toMatch(/--json-schema .*…\(\d+ chars\)/);
+    expect(details).toContain("session ?");
+    expect(details).toContain("result: success, ? turn(s)");
+    expect(details.at(-1)).toBe("exited: exit code 0");
+  });
+
+  it("reports the stderr of a crash as a detail", async () => {
+    const details: string[] = [];
+    await agent()(task("crash", { onDetail: (text) => details.push(text) }).task);
+    expect(details.at(-1)).toBe("exited: exit code 3; stderr: boom");
   });
 
   it("hands the shared context to the CLI in a file", async () => {

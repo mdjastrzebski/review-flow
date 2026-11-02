@@ -1,7 +1,7 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import pLimit from "p-limit";
-import type { AgentResult, AgentStatus, AgentTask, RunAgent } from "./agent.ts";
+import type { AgentResult, AgentStatus, AgentTask, RunAgent, TokenUsage } from "./agent.ts";
 import { rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
 import {
   assertStatusUnchanged,
@@ -13,7 +13,7 @@ import {
   snapshotWorkingTree,
   type StatusSnapshot,
 } from "./git.ts";
-import { describeModel } from "./format.ts";
+import { describeModel, formatDuration } from "./format.ts";
 import type { PullRequest } from "./github.ts";
 import { writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
@@ -44,6 +44,8 @@ export interface ReviewRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  /** Also log run setup, each agent's command and text, tokens per call, and step times. */
+  verbose?: boolean;
   /** Review HEAD only; by default uncommitted changes are reviewed too, through a snapshot. */
   committedOnly?: boolean;
   /**
@@ -102,6 +104,14 @@ interface TaskContext {
   calls: CallRecord[];
   runAgent: RunAgent;
   log: (message: string) => void;
+  verbose: boolean;
+}
+
+/** `in 1,200 · cache read 30,000 · cache write 0 · out 800`. */
+function describeUsage(usage: TokenUsage | null): string {
+  if (usage === null) return "tokens: not reported";
+  const n = (count: number) => count.toLocaleString("en-US");
+  return `tokens: in ${n(usage.input)} · cache read ${n(usage.cacheRead)} · cache write ${n(usage.cacheWrite)} · out ${n(usage.output)}`;
 }
 
 /** Wall time of each step, in the order the steps ran. */
@@ -122,7 +132,7 @@ async function timeStep<T>(durations: StepDurations, step: Step, fn: () => Promi
  * check after.
  */
 async function runTask<T>(
-  task: Omit<AgentTask<T>, "onProgress">,
+  task: Omit<AgentTask<T>, "onProgress" | "onDetail">,
   step: Step,
   ctx: TaskContext,
   onActivity?: () => void,
@@ -139,6 +149,11 @@ async function runTask<T>(
       line(`still working (no tool calls for ${Math.round(quietFor / 1000)}s)`);
     }
   }, HEARTBEAT_INTERVAL_MS);
+  if (ctx.verbose) {
+    const shared =
+      task.sharedContext === null ? "" : `, shared context ${task.sharedContext.length} chars`;
+    line(`prompt: ${task.prompt.length} chars${shared} → ${ctx.runDir.promptPath(task.taskId)}`);
+  }
 
   let result: AgentResult<T>;
   try {
@@ -149,6 +164,7 @@ async function runTask<T>(
         line(detail === null ? tool : `${tool} ${detail}`);
         onActivity?.();
       },
+      ...(ctx.verbose ? { onDetail: line } : {}),
     });
   } finally {
     clearInterval(heartbeat);
@@ -156,6 +172,12 @@ async function runTask<T>(
   const computedCost = result.costUsd === null ? computeCostUsd(task.model, result.usage) : null;
   const costUsd = result.costUsd ?? computedCost;
   line(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`);
+  if (ctx.verbose) {
+    if (result.error !== null) line(`error: ${result.error}`);
+    line(
+      `${describeUsage(result.usage)} · ${formatDuration(result.durationMs)} · cost ${result.costUsd !== null ? "reported" : computedCost !== null ? "computed" : "unknown"}`,
+    );
+  }
 
   await writeJson(ctx.runDir.rawPath(task.taskId), result.raw);
   const call: CallRecord = {
@@ -299,6 +321,8 @@ export class NoChangesError extends Error {
 /** collect → review → normalize → verify → rank → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const { base, harness, models, runAgent, log, runRoot, pr } = options;
+  const verbose = options.verbose ?? false;
+  const debug = verbose ? log : () => {};
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
   const stateRepo = options.stateRepo ?? repo;
@@ -320,6 +344,13 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   if (diff.trim() === "") {
     throw new NoChangesError(base, snapshot !== null);
   }
+  debug(`Repo: ${repo}`);
+  debug(`Base: ${base} (${baseSha.slice(0, 7)}) · Head: ${headSha.slice(0, 7)}`);
+  if (snapshot !== null) debug(`Snapshot of uncommitted changes: ${snapshot.sha.slice(0, 7)}`);
+  const stats = diffStats(diff);
+  debug(
+    `Diff: ${stats.files} file(s), +${stats.additions} −${stats.deletions}, ${diff.length} chars`,
+  );
   if (snapshot !== null) log(`Including ${snapshot.files} uncommitted file(s)`);
   log(`Reviewer: ${describeModel(models.reviewer)}`);
   log(`Verifier: ${describeModel(models.verifier)}`);
@@ -337,7 +368,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
 
   const stepDurations: StepDurations = new Map([["collect", Date.now() - startedAt.getTime()]]);
   const calls: CallRecord[] = [];
-  const ctx: TaskContext = { runDir, repo, status, harness, calls, runAgent, log };
+  const ctx: TaskContext = { runDir, repo, status, harness, calls, runAgent, log, verbose };
   let failure: string | null = null;
   // Outside the try, so a failed run still indexes what it got to.
   let findingCount: number | null = null;
@@ -409,6 +440,9 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       await writeFile(runDir.reportPath, report);
       log(`Report → ${runDir.reportPath}`);
     });
+    debug(
+      `Steps: ${[...stepDurations].map(([step, ms]) => `${step} ${formatDuration(ms)}`).join(" · ")}`,
+    );
 
     return { runDir, findings, verdicts, costUsd, durationMs };
   } catch (error) {
@@ -441,7 +475,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         base: run.base,
         head: run.head,
         ...(pr === undefined ? {} : { pr: pr.number }),
-        diff: diffStats(diff),
+        diff: stats,
         findings: findingCount,
         verdicts: verdictCounts,
         costUsd: run.totals.costUsd,

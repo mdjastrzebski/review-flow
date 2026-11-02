@@ -18,7 +18,7 @@ pnpm review-flow compare <a> <b>                       # two runs or two evals s
 
 ## Harnesses
 
-Both spawn the CLI per task, with the prompt on stdin, and read its `stream-json` output line by line ([process.ts](packages/review-flow/src/agents/process.ts)). Timeouts and Ctrl-C send SIGTERM, then SIGKILL after 5 s.
+Both spawn the CLI per task, with the prompt on stdin, and read its `stream-json` output line by line ([process.ts](packages/review-flow/src/agents/process.ts)). Timeouts and Ctrl-C send SIGTERM, then SIGKILL after 5 s. With `--verbose`, each task also prints its command line (long arguments cut short), the session's id and model, the agent's text, refused tool calls, how the CLI exited with its stderr, and its tokens, time, and cost source; the run prints repo, base and head SHAs, diff size, and step times.
 
 ### claude
 
@@ -93,7 +93,7 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Configuration
 
-CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--repo`, `--quiet`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base` and `--committed-only`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
+CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--repo`, `--quiet`, `--verbose`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base` and `--committed-only`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
 
 Defaults ([models.ts](packages/review-flow/src/core/models.ts)):
 

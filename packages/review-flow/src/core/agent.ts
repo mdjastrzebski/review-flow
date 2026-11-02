@@ -21,6 +21,11 @@ export interface AgentTask<T> {
   signal?: AbortSignal;
   /** Called as the agent works, so long-running tasks visibly make progress. */
   onProgress: (event: AgentProgress) => void;
+  /**
+   * Diagnostic lines for `--verbose`: the command run, session details, the agent's text, how the
+   * CLI exited. Unlike onProgress, these don't count as activity.
+   */
+  onDetail?: (text: string) => void;
 }
 
 /** A tool call the agent made, e.g. `{ tool: "Read", detail: "src/git.ts" }`. */
