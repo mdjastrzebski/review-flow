@@ -68,3 +68,7 @@ One JSON file per case in [cases/](cases/):
 
 - Diffs: 3,481 changed lines in total, at most 426 per case. The baseline set has 905.
 - Full clones of all 19 repos: about 220 MB, 2 to 27 MB each.
+
+## Baseline results
+
+Scores of today's pipeline on the baseline set, per harness and model: [baselines.md](baselines.md).
