@@ -16,7 +16,7 @@ export interface BugResult {
 export interface CaseResult {
   id: string;
   kind: EvalCase["kind"];
-  smoke: boolean;
+  preset: EvalCase["preset"];
   status: "ok" | "failed";
   error: string | null;
   /** All findings; null when the case failed before the reviewer returned. */

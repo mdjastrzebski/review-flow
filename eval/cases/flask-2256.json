@@ -1,7 +1,7 @@
 {
   "id": "flask-2256",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "refactor make_response to be easier to follow",
   "repo": "https://github.com/pallets/flask",
   "pr": "https://github.com/pallets/flask/pull/2256",

@@ -1,7 +1,7 @@
 {
   "id": "marshmallow-2894",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Fix Constant field rejecting None values during load",
   "repo": "https://github.com/marshmallow-code/marshmallow",
   "pr": "https://github.com/marshmallow-code/marshmallow/pull/2894",

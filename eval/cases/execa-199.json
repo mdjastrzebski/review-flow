@@ -1,7 +1,7 @@
 {
   "id": "execa-199",
   "kind": "bug",
-  "smoke": false,
+  "preset": "baseline",
   "title": "Fix timeout option not leaving early when on `sleep` mode",
   "repo": "https://github.com/sindresorhus/execa",
   "pr": "https://github.com/sindresorhus/execa/pull/199",

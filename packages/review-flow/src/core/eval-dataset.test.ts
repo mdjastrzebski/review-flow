@@ -20,7 +20,7 @@ function evalCase(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     kind: "clean",
-    smoke: false,
+    preset: "full",
     title: "t",
     repo: "https://github.com/o/r",
     pr: "https://github.com/o/r/pull/1",
@@ -38,45 +38,56 @@ async function write(file: string, value: unknown): Promise<void> {
 
 describe("loadDataset", () => {
   it("loads the repo's dataset", async () => {
-    const all = await loadDataset(DEFAULT_DATASET_DIR, { smoke: false });
-    const smoke = await loadDataset(DEFAULT_DATASET_DIR, { smoke: true });
+    const all = await loadDataset(DEFAULT_DATASET_DIR);
+    const baseline = await loadDataset(DEFAULT_DATASET_DIR, { subset: "baseline" });
     expect(all).toHaveLength(35);
     expect(all.filter((c) => c.kind === "bug")).toHaveLength(25);
-    expect(smoke).toHaveLength(8);
+    expect(baseline).toHaveLength(12);
+    const smoke = await loadDataset(DEFAULT_DATASET_DIR, { subset: "smoke" });
+    expect(smoke).toHaveLength(5);
+    expect(smoke.every((c) => c.preset === "smoke")).toBe(true);
   });
 
-  it("sorts by id and filters the smoke set", async () => {
-    await write("z.json", evalCase("z", { smoke: true }));
+  it("sorts by id and filters by subset", async () => {
+    await write("z.json", evalCase("z", { preset: "smoke" }));
+    await write("y.json", evalCase("y", { preset: "baseline" }));
     await write("a.json", evalCase("a"));
     await write("notes.txt", "ignored");
-    expect((await loadDataset(dir, { smoke: false })).map((c) => c.id)).toEqual(["a", "z"]);
-    expect((await loadDataset(dir, { smoke: true })).map((c) => c.id)).toEqual(["z"]);
+    expect((await loadDataset(dir)).map((c) => c.id)).toEqual(["a", "y", "z"]);
+    expect((await loadDataset(dir, { subset: "baseline" })).map((c) => c.id)).toEqual(["y", "z"]);
+    expect((await loadDataset(dir, { subset: "smoke" })).map((c) => c.id)).toEqual(["z"]);
+    expect((await loadDataset(dir, { subset: "full" })).map((c) => c.id)).toEqual(["a", "y", "z"]);
   });
 
-  it("selects cases by id, within the smoke set when asked", async () => {
-    await write("a.json", evalCase("a", { smoke: true }));
+  it("selects cases by id, within the subset when asked", async () => {
+    await write("a.json", evalCase("a", { preset: "baseline" }));
     await write("b.json", evalCase("b"));
-    await write("c.json", evalCase("c", { smoke: true }));
-    const ids = async (smoke: boolean, selected: string[]) =>
-      (await loadDataset(dir, { smoke, ids: selected })).map((c) => c.id);
-    expect(await ids(false, ["c", "b"])).toEqual(["b", "c"]);
-    expect(await ids(true, ["a", "b"])).toEqual(["a"]);
-    await expect(ids(true, ["b"])).rejects.toThrow("No smoke cases selected");
-    await expect(ids(false, ["a", "x"])).rejects.toThrow("No such case in");
+    await write("c.json", evalCase("c", { preset: "baseline" }));
+    const ids = async (subset: "baseline" | undefined, selected: string[]) =>
+      (await loadDataset(dir, { subset, ids: selected })).map((c) => c.id);
+    expect(await ids(undefined, ["c", "b"])).toEqual(["b", "c"]);
+    expect(await ids("baseline", ["a", "b"])).toEqual(["a"]);
+    await expect(ids("baseline", ["b"])).rejects.toThrow("No baseline cases selected");
+    await expect(ids(undefined, ["a", "x"])).rejects.toThrow("No such case in");
   });
 
   it("rejects invalid cases, naming the file", async () => {
     await write("bad.json", evalCase("bad", { kind: "bug" }));
-    await expect(loadDataset(dir, { smoke: false })).rejects.toThrow(
-      /bad\.json: .*bug case needs bugs/s,
-    );
+    await expect(loadDataset(dir)).rejects.toThrow(/bad\.json: .*bug case needs bugs/s);
+  });
+
+  it("rejects an unknown preset", async () => {
+    await write("s.json", evalCase("s", { preset: "quick" as never }));
+    await expect(loadDataset(dir)).rejects.toThrow(/s\.json: /);
   });
 
   it("rejects duplicate ids and an empty selection", async () => {
     await write("a.json", evalCase("a"));
-    await expect(loadDataset(dir, { smoke: true })).rejects.toThrow("No smoke cases selected");
+    await expect(loadDataset(dir, { subset: "baseline" })).rejects.toThrow(
+      "No baseline cases selected",
+    );
     await write("b.json", evalCase("a"));
-    await expect(loadDataset(dir, { smoke: false })).rejects.toThrow("Duplicate case id: a");
+    await expect(loadDataset(dir)).rejects.toThrow("Duplicate case id: a");
   });
 });
 

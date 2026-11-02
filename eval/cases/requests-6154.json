@@ -1,7 +1,7 @@
 {
   "id": "requests-6154",
   "kind": "clean",
-  "smoke": false,
+  "preset": "baseline",
   "title": "Add valdation for header name",
   "repo": "https://github.com/psf/requests",
   "pr": "https://github.com/psf/requests/pull/6154",

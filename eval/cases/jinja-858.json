@@ -1,7 +1,7 @@
 {
   "id": "jinja-858",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Fix lexer being extremely slow on large amounts of whitespace. Fixes #857",
   "repo": "https://github.com/pallets/jinja",
   "pr": "https://github.com/pallets/jinja/pull/858",

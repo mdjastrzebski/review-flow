@@ -93,7 +93,7 @@ export function formatRuns(entries: readonly IndexEntry[], options: TableOptions
         e.harness,
         describeModels(e.models),
         e.kind === "eval"
-          ? `eval: ${e.cases} ${e.smoke ? "smoke " : ""}cases`
+          ? `eval: ${e.cases} ${e.subset ? `${e.subset} ` : ""}cases`
           : `${e.diff.files} files +${e.diff.additions} -${e.diff.deletions}`,
         findingsCell(e),
         costCell(e.costUsd, e.unknownCostCalls),
@@ -350,7 +350,7 @@ export function formatEval(result: EvalRunResult, options: TableOptions): string
 const byId = (cases: readonly CaseResult[]) => new Map(cases.map((c) => [c.id, c]));
 
 function casesOf({ run }: LoadedEval): string {
-  return `${run.dataset.cases.length}${run.dataset.smoke ? " (smoke)" : ""}`;
+  return `${run.dataset.cases.length}${run.dataset.subset ? ` (${run.dataset.subset})` : ""}`;
 }
 
 export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOptions): string {

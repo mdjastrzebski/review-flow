@@ -1,7 +1,7 @@
 {
   "id": "hono-5205",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "fix(etag): stabilize digest across stream chunks",
   "repo": "https://github.com/honojs/hono",
   "pr": "https://github.com/honojs/hono/pull/5205",

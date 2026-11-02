@@ -1,7 +1,7 @@
 {
   "id": "hono-2080",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "fix(hono-base): fix not found handler calling timing when one middleware",
   "repo": "https://github.com/honojs/hono",
   "pr": "https://github.com/honojs/hono/pull/2080",

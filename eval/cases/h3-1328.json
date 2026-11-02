@@ -1,7 +1,7 @@
 {
   "id": "h3-1328",
   "kind": "clean",
-  "smoke": false,
+  "preset": "full",
   "title": "feat: add `setServerTiming` and `withServerTiming` utils",
   "repo": "https://github.com/h3js/h3",
   "pr": "https://github.com/h3js/h3/pull/1328",

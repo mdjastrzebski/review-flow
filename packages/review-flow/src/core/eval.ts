@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { RunAgent } from "./agent.ts";
 import { addTotals, EMPTY_TOTALS, type Step, type TimedTotals } from "./calls.ts";
-import { checkoutName, type EvalCase } from "./eval-dataset.ts";
+import { checkoutName, type EvalCase, type EvalSubset } from "./eval-dataset.ts";
 import {
   countReported,
   scoreBugs,
@@ -32,7 +32,7 @@ export interface EvalRunOptions {
   cases: readonly EvalCase[];
   /** Recorded in run.json. */
   dataset: string;
-  smoke: boolean;
+  subset?: EvalSubset | undefined;
   /** Run Summarize on each case (default: true). */
   summarize?: boolean;
   /** One clone per case repo, reused across evals. */
@@ -52,7 +52,7 @@ export interface EvalRunRecord {
   kind: "eval";
   harness: Harness;
   models: RoleModels;
-  dataset: { dir: string; smoke: boolean; cases: string[] };
+  dataset: { dir: string; subset: EvalSubset | null; cases: string[] };
   startedAt: string;
   finishedAt: string;
   status: "ok" | "failed";
@@ -154,7 +154,7 @@ async function runCase(
   const result: CaseResult = {
     id: evalCase.id,
     kind: evalCase.kind,
-    smoke: evalCase.smoke,
+    preset: evalCase.preset,
     status: review === null ? "failed" : "ok",
     error,
     findings: findings?.length ?? null,
@@ -199,7 +199,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
   setup.push(
     ["Reviewer", describeModel(models.reviewer)],
     ["Verifier", describeModel(models.verifier)],
-    ["Cases", `${options.cases.length}${options.smoke ? " (smoke set)" : ""}`],
+    ["Cases", `${options.cases.length}${options.subset ? ` (${options.subset} set)` : ""}`],
     ["Dataset", options.dataset],
     ["Run dir", root],
   );
@@ -238,7 +238,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
       models,
       dataset: {
         dir: options.dataset,
-        smoke: options.smoke,
+        subset: options.subset ?? null,
         cases: options.cases.map((c) => c.id),
       },
       startedAt: startedAt.toISOString(),
@@ -258,7 +258,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
       status: record.status,
       harness,
       models,
-      smoke: options.smoke,
+      subset: options.subset ?? null,
       cases: options.cases.length,
       scores,
       costUsd: totals.costUsd,

@@ -1,7 +1,7 @@
 {
   "id": "requests-4718",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Strip Authorization header whenever root URL changes",
   "repo": "https://github.com/psf/requests",
   "pr": "https://github.com/psf/requests/pull/4718",

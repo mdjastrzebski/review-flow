@@ -1,7 +1,7 @@
 {
   "id": "pluggy-210",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Convert hooks.varnames() to inspect.signature() on Python 3",
   "repo": "https://github.com/pytest-dev/pluggy",
   "pr": "https://github.com/pytest-dev/pluggy/pull/210",

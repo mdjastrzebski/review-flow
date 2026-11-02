@@ -55,7 +55,7 @@ function evalCase(id: string, overrides: Partial<EvalCase> = {}): EvalCase {
   return {
     id,
     kind: "clean",
-    smoke: false,
+    preset: "full",
     title: id,
     repo: remote,
     pr: "",
@@ -122,7 +122,6 @@ function options(cases: EvalCase[], runAgent = stubAgent()): EvalRunOptions {
     cwd: results,
     cases,
     dataset: "eval/cases",
-    smoke: false,
     // Summaries are covered by the pipeline tests; here they would only add calls.
     summarize: false,
     checkoutsDir: checkouts,
@@ -179,7 +178,7 @@ describe("runEval", () => {
     expect(loaded.cases).toEqual(result.cases);
     expect(loaded.run).toMatchObject({
       status: "ok",
-      dataset: { dir: "eval/cases", smoke: false, cases: ["hit", "miss", "clean", "gone"] },
+      dataset: { dir: "eval/cases", subset: null, cases: ["hit", "miss", "clean", "gone"] },
       scores: result.scores,
     });
     expect(Object.keys(loaded.run.steps)).toEqual(["collect", "review", "verify", "report"]);

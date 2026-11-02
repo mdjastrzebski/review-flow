@@ -1,7 +1,7 @@
 {
   "id": "cobra-889",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "bash: fix shellcheck errors",
   "repo": "https://github.com/spf13/cobra",
   "pr": "https://github.com/spf13/cobra/pull/889",

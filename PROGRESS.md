@@ -13,7 +13,7 @@ pnpm review-flow 123                                   # a PR, by number or URL
 pnpm review-flow summary                               # summary only, no findings
 pnpm review-flow post                                  # post findings of the latest PR review
 pnpm review-flow ask                                   # questions about the latest run, also while it runs
-pnpm review-flow eval --harness claude --smoke         # score the eval dataset
+pnpm review-flow eval --harness claude                     # score the baseline set (--smoke, --full)
 pnpm review-flow runs                                  # past runs and evals, newest first
 pnpm review-flow compare <a> <b>                       # two runs or two evals side by side
 ```
@@ -121,9 +121,9 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Eval
 
-`review-flow eval [--smoke]` reviews every case of the [dataset](eval/README.md) with the same harness and model flags as `review` ([eval.ts](packages/review-flow/src/core/eval.ts), [eval-score.ts](packages/review-flow/src/core/eval-score.ts)).
+`review-flow eval [--smoke | --full]` reviews every case of the [dataset](eval/README.md) with the same harness and model flags as `review` ([eval.ts](packages/review-flow/src/core/eval.ts), [eval-score.ts](packages/review-flow/src/core/eval-score.ts)).
 
-- **Selection.** All cases, `--smoke` for the smoke set, or `--case <ids...>` for chosen ones (within the smoke set if both are given). [eval/README.md](eval/README.md) has a 3-case recipe for a quick end-to-end check.
+- **Selection.** The baseline set (12 cases) by default, `--smoke` for the smoke set (5), `--full` for all 35, or `--case <ids...>` for chosen ones (from all cases unless `--smoke` or `--full` is also given, which then limits them). [eval/README.md](eval/README.md) has a 3-case recipe for a quick end-to-end check.
 - **Checkouts.** One clone per case repo in `~/.cache/review-flow/eval/` (`--checkouts`), cloned on first use and fetched when a case's commit is missing. Each case checks out its head (detached, forced, `git clean -ffdx`) and is reviewed against its base. Cases run one at a time, in id order.
 - **Scoring.** A bug is found when a finding that wasn't refuted is in the same file, with lines overlapping or at most 3 apart. Reviewer recall counts refuted findings too. A failed case (clone, checkout, or reviewer failure) is counted but not scored. An agent changing a checkout stops the eval.
 - **Eval run.** `.review-flow/runs/<timestamp>-eval/` in the repo the eval is run from (`--repo`): `run.json` (harness, models, dataset, status, scores, per-step totals summed over cases, total wall time including clones), `cases.json` (outcome, finding counts, matched finding ids, cost, and time per case; rewritten after each case), and `cases/<id>/`, a normal run dir per case. Case run dirs live there, not in the checkout, so the checkout's `.gitignore` and index stay untouched.
@@ -132,7 +132,7 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Configuration
 
-CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (every role unless overridden), `--verifier-model`, `--summarizer-model`, `--effort` (likewise), `--verifier-effort`, `--summarizer-effort`, `--no-summary`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--trust`, `--allow-unenforced`, `--repo`, `--quiet`, `--verbose`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks with an arrow-key list (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base`, `--committed-only`, `--trust`, and `--allow-unenforced`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`. `summary` takes the same flags as `review`, minus `--no-summary`.
+CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (every role unless overridden), `--verifier-model`, `--summarizer-model`, `--effort` (likewise), `--verifier-effort`, `--summarizer-effort`, `--no-summary`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--trust`, `--allow-unenforced`, `--repo`, `--quiet`, `--verbose`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks with an arrow-key list (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base`, `--committed-only`, `--trust`, and `--allow-unenforced`, plus `--smoke`, `--full`, `--case`, `--dataset`, and `--checkouts`. `summary` takes the same flags as `review`, minus `--no-summary`.
 
 Defaults ([models.ts](packages/review-flow/src/core/models.ts)):
 
@@ -154,7 +154,7 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 - **Cursor with Grok 4.7:** low $1.37 / 9.1 min (5 findings), medium $5.41 / 31.4 min (6 findings, 77 reads outside the repo).
 - Cursor reports tokens only when a session finishes, so a task that times out or is stopped has no cost. Two Grok 4.7 high runs failed that way (15.6 and 20 min).
 - **Cache writes cost about 40× cache reads** (fitted from `calls.jsonl`: $8 vs $0.20 per million tokens, all at the 1-hour cache). A verifier that reads the diff from cache costs about $0.08 instead of $0.48 (see the [decision log](PLAN.md#decision-log)).
-- **Summary:** about $0.02 and 5–8 s per review on the smoke set, about 10% of the cost. It runs while the reviewer works, so it adds no time (see the [decision log](PLAN.md#decision-log)).
+- **Summary:** about $0.02 and 5–8 s per review on the baseline set, about 10% of the cost. It runs while the reviewer works, so it adds no time (see the [decision log](PLAN.md#decision-log)).
 - **Questions:** $0.06–0.08 and 13–29 s each on a small PR (typer#1128), the first and follow-ups alike (see the [decision log](PLAN.md#decision-log)).
 - **Repeat runs on the same diff are cheaper**: the reviewer prompt stays in the 1-hour cache, so a second run within the hour skipped a $0.50 cache write. Compare first runs with first runs.
 
@@ -175,5 +175,5 @@ All CLI code is one package, [packages/review-flow](packages/review-flow), publi
 - **Configuration (8):** CLI flags and the saved `harness` only. No other config keys, no JSONC or project files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
 - **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial.
-- **Evaluation (11):** the dataset and `eval` command exist; no baseline yet. Cases run one at a time, so the full set takes about an hour. Two evals at once must use different `--checkouts`.
+- **Evaluation (11):** the dataset and `eval` command exist; no baseline yet. Cases run one at a time, so the full set takes about an hour and the baseline set about 10 minutes. Two evals at once must use different `--checkouts`.
 - **Distribution (12):** no `doctor` command.

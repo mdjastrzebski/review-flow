@@ -1,7 +1,7 @@
 {
   "id": "starlette-3410",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Offload large GZip compression",
   "repo": "https://github.com/Kludex/starlette",
   "pr": "https://github.com/Kludex/starlette/pull/3410",

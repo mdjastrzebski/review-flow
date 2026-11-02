@@ -1,7 +1,7 @@
 {
   "id": "typer-1018",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "🐛 Ensure that `Optional[list]` values work correctly with callbacks",
   "repo": "https://github.com/fastapi/typer",
   "pr": "https://github.com/fastapi/typer/pull/1018",

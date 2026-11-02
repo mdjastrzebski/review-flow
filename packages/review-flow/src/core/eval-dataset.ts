@@ -36,11 +36,21 @@ export const EvalBug = z.strictObject({
 });
 export type EvalBug = z.infer<typeof EvalBug>;
 
+/**
+ * Nested sets, smallest first: `smoke` (a quick end-to-end check), `baseline` (what changes are
+ * measured on), `full` (everything). A case's `preset` is the smallest set it belongs to.
+ */
+export const EVAL_PRESETS = ["smoke", "baseline", "full"] as const;
+
+function presetIn(casePreset: EvalSubset, selected: EvalSubset): boolean {
+  return EVAL_PRESETS.indexOf(casePreset) <= EVAL_PRESETS.indexOf(selected);
+}
+
 export const EvalCase = z
   .strictObject({
     id: z.string().regex(/^[\w.-]+$/),
     kind: z.enum(["bug", "clean"]),
-    smoke: z.boolean(),
+    preset: z.enum(EVAL_PRESETS),
     title: z.string(),
     repo: z.string(),
     pr: z.string(),
@@ -54,15 +64,17 @@ export const EvalCase = z
   });
 export type EvalCase = z.infer<typeof EvalCase>;
 
+export type EvalSubset = (typeof EVAL_PRESETS)[number];
+
 export interface DatasetSelection {
-  /** Only the smoke set. */
-  smoke: boolean;
+  /** Only this subset; absent or `full` selects all cases. */
+  subset?: EvalSubset | undefined;
   /** Only these case ids; each must exist. Empty or absent selects all. */
   ids?: readonly string[];
 }
 
 /** Every `*.json` in `dir`, sorted by id, narrowed by `selection`. */
-export async function loadDataset(dir: string, selection: DatasetSelection): Promise<EvalCase[]> {
+export async function loadDataset(dir: string, selection: DatasetSelection = {}): Promise<EvalCase[]> {
   const entries = await readdir(dir).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error(
@@ -86,10 +98,10 @@ export async function loadDataset(dir: string, selection: DatasetSelection): Pro
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length > 0) throw new Error(`No such case in ${dir}: ${unknown.join(", ")}`);
   const selected = cases.filter(
-    (c) => (!selection.smoke || c.smoke) && (ids.length === 0 || ids.includes(c.id)),
+    (c) => (!selection.subset || presetIn(c.preset, selection.subset)) && (ids.length === 0 || ids.includes(c.id)),
   );
   if (selected.length === 0) {
-    throw new Error(`No ${selection.smoke ? "smoke " : ""}cases selected in ${dir}`);
+    throw new Error(`No ${selection.subset ? `${selection.subset} ` : ""}cases selected in ${dir}`);
   }
   return selected.toSorted((a, b) => a.id.localeCompare(b.id));
 }

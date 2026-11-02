@@ -1,7 +1,7 @@
 {
   "id": "click-2829",
   "kind": "bug",
-  "smoke": true,
+  "preset": "smoke",
   "title": "Only try to set flag_value if is_flag is true",
   "repo": "https://github.com/pallets/click",
   "pr": "https://github.com/pallets/click/pull/2829",

@@ -33,6 +33,7 @@ import {
   saveUserHarness,
   userConfigPath,
   type Effort,
+  type EvalSubset,
   type Harness,
   type Preflight,
   type Trust,
@@ -352,6 +353,7 @@ async function post(ref: string | undefined, options: { repo: string }): Promise
 
 interface EvalOptions extends AgentOptions {
   smoke: boolean;
+  full: boolean;
   summary: boolean;
   case?: string[];
   dataset: string;
@@ -364,14 +366,21 @@ interface EvalOptions extends AgentOptions {
 async function evaluate(options: EvalOptions): Promise<void> {
   const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
   const dataset = path.resolve(userCwd, options.dataset);
+  if (options.smoke && options.full) throw new Error("Use --smoke or --full, not both.");
+  // Without a subset flag, the baseline set; chosen cases (--case) may come from any set.
+  const subset: EvalSubset = options.smoke
+    ? "smoke"
+    : options.full || options.case
+      ? "full"
+      : "baseline";
   let result;
   try {
     result = await runEval({
       ...(await resolveAgent(options)),
       cwd: options.repo,
-      cases: await loadDataset(dataset, { smoke: options.smoke, ids: options.case ?? [] }),
+      cases: await loadDataset(dataset, { subset, ids: options.case ?? [] }),
       dataset,
-      smoke: options.smoke,
+      subset,
       summarize: options.summary,
       checkoutsDir: path.resolve(userCwd, options.checkouts),
       ...progressHooks(progress),
@@ -461,7 +470,8 @@ addAgentOptions(
   program
     .command("eval")
     .description("Review every case of the eval dataset and score the findings")
-    .option("--smoke", "only the smoke set", false)
+    .option("--smoke", "only the smoke set (5 cases, a quick end-to-end check)", false)
+    .option("--full", "all cases, not only the baseline set (12 cases)", false)
     .option("--no-summary", "skip the summary of each case")
     .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
 )

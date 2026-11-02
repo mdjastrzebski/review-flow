@@ -74,7 +74,7 @@ const bug = (found: boolean, foundByReviewer: boolean) => [
 ];
 
 describe("summarizeCases", () => {
-  const base = { smoke: false, error: null, unknownCostCalls: 0, durationMs: 1000 };
+  const base = { preset: "full" as const, error: null, unknownCostCalls: 0, durationMs: 1000 };
   const cases: CaseResult[] = [
     {
       ...base,

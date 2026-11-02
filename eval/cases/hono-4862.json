@@ -1,7 +1,7 @@
 {
   "id": "hono-4862",
   "kind": "clean",
-  "smoke": false,
+  "preset": "full",
   "title": "feat(trailing-slash): add `skip` option",
   "repo": "https://github.com/honojs/hono",
   "pr": "https://github.com/honojs/hono/pull/4862",

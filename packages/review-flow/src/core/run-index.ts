@@ -1,5 +1,6 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import type { EvalSubset } from "./eval-dataset.ts";
 import type { EvalScores } from "./eval-score.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { STATE_DIR } from "./run-dir.ts";
@@ -13,7 +14,7 @@ export interface EvalIndexEntry {
   status: "ok" | "failed";
   harness: Harness;
   models: RoleModels;
-  smoke: boolean;
+  subset: EvalSubset | null;
   /** Cases selected; `scores.cases` counts those that ran. */
   cases: number;
   scores: EvalScores;

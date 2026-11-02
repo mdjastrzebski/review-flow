@@ -1,7 +1,7 @@
 {
   "id": "chi-926",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "middleware: add Discard method to WrapResponseWriter",
   "repo": "https://github.com/go-chi/chi",
   "pr": "https://github.com/go-chi/chi/pull/926",

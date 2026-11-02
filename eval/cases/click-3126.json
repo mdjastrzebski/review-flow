@@ -1,7 +1,7 @@
 {
   "id": "click-3126",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Fix: Ensure fish completion handles multiline help strings correctly",
   "repo": "https://github.com/pallets/click",
   "pr": "https://github.com/pallets/click/pull/3126",

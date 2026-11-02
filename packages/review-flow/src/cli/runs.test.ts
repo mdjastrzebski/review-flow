@@ -79,12 +79,12 @@ describe("formatRuns", () => {
       ...entry({}),
       id: "20261101-120000-eval",
       kind: "eval",
-      smoke: true,
+      subset: "baseline",
       cases: 3,
       scores,
     };
     expect(formatRuns([evalEntry], plain).split("\n")[1]).toMatch(
-      /^20261101-120000-eval\s+ok\s+claude\s+claude-sonnet-5-5 high\s+eval: 3 smoke cases\s+recall 1\/2, 1.00 per clean\s+\$0.65/,
+      /^20261101-120000-eval\s+ok\s+claude\s+claude-sonnet-5-5 high\s+eval: 3 baseline cases\s+recall 1\/2, 1.00 per clean\s+\$0.65/,
     );
   });
 
@@ -220,7 +220,7 @@ function caseResult(
   return {
     id,
     kind,
-    smoke: false,
+    preset: "full",
     status: failed ? "failed" : "ok",
     error: failed ? "Reviewer failed (timeout): no output" : null,
     findings: failed ? null : typeof outcome === "number" ? outcome : 1,
@@ -243,7 +243,7 @@ function caseResult(
   };
 }
 
-function loadedEval(id: string, cases: CaseResult[], smoke = false): LoadedEval {
+function loadedEval(id: string, cases: CaseResult[], subset: "baseline" | null = null): LoadedEval {
   const scores = summarizeCases(cases);
   const totals = timed(scores.costUsd, scores.durationMs, cases.length * 2);
   return {
@@ -257,7 +257,7 @@ function loadedEval(id: string, cases: CaseResult[], smoke = false): LoadedEval 
         reviewer: { model: "claude-sonnet-5-5", effort: "high" },
         verifier: { model: "claude-sonnet-5-5", effort: "high" },
       },
-      dataset: { dir: "eval/cases", smoke, cases: cases.map((c) => c.id) },
+      dataset: { dir: "eval/cases", subset, cases: cases.map((c) => c.id) },
       startedAt: "",
       finishedAt: "",
       status: "ok",
@@ -326,9 +326,9 @@ describe("formatEvalCompare", () => {
   });
 
   it("warns when the evals ran different cases", () => {
-    const smoke = loadedEval("eval-s", [caseResult("a-1", "bug", "found")], true);
-    const text = formatEvalCompare(a, smoke, plain);
-    expect(text).toMatch(/Cases\s+3\s+1 \(smoke\)/);
+    const subsetRun = loadedEval("eval-s", [caseResult("a-1", "bug", "found")], "baseline");
+    const text = formatEvalCompare(a, subsetRun, plain);
+    expect(text).toMatch(/Cases\s+3\s+1 \(baseline\)/);
     expect(text).toContain("The evals ran different cases");
     expect(text).toContain("Only in A: b-2, d-4");
     expect(text).toContain("Cases: 0 of 1 shared cases changed");

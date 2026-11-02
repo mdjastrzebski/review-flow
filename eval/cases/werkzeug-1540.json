@@ -1,7 +1,7 @@
 {
   "id": "werkzeug-1540",
   "kind": "bug",
-  "smoke": true,
+  "preset": "baseline",
   "title": "break cycle in chained exceptions",
   "repo": "https://github.com/pallets/werkzeug",
   "pr": "https://github.com/pallets/werkzeug/pull/1540",

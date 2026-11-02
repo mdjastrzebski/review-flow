@@ -1,7 +1,7 @@
 {
   "id": "cobra-1559",
   "kind": "clean",
-  "smoke": false,
+  "preset": "baseline",
   "title": "Remove the default \"completion\" cmd if it is alone",
   "repo": "https://github.com/spf13/cobra",
   "pr": "https://github.com/spf13/cobra/pull/1559",

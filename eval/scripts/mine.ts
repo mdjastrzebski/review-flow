@@ -451,8 +451,21 @@ const CLEAN_CASES = [
   "go-chi/chi#986",
 ];
 
-/** Small diffs across languages, for quick iteration. */
+/** The smoke set: the smallest cases, for a quick end-to-end check. */
 const SMOKE = new Set([
+  "pallets/click#2829",
+  "h3js/h3#1372",
+  "urfave/cli#2245",
+  "pallets/werkzeug#3163",
+  "go-chi/chi#986",
+]);
+
+/** The baseline set: small diffs across languages, plus larger ones with more clean cases. */
+const BASELINE = new Set([
+  "sindresorhus/execa#199",
+  "spf13/cobra#1559",
+  "psf/requests#6154",
+  "Kludex/starlette#3143",
   "pallets/click#2829",
   "pallets/werkzeug#1540",
   "fastapi/typer#1128",
@@ -462,6 +475,11 @@ const SMOKE = new Set([
   "pallets/werkzeug#3163",
   "go-chi/chi#986",
 ]);
+
+/** The smallest set a case belongs to (`smoke` within `baseline` within `full`). */
+function presetOf(key: string): "smoke" | "baseline" | "full" {
+  return SMOKE.has(key) ? "smoke" : BASELINE.has(key) ? "baseline" : "full";
+}
 
 /**
  * Where blame misses the bug. chi#926 added `Discard` but left the `Flush` methods writing to
@@ -540,7 +558,7 @@ function build(locatedPath: string, cleanPath: string, clonesDir: string, casesD
       .filter((bug) => bug.locations.length > 0);
     write(key, {
       kind: "bug",
-      smoke: SMOKE.has(key),
+      preset: presetOf(key),
       title: intro.title,
       repo: `https://github.com/${repo}`,
       pr: intro.url,
@@ -556,7 +574,7 @@ function build(locatedPath: string, cleanPath: string, clonesDir: string, casesD
     if (!candidate) throw new Error(`${key} is not in ${cleanPath}`);
     write(key, {
       kind: "clean",
-      smoke: SMOKE.has(key),
+      preset: presetOf(key),
       title: candidate.title.replace(/ \(#\d+\)$/, ""),
       repo: `https://github.com/${candidate.repo}`,
       pr: `https://github.com/${candidate.repo}/pull/${candidate.pr}`,

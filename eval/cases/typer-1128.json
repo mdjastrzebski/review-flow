@@ -1,7 +1,7 @@
 {
   "id": "typer-1128",
   "kind": "bug",
-  "smoke": true,
+  "preset": "baseline",
   "title": "⚡️ Lazy-load `rich_utils` to reduce startup time",
   "repo": "https://github.com/fastapi/typer",
   "pr": "https://github.com/fastapi/typer/pull/1128",

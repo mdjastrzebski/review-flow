@@ -1,7 +1,7 @@
 {
   "id": "h3-1372",
   "kind": "bug",
-  "smoke": true,
+  "preset": "smoke",
   "title": "feat(error): coerce thrown number/string to HTTPError",
   "repo": "https://github.com/h3js/h3",
   "pr": "https://github.com/h3js/h3/pull/1372",

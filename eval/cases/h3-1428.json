@@ -1,7 +1,7 @@
 {
   "id": "h3-1428",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "feat: export `resolveDotSegments` as a public path utility",
   "repo": "https://github.com/h3js/h3",
   "pr": "https://github.com/h3js/h3/pull/1428",

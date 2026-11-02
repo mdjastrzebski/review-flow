@@ -1,7 +1,7 @@
 {
   "id": "attrs-1463",
   "kind": "clean",
-  "smoke": false,
+  "preset": "full",
   "title": "Improve performance of asdict in the common case",
   "repo": "https://github.com/python-attrs/attrs",
   "pr": "https://github.com/python-attrs/attrs/pull/1463",

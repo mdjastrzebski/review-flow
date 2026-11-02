@@ -1,7 +1,7 @@
 {
   "id": "yargs-556",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "add config lookup for .implies()",
   "repo": "https://github.com/yargs/yargs",
   "pr": "https://github.com/yargs/yargs/pull/556",

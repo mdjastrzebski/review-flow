@@ -1,7 +1,7 @@
 {
   "id": "hono-5133",
   "kind": "bug",
-  "smoke": true,
+  "preset": "baseline",
   "title": "fix(request): fix multipart boundary mismatch in `cloneRawRequest`",
   "repo": "https://github.com/honojs/hono",
   "pr": "https://github.com/honojs/hono/pull/5133",

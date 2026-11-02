@@ -1,7 +1,7 @@
 {
   "id": "urfave-cli-2163",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Allow the user to stop processing flags after seeing N args",
   "repo": "https://github.com/urfave/cli",
   "pr": "https://github.com/urfave/cli/pull/2163",

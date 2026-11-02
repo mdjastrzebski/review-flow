@@ -1,7 +1,7 @@
 {
   "id": "requests-6655",
   "kind": "bug",
-  "smoke": false,
+  "preset": "full",
   "title": "Use TLS settings in selecting connection pool",
   "repo": "https://github.com/psf/requests",
   "pr": "https://github.com/psf/requests/pull/6655",

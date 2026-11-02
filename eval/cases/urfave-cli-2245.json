@@ -1,7 +1,7 @@
 {
   "id": "urfave-cli-2245",
   "kind": "bug",
-  "smoke": true,
+  "preset": "smoke",
   "title": "Fix:(issue_2244) Dont check req flags for help and completion commands",
   "repo": "https://github.com/urfave/cli",
   "pr": "https://github.com/urfave/cli/pull/2245",
