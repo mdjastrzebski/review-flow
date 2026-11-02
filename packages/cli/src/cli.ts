@@ -5,19 +5,24 @@ import {
   EFFORTS,
   HARNESSES,
   NoChangesError,
+  defaultBase,
   defaultCheckoutsDir,
   loadDataset,
   loadRun,
   readIndex,
+  readUserConfig,
   resolveModels,
   resolveRepoRoot,
   resolveRun,
   runEval,
   runReview,
+  saveUserHarness,
+  userConfigPath,
   type Effort,
   type Harness,
 } from "@review-flow/core";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { formatFindings } from "./format.ts";
 import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
 
@@ -26,7 +31,7 @@ const userCwd = process.env.INIT_CWD ?? process.cwd();
 const colorOptions = () => ({ color: process.stdout.hasColors?.() ?? false });
 
 interface AgentOptions {
-  harness: Harness;
+  harness?: Harness;
   model?: string;
   verifierModel?: string;
   effort?: Effort;
@@ -35,16 +40,55 @@ interface AgentOptions {
   cursorBin: string;
 }
 
-function resolveAgent(options: AgentOptions) {
+type Log = (message: string) => void;
+
+const interactive = () => Boolean(process.stdin.isTTY && process.stderr.isTTY);
+
+/** Asks on stderr so stdout stays clean for --quiet. */
+async function ask(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return (await rl.question(question)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/** --harness, else the saved one, else asked in a TTY and saved for next time. */
+async function resolveHarness(flag: Harness | undefined, log: Log): Promise<Harness> {
+  if (flag !== undefined) return flag;
+  const saved = (await readUserConfig()).harness;
+  if (saved !== undefined) {
+    log(`Harness: ${saved} (from ${userConfigPath()})`);
+    return saved;
+  }
+  const choices = HARNESSES.join(", ");
+  if (!interactive()) throw new Error(`No harness set. Pass --harness (${choices}).`);
+  const fallback: Harness = "claude";
+  for (;;) {
+    const answer = (await ask(`Harness (${choices}) [${fallback}]: `)) || fallback;
+    const harness = HARNESSES.find((name) => name === answer);
+    if (harness === undefined) {
+      console.error(`Unknown harness: ${answer}`);
+      continue;
+    }
+    await saveUserHarness(harness);
+    console.error(`Saved to ${userConfigPath()}; --harness overrides it.`);
+    return harness;
+  }
+}
+
+async function resolveAgent(options: AgentOptions, log: Log) {
+  const harness = await resolveHarness(options.harness, log);
   return {
-    harness: options.harness,
-    models: resolveModels(options.harness, {
+    harness,
+    models: resolveModels(harness, {
       model: options.model ?? null,
       verifierModel: options.verifierModel ?? null,
       effort: options.effort ?? null,
       verifierEffort: options.verifierEffort ?? null,
     }),
-    runAgent: getAgent(options.harness, {
+    runAgent: getAgent(harness, {
       claudeBin: options.claudeBin,
       cursorBin: options.cursorBin,
     }),
@@ -55,7 +99,10 @@ function resolveAgent(options: AgentOptions) {
 function addAgentOptions(command: Command): Command {
   return command
     .addOption(
-      new Option("-H, --harness <name>", "agent harness").choices(HARNESSES).makeOptionMandatory(),
+      new Option(
+        "-H, --harness <name>",
+        "agent harness; default: the one saved in the user config, asked for in a TTY",
+      ).choices(HARNESSES),
     )
     .option("--model <id>", "model for the reviewer (and verifier, unless overridden)")
     .option("--verifier-model <id>", "model for the verifiers")
@@ -71,26 +118,39 @@ function addAgentOptions(command: Command): Command {
 }
 
 interface ReviewOptions extends AgentOptions {
-  base: string;
+  base?: string;
+  committedOnly: boolean;
   repo: string;
   quiet: boolean;
 }
 
+/** The default base, fetched from origin; in a TTY the user can confirm or replace it. */
+async function askBase(repo: string, log: Log): Promise<string> {
+  log("No --base given; fetching the default branch from origin...");
+  const { ref, warning } = await defaultBase(repo);
+  if (warning !== null) console.error(warning);
+  if (!interactive()) return ref;
+  return (await ask(`Base [${ref}]: `)) || ref;
+}
+
 async function review(options: ReviewOptions): Promise<void> {
-  const log = options.quiet ? () => {} : (message: string) => console.log(message);
+  const log: Log = options.quiet ? () => {} : (message: string) => console.log(message);
+  const agent = await resolveAgent(options, log);
+  const base = options.base ?? (await askBase(options.repo, log));
 
   let result;
   try {
     result = await runReview({
-      ...resolveAgent(options),
+      ...agent,
       cwd: options.repo,
-      base: options.base,
+      base,
+      committedOnly: options.committedOnly,
       log,
     });
   } catch (error) {
     if (!(error instanceof NoChangesError)) throw error;
     // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
-    console.error(`Nothing to review: no changes between ${error.base} and HEAD.`);
+    console.error(`Nothing to review: ${error.message}`);
     return;
   }
 
@@ -101,7 +161,7 @@ async function review(options: ReviewOptions): Promise<void> {
   }
   console.log(
     formatFindings(
-      { ...result, base: options.base, reportPath: result.runDir.reportPath },
+      { ...result, base, reportPath: result.runDir.reportPath },
       {
         color: process.stdout.hasColors?.() ?? false,
         width: Math.min(process.stdout.columns ?? 100, 100),
@@ -120,15 +180,16 @@ interface EvalOptions extends AgentOptions {
 }
 
 async function evaluate(options: EvalOptions): Promise<void> {
+  const log: Log = options.quiet ? () => {} : (message: string) => console.log(message);
   const dataset = path.resolve(userCwd, options.dataset);
   const result = await runEval({
-    ...resolveAgent(options),
+    ...(await resolveAgent(options, log)),
     cwd: options.repo,
     cases: await loadDataset(dataset, { smoke: options.smoke, ids: options.case ?? [] }),
     dataset,
     smoke: options.smoke,
     checkoutsDir: path.resolve(userCwd, options.checkouts),
-    log: options.quiet ? () => {} : (message: string) => console.log(message),
+    log,
   });
   // Like review: --quiet prints only the run dir.
   console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
@@ -161,9 +222,13 @@ addAgentOptions(
   program
     .command("review")
     .description("Review the current branch against a base ref")
-    .requiredOption("-b, --base <ref>", "base ref to diff against (merge-base...HEAD)"),
+    .option(
+      "-b, --base <ref>",
+      "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
+    ),
 )
   .option("--repo <path>", "repository to review", userCwd)
+  .option("--committed-only", "review HEAD only, without uncommitted changes", false)
   .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)
   .action(review);
 

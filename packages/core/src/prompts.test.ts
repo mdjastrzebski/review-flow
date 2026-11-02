@@ -33,6 +33,7 @@ describe("reviewer prompt", () => {
   it("renders with base and diff", async () => {
     const prompt = renderPrompt(await loadPrompt("reviewer"), {
       base: "main",
+      head: "`HEAD`",
       diffBlock: codeFence("DIFF", "diff"),
     });
     expect(prompt).toContain("`main`");

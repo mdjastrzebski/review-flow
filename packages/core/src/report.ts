@@ -9,7 +9,7 @@ export interface ReportInput {
   harness: Harness;
   models: RoleModels;
   base: { ref: string; sha: string };
-  head: { sha: string };
+  head: { sha: string; snapshotSha?: string };
   durationMs: number;
   /** null when the harness reported no cost (Cursor). */
   costUsd: number | null;
@@ -124,7 +124,7 @@ function header(input: ReportInput): string {
       `- **Harness:** ${input.harness}`,
       `- **Reviewer:** ${describeModel(input.models.reviewer)}`,
       `- **Verifier:** ${describeModel(input.models.verifier)}`,
-      `- **Base:** \`${input.base.ref}\` (\`${shortSha(input.base.sha)}\`) · **Head:** \`${shortSha(input.head.sha)}\``,
+      `- **Base:** \`${input.base.ref}\` (\`${shortSha(input.base.sha)}\`) · **Head:** \`${shortSha(input.head.sha)}\`${input.head.snapshotSha === undefined ? "" : " plus uncommitted changes"}`,
       `- ${stats.join(" · ")}`,
     ].join("\n"),
   ].join("\n\n");

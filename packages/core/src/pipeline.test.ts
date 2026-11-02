@@ -372,6 +372,50 @@ describe("runReview", () => {
     ]);
   });
 
+  it("reviews uncommitted changes through a snapshot, leaving the index alone", async () => {
+    await writeFile(path.join(repo, "a.txt"), "a\nb\nc\n");
+    await writeFile(path.join(repo, "new.txt"), "new\n");
+    const { runAgent, tasks } = stubAgent();
+    const { runDir } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    const diff = await readFile(runDir.diffPath, "utf8");
+    expect(diff).toContain("+c");
+    expect(diff).toContain("+new");
+    expect(tasks[0]?.prompt).toContain("`HEAD` plus uncommitted changes");
+    const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
+    expect(run.head.snapshotSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(run.head.snapshotSha).not.toBe(run.head.sha);
+    // The developer's index still has nothing staged.
+    expect(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: repo }).toString()).toBe(
+      "",
+    );
+  });
+
+  it("reviews HEAD only with committedOnly", async () => {
+    await writeFile(path.join(repo, "a.txt"), "a\nb\nc\n");
+    const { runAgent, tasks } = stubAgent();
+    const { runDir } = await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+      committedOnly: true,
+    });
+
+    expect(await readFile(runDir.diffPath, "utf8")).not.toContain("+c");
+    expect(tasks[0]?.prompt).not.toContain("uncommitted");
+    const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
+    expect(run.head.snapshotSha).toBeUndefined();
+  });
+
+  it("reviews uncommitted changes on a branch with no commits of its own", async () => {
+    git("switch", "-q", "main");
+    await writeFile(path.join(repo, "a.txt"), "a\nz\n");
+    const { runAgent } = stubAgent();
+    const { runDir } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    expect(await readFile(runDir.diffPath, "utf8")).toContain("+z");
+  });
+
   it("fails with a clear error on an empty diff", async () => {
     const { runAgent, tasks } = stubAgent();
     await expect(

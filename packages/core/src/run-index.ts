@@ -42,7 +42,7 @@ export interface ReviewIndexEntry {
   harness: Harness;
   models: RoleModels;
   base: { ref: string; sha: string };
-  head: { sha: string };
+  head: { sha: string; snapshotSha?: string };
   diff: DiffStats;
   /** null when the run failed before the reviewer returned. */
   findings: number | null;

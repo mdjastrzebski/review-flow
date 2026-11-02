@@ -2,7 +2,7 @@ You are verifying a claim someone made about a code change. You did not write th
 
 ## Scope
 
-- The change is the diff between `{{base}}` and `HEAD`, given to you under "The change".
+- The change is the diff between `{{base}}` and {{head}}, given to you under "The change".
 - You are in the repository root. Read the code yourself: the location named in the claim, its callers and callees, types, tests and config. Do not rely on the claim's description of the code. You have read-only access; do not try to modify files or run commands.
 
 ## Step 1: the claim

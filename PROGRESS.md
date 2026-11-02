@@ -7,7 +7,7 @@ What is implemented so far. The target design is [SPEC.md](SPEC.md).
 A working CLI that reviews a branch with agents run through a headless CLI, `claude -p` or Cursor's `agent -p`: one reviewer finds issues, verifiers check each finding, and the result is a ranked report.
 
 ```bash
-pnpm review-flow review --base main --harness claude   # or --harness cursor
+pnpm review-flow review                                # asks for harness and base; or -H claude -b main
 pnpm review-flow eval --harness claude --smoke         # score the eval dataset
 pnpm review-flow runs                                  # past runs and evals, newest first
 pnpm review-flow compare <a> <b>                       # two runs or two evals side by side
@@ -29,7 +29,7 @@ Both spawn the CLI per task, with the prompt on stdin, and read its `stream-json
 
 `collect → review → normalize → verify → rank → report` ([pipeline.ts](packages/core/src/pipeline.ts))
 
-1. **Collect.** Diff `base...HEAD` (three-dot). Exit cleanly if there are no changes.
+1. **Collect.** Diff `base...HEAD` (three-dot). Uncommitted changes (staged, unstaged, and untracked, respecting `.gitignore`) are included through a snapshot commit on top of `HEAD`, built with a temporary index so the developer's index is untouched; `--committed-only` skips them, and `eval` always does. The CLI prints how many uncommitted files are included, and the prompts say the change is "`HEAD` plus uncommitted changes". Exit cleanly if there are no changes.
 2. **Review.** One agent session gets the full diff and read-only repo access, and returns findings as structured JSON ([reviewer.md](packages/core/prompts/reviewer.md)). It is told to report only concrete defects with a failure scenario, at most 15.
 3. **Normalize.** Cap at 15 findings, assign ids (`F-001`…), make paths repo-relative, fix reversed line ranges.
 4. **Verify.** One fresh agent session per finding, up to 3 in parallel ([verifier.md](packages/core/prompts/verifier.md)). The verifier tries to refute the claim and returns `confirmed`, `refuted`, or `inconclusive`, plus severity, confidence, fix cost, evidence, and an assessment of the suggested fix. To avoid anchoring, it doesn't see the reviewer's rationale, severity, or category. The diff is shared context ([change.md](packages/core/prompts/change.md)), framed as data, not instructions. The first verifier runs alone until its first tool call, so its request has cached the diff before the others start.
@@ -47,16 +47,16 @@ Both spawn the CLI per task, with the prompt on stdin, and read its `stream-json
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/` (added to `.gitignore` automatically):
 
-| File                | Content                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `diff.patch`        | Reviewed diff                                                                                                                              |
-| `prompts/<task>.md` | Exact prompt per task                                                                                                                      |
-| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                                                              |
-| `calls.jsonl`       | One line per agent task: role, step, model, effort, status, tokens, cost and cost source, start, duration, reads outside the repo that ran |
-| `findings.json`     | Normalized findings                                                                                                                        |
-| `verdicts.json`     | Verdict per finding                                                                                                                        |
-| `report.md`         | Ranked report                                                                                                                              |
-| `run.json`          | Models, base/head SHAs, status, and per-step and total calls, cost, tokens, and wall time                                                  |
+| File                | Content                                                                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diff.patch`        | Reviewed diff                                                                                                                                              |
+| `prompts/<task>.md` | Exact prompt per task                                                                                                                                      |
+| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                                                                              |
+| `calls.jsonl`       | One line per agent task: role, step, model, effort, status, tokens, cost and cost source, start, duration, reads outside the repo that ran                 |
+| `findings.json`     | Normalized findings                                                                                                                                        |
+| `verdicts.json`     | Verdict per finding                                                                                                                                        |
+| `report.md`         | Ranked report                                                                                                                                              |
+| `run.json`          | Models, base/head SHAs (plus `head.snapshotSha` when uncommitted changes were reviewed), status, and per-step and total calls, cost, tokens, and wall time |
 
 Steps in `run.json` are `collect`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls. A call's cost source is `reported` when the CLI gave a cost, `computed` when its tokens and model are in the price table (standard API prices for Claude 5.5 models, Grok 4.7, and Composer 2.5; fast variants and long-context surcharges are not priced), else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
 
@@ -80,7 +80,7 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Configuration
 
-CLI flags only: `-b, --base`, `-H, --harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--repo`, `--quiet`. `eval` takes the same, minus `--base`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
+CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (reviewer, and verifier unless overridden), `--verifier-model`, `--effort` (likewise), `--verifier-effort`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--repo`, `--quiet`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base` and `--committed-only`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`.
 
 Defaults ([models.ts](packages/core/src/models.ts)):
 
@@ -106,12 +106,12 @@ From local runs on this repo (Claude harness with the earlier Opus 5.5 defaults 
 
 ## Gaps against the [spec](SPEC.md)
 
-- **Usage (2):** `--base` and `--harness` are required. No PR, commit, or range targets, no uncommitted changes. Only `review`, `eval`, `runs`, and `compare` exist.
+- **Usage (2):** `--harness` (or a saved one) is required without a TTY; installed CLIs aren't detected. No PR, branch, commit, or range targets. Only `review`, `eval`, `runs`, and `compare` exist.
 - **Trust (3):** none. Reviews run in the developer's checkout, not a worktree.
 - **Pipeline (4):** one finder, no dedupe or filter, one verifier session per finding with the full diff each time.
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
 - **Incremental reviews (6), posting and exit codes (7):** none.
-- **Configuration (8):** CLI flags only. No config files, presets, budgets, or `REVIEW.md`.
+- **Configuration (8):** CLI flags and the saved `harness` only. No other config keys, no JSONC or project files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
 - **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial. The root `.gitignore` is edited.
 - **Evaluation (11):** the dataset and `eval` command exist; no baseline yet. Cases run one at a time, so the full set takes about an hour. Two evals at once must use different `--checkouts`.

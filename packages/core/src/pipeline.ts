@@ -10,6 +10,7 @@ import {
   resolveRepoRoot,
   shortSha,
   snapshotStatus,
+  snapshotWorkingTree,
   type StatusSnapshot,
 } from "./git.ts";
 import { describeModel } from "./format.ts";
@@ -23,7 +24,12 @@ import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
 import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
-import { buildChangeContext, buildVerifierPrompt, verifierTaskId } from "./verify.ts";
+import {
+  buildChangeContext,
+  buildVerifierPrompt,
+  verifierTaskId,
+  type ChangeRange,
+} from "./verify.ts";
 
 const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
 const VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -37,6 +43,8 @@ export interface ReviewRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  /** Review HEAD only; by default uncommitted changes are reviewed too, through a snapshot. */
+  committedOnly?: boolean;
   /**
    * Where to create the run dir (an eval case). By default it goes in the repo's
    * `.review-flow/runs/` and is indexed; with a path, the repo's .gitignore and index are left alone.
@@ -59,7 +67,8 @@ export interface RunRecord {
   harness: Harness;
   models: RoleModels;
   base: { ref: string; sha: string };
-  head: { sha: string };
+  /** snapshotSha: the commit holding uncommitted changes that was reviewed instead of HEAD. */
+  head: { sha: string; snapshotSha?: string };
   startedAt: string;
   finishedAt: string;
   status: "ok" | "failed";
@@ -201,11 +210,15 @@ export function failedVerdict(
  */
 async function verifyFindings(
   findings: readonly NormalizedFinding[],
-  context: { base: string; diff: string; models: RoleModels },
+  context: { change: ChangeRange; diff: string; models: RoleModels },
   ctx: TaskContext,
 ): Promise<Record<string, Verdict>> {
   const template = await loadPrompt("verifier");
-  const sharedContext = buildChangeContext(await loadPrompt("change"), context.base, context.diff);
+  const sharedContext = buildChangeContext(
+    await loadPrompt("change"),
+    context.change,
+    context.diff,
+  );
   const warm = Promise.withResolvers<void>();
   // rejectOnClear: otherwise cleared tasks never settle and allSettled hangs.
   const limit = pLimit({ concurrency: VERIFIER_CONCURRENCY, rejectOnClear: true });
@@ -224,7 +237,7 @@ async function verifyFindings(
             {
               taskId: verifierTaskId(finding),
               role: "verifier",
-              prompt: buildVerifierPrompt(template, finding, context.base),
+              prompt: buildVerifierPrompt(template, finding, context.change),
               sharedContext,
               cwd: ctx.repo,
               schema: Verdict,
@@ -263,8 +276,13 @@ async function verifyFindings(
 
 /** The branch has no changes against the base; not a failure, just nothing to review. */
 export class NoChangesError extends Error {
-  constructor(readonly base: string) {
-    super(`No changes between ${base} and HEAD.`);
+  constructor(
+    readonly base: string,
+    readonly withUncommitted = false,
+  ) {
+    super(
+      `No changes between ${base} and HEAD${withUncommitted ? " plus uncommitted changes" : ""}.`,
+    );
     this.name = "NoChangesError";
   }
 }
@@ -276,11 +294,18 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const repo = await resolveRepoRoot(options.cwd);
   const baseSha = await resolveCommit(repo, base);
   const headSha = await resolveCommit(repo, "HEAD");
+  const snapshot = options.committedOnly ? null : await snapshotWorkingTree(repo);
+  const head = snapshot === null ? { sha: headSha } : { sha: headSha, snapshotSha: snapshot.sha };
+  const change: ChangeRange = {
+    base,
+    head: snapshot === null ? "`HEAD`" : "`HEAD` plus uncommitted changes",
+  };
 
-  const diff = await diffAgainstBase(repo, base);
+  const diff = await diffAgainstBase(repo, base, snapshot?.sha);
   if (diff.trim() === "") {
-    throw new NoChangesError(base);
+    throw new NoChangesError(base, snapshot !== null);
   }
+  if (snapshot !== null) log(`Including ${snapshot.files} uncommitted file(s)`);
   log(`Reviewer: ${describeModel(models.reviewer)}`);
   log(`Verifier: ${describeModel(models.verifier)}`);
 
@@ -308,7 +333,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   try {
     const findings = await timeStep(stepDurations, "review", async () => {
       const prompt = renderPrompt(await loadPrompt("reviewer"), {
-        base,
+        ...change,
         diffBlock: codeFence(diff, "diff"),
       });
       log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
@@ -346,7 +371,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
           `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
         );
       }
-      const result = await verifyFindings(findings, { base, diff, models }, ctx);
+      const result = await verifyFindings(findings, { change, diff, models }, ctx);
       await writeJson(runDir.verdictsPath, result);
       log(`Verdicts → ${runDir.verdictsPath}`);
       return result;
@@ -361,7 +386,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         harness,
         models,
         base: { ref: base, sha: baseSha },
-        head: { sha: headSha },
+        head,
         durationMs,
         costUsd,
         findings,
@@ -381,7 +406,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       harness,
       models,
       base: { ref: base, sha: baseSha },
-      head: { sha: headSha },
+      head,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       status: failure === null ? "ok" : "failed",

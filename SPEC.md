@@ -198,6 +198,7 @@ Keys are camelCase and mirror CLI flags where a flag exists.
 | Key           | Holds                                                    |
 | ------------- | -------------------------------------------------------- |
 | `preset`      | Preset name (default `standard`)                         |
+| `harness`     | Harness for every role, unless `roles` overrides it      |
 | `presets`     | Overrides of built-in presets, or new named presets      |
 | `roles`       | Per role (finder, verifier, ...): harness, model, effort |
 | `harnesses`   | Harness profiles (see 9)                                 |
@@ -253,7 +254,7 @@ Each CLI is described by a profile:
 
 `claude`, `codex`, and `cursor` are built in. Users add or override profiles in config, so a new CLI needs no code change.
 
-By default, review-flow uses an installed supported CLI. When several are installed, it prefers `claude`, because it reports cost. The choice is printed. Each role can use a different harness and model.
+When no harness is set by a flag or config, review-flow picks an installed supported CLI, preferring `claude` because it reports cost. In a TTY it asks to confirm that pick and saves the answer as `harness` in the user config, so later runs don't ask. The choice is printed. Each role can use a different harness and model.
 
 ### Cost
 

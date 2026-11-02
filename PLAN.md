@@ -39,15 +39,15 @@ Goal: zero-config reviews that are good by default, with overrides for everythin
 - [ ] **Presets (8).** `quick`, `standard`, and `deep`, with values from phase 2. `deep` adds finder focus areas and verifier voting, each checked with an eval.
 - [ ] **Budgets (8).** Money and time limits, the pre-flight estimate, the graceful stop, and the unknown-cost warning.
 - [ ] **Exit codes (7).** `failOn` and exit codes `0` to `4` and `130`.
-- [ ] **Base detection (2).** Fetch `origin/main` or `master`, prompt in a TTY, and fall back to local.
-- [ ] **Default harness (9).** Detect installed CLIs and remove the required `--harness` flag.
+- [x] **Base detection (2).** Fetch `origin/main` or `master`, prompt in a TTY, and fall back to local.
+- [ ] **Default harness (9).** Detect installed CLIs and remove the required `--harness` flag. Done so far: a TTY run asks for the harness and saves it to the user config.
 
 ## Phase 4: User features
 
 Goal: cover how developers actually review, in order of usefulness.
 
 - [ ] **Worktree (4, 10).** Review in a disposable worktree. `.review-flow/` gets its own `.gitignore`, and the root `.gitignore` is no longer edited.
-- [ ] **Targets (2).** Branch, commit, `a..b`, and `a...b` targets, plus uncommitted changes through a snapshot commit.
+- [ ] **Targets (2).** Branch, commit, `a..b`, and `a...b` targets. Done so far: uncommitted changes through a snapshot commit.
 - [ ] **Distribution (12).** The npm package `review-flow` and `review-flow doctor`.
 - [ ] **PR targets and trust (2, 3).** PR number or URL, trust levels and their policies, and `--trust`.
 - [ ] **Posting (7).** `review-flow post` with selection, editing, the stale-head check, preview, and a `COMMENT` review.

@@ -32,6 +32,12 @@ function fixSection(suggestedFix: string | null): string {
   return `Suggested fix:\n\n${codeFence(truncateFix(suggestedFix).text)}`;
 }
 
+/** What the diff spans, as prompt text: `base` is a ref, `head` is already formatted. */
+export interface ChangeRange {
+  base: string;
+  head: string;
+}
+
 /**
  * Builds the verifier prompt from the finding's title, location, claim and (truncated) suggested
  * fix. The reviewer's rationale, severity and category are deliberately left out so they can't
@@ -40,10 +46,10 @@ function fixSection(suggestedFix: string | null): string {
 export function buildVerifierPrompt(
   template: string,
   finding: NormalizedFinding,
-  base: string,
+  change: ChangeRange,
 ): string {
   return renderPrompt(template, {
-    base,
+    ...change,
     title: finding.title,
     location: formatLocation(finding),
     claim: finding.claim,
@@ -55,6 +61,6 @@ export function buildVerifierPrompt(
  * The diff, as context shared by all verifiers. It is identical for every finding, so the harness
  * can cache it once per run instead of once per verifier.
  */
-export function buildChangeContext(template: string, base: string, diff: string): string {
-  return renderPrompt(template, { base, diffBlock: codeFence(diff, "diff") });
+export function buildChangeContext(template: string, change: ChangeRange, diff: string): string {
+  return renderPrompt(template, { ...change, diffBlock: codeFence(diff, "diff") });
 }

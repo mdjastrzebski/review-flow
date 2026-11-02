@@ -111,6 +111,8 @@ async function runCase(
       runAgent: options.runAgent,
       log: (message) => options.log(`  ${message}`),
       runRoot: caseRoot,
+      // The checkout is clean; this also keeps a stray file out of the scored diff.
+      committedOnly: true,
     });
   } catch (caught) {
     // Agents wrote to the checkout despite read-only settings: stop rather than carry on.

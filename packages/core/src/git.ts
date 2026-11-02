@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
     maxBuffer: 256 * 1024 * 1024,
     // Fail instead of waiting for credentials (clone and fetch of eval repos).
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
   });
   return stdout;
 }
@@ -69,13 +70,98 @@ export async function checkoutDetached(repo: string, sha: string): Promise<void>
   await git(repo, ["clean", "--quiet", "-ffdx"]);
 }
 
+const DEFAULT_BRANCHES = ["main", "master"] as const;
+
+export interface DefaultBase {
+  ref: string;
+  /** Set when origin couldn't be fetched and a possibly stale local branch is used. */
+  warning: string | null;
+}
+
+/**
+ * The base when none is given: the default branch freshly fetched from origin, so already-merged
+ * upstream work doesn't leak into the diff. Falls back to the local branch.
+ */
+export async function defaultBase(cwd: string): Promise<DefaultBase> {
+  const repo = await resolveRepoRoot(cwd);
+  const hasOrigin = await git(repo, ["remote", "get-url", "origin"]).then(
+    () => true,
+    () => false,
+  );
+  if (hasOrigin) {
+    for (const branch of DEFAULT_BRANCHES) {
+      try {
+        await git(repo, [
+          "fetch",
+          "--quiet",
+          "origin",
+          `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+        ]);
+        return { ref: `origin/${branch}`, warning: null };
+      } catch {
+        // Not on the remote, or the fetch failed; try the next name, then local.
+      }
+    }
+  }
+  for (const branch of DEFAULT_BRANCHES) {
+    if (!(await hasCommit(repo, `refs/heads/${branch}`))) continue;
+    const reason = hasOrigin ? `Couldn't fetch main or master from origin` : "No origin remote";
+    return { ref: branch, warning: `${reason}; using local ${branch}, which may be stale.` };
+  }
+  throw new Error("No main or master branch found. Pass --base <ref>.");
+}
+
 export async function shortSha(repo: string, ref: string): Promise<string> {
   return (await git(repo, ["rev-parse", "--short", ref])).trim();
 }
 
-/** Changes on HEAD since it diverged from `base` (three-dot diff). */
-export async function diffAgainstBase(repo: string, base: string): Promise<string> {
-  return git(repo, ["diff", "--no-color", "--no-ext-diff", `${base}...HEAD`]);
+/** Changes on `head` since it diverged from `base` (three-dot diff). */
+export async function diffAgainstBase(repo: string, base: string, head = "HEAD"): Promise<string> {
+  return git(repo, ["diff", "--no-color", "--no-ext-diff", `${base}...${head}`]);
+}
+
+export interface WorkingTreeSnapshot {
+  /** A commit on top of HEAD holding the working tree. Unreferenced, so git gc removes it. */
+  sha: string;
+  /** Files that differ from HEAD. */
+  files: number;
+}
+
+/**
+ * Commits the working tree (staged, unstaged, and untracked, respecting .gitignore) on top of
+ * HEAD, using a temporary index so the developer's index, branch, and stash are untouched.
+ * Returns null when the working tree matches HEAD. Run dirs in `.review-flow/` are left out.
+ */
+export async function snapshotWorkingTree(repo: string): Promise<WorkingTreeSnapshot | null> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "review-flow-index-"));
+  const env = { GIT_INDEX_FILE: path.join(tempDir, "index") };
+  try {
+    // Start from HEAD so tracked files that match .gitignore are kept, not dropped.
+    await git(repo, ["read-tree", "HEAD"], env);
+    await git(repo, ["add", "-A"], env);
+    // Not an exclude pathspec: git add fails on one that names an ignored path.
+    await git(repo, ["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", ".review-flow"], env);
+    const tree = (await git(repo, ["write-tree"], env)).trim();
+    const changed = await git(repo, ["diff", "--name-only", "-z", "HEAD", tree]);
+    const files = changed.split("\0").filter((name) => name !== "").length;
+    if (files === 0) return null;
+    const identity = { name: "review-flow", email: "review-flow@localhost" };
+    const sha = (
+      await git(
+        repo,
+        ["commit-tree", "--no-gpg-sign", tree, "-p", "HEAD", "-m", "review-flow snapshot"],
+        {
+          GIT_AUTHOR_NAME: identity.name,
+          GIT_AUTHOR_EMAIL: identity.email,
+          GIT_COMMITTER_NAME: identity.name,
+          GIT_COMMITTER_EMAIL: identity.email,
+        },
+      )
+    ).trim();
+    return { sha, files };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 export interface StatusSnapshot {
