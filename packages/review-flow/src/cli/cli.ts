@@ -29,7 +29,7 @@ import {
 } from "../core/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { formatFindings } from "./format.ts";
+import { formatFindings, formatSummary } from "./format.ts";
 import { postRun } from "./post.ts";
 import { ask, confirm, interactive } from "./prompt.ts";
 import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
@@ -42,8 +42,10 @@ interface AgentOptions {
   harness?: Harness;
   model?: string;
   verifierModel?: string;
+  summarizerModel?: string;
   effort?: Effort;
   verifierEffort?: Effort;
+  summarizerEffort?: Effort;
   claudeBin: string;
   cursorBin: string;
 }
@@ -81,8 +83,10 @@ async function resolveAgent(options: AgentOptions, log: Log) {
     models: resolveModels(harness, {
       model: options.model ?? null,
       verifierModel: options.verifierModel ?? null,
+      summarizerModel: options.summarizerModel ?? null,
       effort: options.effort ?? null,
       verifierEffort: options.verifierEffort ?? null,
+      summarizerEffort: options.summarizerEffort ?? null,
     }),
     runAgent: getAgent(harness, {
       claudeBin: options.claudeBin,
@@ -100,15 +104,19 @@ function addAgentOptions(command: Command): Command {
         "agent harness; default: the one saved in the user config, asked for in a TTY",
       ).choices(HARNESSES),
     )
-    .option("--model <id>", "model for the reviewer (and verifier, unless overridden)")
+    .option(
+      "--model <id>",
+      "model for every role (summarizer, reviewer, verifier), unless overridden",
+    )
     .option("--verifier-model <id>", "model for the verifiers")
+    .option("--summarizer-model <id>", "model for the summarizer")
     .addOption(
-      new Option(
-        "--effort <level>",
-        "effort for the reviewer (and verifier, unless overridden)",
-      ).choices(EFFORTS),
+      new Option("--effort <level>", "effort for every role, unless overridden").choices(EFFORTS),
     )
     .addOption(new Option("--verifier-effort <level>", "effort for the verifiers").choices(EFFORTS))
+    .addOption(
+      new Option("--summarizer-effort <level>", "effort for the summarizer").choices(EFFORTS),
+    )
     .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
     .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent");
 }
@@ -123,6 +131,10 @@ const verboseOption = () =>
 
 interface ReviewOptions extends AgentOptions {
   base?: string;
+  /** false with --no-summary. */
+  summary: boolean;
+  /** false for `review-flow summary`. */
+  find: boolean;
   committedOnly: boolean;
   repo: string;
   quiet: boolean;
@@ -151,7 +163,7 @@ async function reviewPr(
   if (options.base !== undefined) throw new Error("--base can't be used with a PR target.");
   const repo = await resolveRepoRoot(options.repo);
   log(`Fetching PR ${target}...`);
-  const { pr, base } = await fetchPr(repo, target);
+  const { pr, body, base } = await fetchPr(repo, target);
   log(`PR #${pr.number}: ${pr.title}`);
   log(`Base: ${base} · Head: ${pr.headSha.slice(0, 7)}`);
   if (pr.isCrossRepository) log("PR is from a fork; it is reviewed as trusted code.");
@@ -169,8 +181,11 @@ async function reviewPr(
       cwd: worktree.dir,
       stateRepo: repo,
       pr,
+      prBody: body,
       base,
       committedOnly: true,
+      summarize: options.summary,
+      find: options.find,
       log,
       verbose: options.verbose,
     });
@@ -203,6 +218,8 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
           cwd: options.repo,
           base,
           committedOnly: options.committedOnly,
+          summarize: options.summary,
+          find: options.find,
           log,
           verbose: options.verbose,
         })),
@@ -221,15 +238,13 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
     console.log(result.runDir.root);
     return;
   }
-  console.log(
-    formatFindings(
-      { ...result, reportPath: result.runDir.reportPath },
-      {
-        color: process.stdout.hasColors?.() ?? false,
-        width: Math.min(process.stdout.columns ?? 100, 100),
-      },
-    ),
-  );
+  const format = { ...colorOptions(), width: Math.min(process.stdout.columns ?? 100, 100) };
+  if (result.summary !== null) console.log(formatSummary(result.summary, format));
+  if (!options.find) {
+    console.log(`\nReport: ${result.runDir.reportPath}\n`);
+    return;
+  }
+  console.log(formatFindings({ ...result, reportPath: result.runDir.reportPath }, format));
 
   if (prTarget !== null && interactive()) {
     const postable = postableItems(result.findings, result.verdicts);
@@ -256,6 +271,7 @@ async function post(ref: string | undefined, options: { repo: string }): Promise
 
 interface EvalOptions extends AgentOptions {
   smoke: boolean;
+  summary: boolean;
   case?: string[];
   dataset: string;
   checkouts: string;
@@ -273,6 +289,7 @@ async function evaluate(options: EvalOptions): Promise<void> {
     cases: await loadDataset(dataset, { smoke: options.smoke, ids: options.case ?? [] }),
     dataset,
     smoke: options.smoke,
+    summarize: options.summary,
     checkoutsDir: path.resolve(userCwd, options.checkouts),
     log,
     verbose: options.verbose,
@@ -309,27 +326,46 @@ const { version } = JSON.parse(
 
 const program = new Command("review-flow").version(version);
 
-addAgentOptions(
+/** Target, base, and output options, shared by review and summary. */
+function addTargetOptions(command: Command): Command {
+  return addAgentOptions(
+    command
+      .argument("[target]", "PR number or URL; default: the current branch")
+      .option(
+        "-b, --base <ref>",
+        "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
+      ),
+  )
+    .option("--repo <path>", "repository to review", userCwd)
+    .option("--committed-only", "review HEAD only, without uncommitted changes", false)
+    .option("-q, --quiet", "no progress or other output; print only the run dir path", false)
+    .addOption(verboseOption());
+}
+
+addTargetOptions(
   program
     .command("review", { isDefault: true })
-    .description("Review the current branch, or a PR, against a base ref")
-    .argument("[target]", "PR number or URL; default: the current branch")
-    .option(
-      "-b, --base <ref>",
-      "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
-    ),
+    .description("Review the current branch, or a PR, against a base ref"),
 )
-  .option("--repo <path>", "repository to review", userCwd)
-  .option("--committed-only", "review HEAD only, without uncommitted changes", false)
-  .option("-q, --quiet", "no progress or findings output; print only the run dir path", false)
-  .addOption(verboseOption())
-  .action(review);
+  .option("--no-summary", "skip the summary of the change")
+  .action((target: string | undefined, options: Omit<ReviewOptions, "find">) =>
+    review(target, { ...options, find: true }),
+  );
+
+addTargetOptions(
+  program
+    .command("summary")
+    .description("Summarize the current branch, or a PR, without looking for defects"),
+).action((target: string | undefined, options: Omit<ReviewOptions, "find" | "summary">) =>
+  review(target, { ...options, summary: true, find: false }),
+);
 
 addAgentOptions(
   program
     .command("eval")
     .description("Review every case of the eval dataset and score the findings")
     .option("--smoke", "only the smoke set", false)
+    .option("--no-summary", "skip the summary of each case")
     .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
 )
   .option("--dataset <dir>", "dir of case files", DEFAULT_DATASET_DIR)

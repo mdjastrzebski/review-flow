@@ -1,7 +1,7 @@
 export const HARNESSES = ["claude", "cursor"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
-export type Role = "reviewer" | "verifier";
+export type Role = "summarizer" | "reviewer" | "verifier";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -17,26 +17,31 @@ export type RoleModels = Record<Role, ModelChoice>;
 
 // Claude: Sonnet 5.5 high matched Opus 5.5 on quality at about half the cost. Effort is set
 // explicitly, since lower efforts answer from the diff without reading the repo.
+// The summarizer gets less effort: it reads the diff and the stated goal and writes ~150 words.
 // Cursor: Grok 4.7 low. Composer 2.5 was cheaper but missed a high-severity bug; higher Grok
 // efforts were slower, costlier, and read outside the repo.
 export const DEFAULT_MODELS: Record<Harness, RoleModels> = {
   claude: {
+    summarizer: { model: "claude-sonnet-5-5", effort: "medium" },
     reviewer: { model: "claude-sonnet-5-5", effort: "high" },
     verifier: { model: "claude-sonnet-5-5", effort: "high" },
   },
   cursor: {
+    summarizer: { model: "grok-4.7-low", effort: null },
     reviewer: { model: "grok-4.7-low", effort: null },
     verifier: { model: "grok-4.7-low", effort: null },
   },
 };
 
 export interface ModelOverrides {
-  /** Applies to the reviewer, and to the verifier unless `verifierModel` is set. */
+  /** Applies to every role, unless the role's own override is set. */
   model: string | null;
   verifierModel: string | null;
-  /** Applies to the reviewer, and to the verifier unless `verifierEffort` is set. */
+  summarizerModel?: string | null;
+  /** Applies to every role, unless the role's own override is set. */
   effort?: Effort | null;
   verifierEffort?: Effort | null;
+  summarizerEffort?: Effort | null;
 }
 
 export function resolveModels(harness: Harness, overrides: ModelOverrides): RoleModels {
@@ -49,6 +54,11 @@ export function resolveModels(harness: Harness, overrides: ModelOverrides): Role
   });
   const effort = overrides.effort ?? null;
   return {
+    summarizer: choose(
+      "summarizer",
+      overrides.summarizerModel ?? overrides.model,
+      overrides.summarizerEffort ?? effort,
+    ),
     reviewer: choose("reviewer", overrides.model, effort),
     verifier: choose(
       "verifier",

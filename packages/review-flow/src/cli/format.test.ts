@@ -1,6 +1,6 @@
 import type { NormalizedFinding, Verdict } from "../core/index.ts";
 import { describe, expect, it } from "vitest";
-import { formatFindings, wrap } from "./format.ts";
+import { formatFindings, formatSummary, wrap } from "./format.ts";
 
 function makeFinding(overrides: Partial<NormalizedFinding>): NormalizedFinding {
   return {
@@ -128,5 +128,44 @@ describe("formatFindings", () => {
       plain,
     );
     expect(text).not.toContain("\u001b[");
+  });
+});
+
+describe("formatSummary", () => {
+  const options = { color: false, width: 80 };
+
+  it("prints goal, changes, goal met, and where to look", () => {
+    const text = formatSummary(
+      {
+        status: "ok",
+        summary: {
+          goal: { text: "Add b.", source: "inferred" },
+          changes: ["Adds b.", "Drops c."],
+          achieved: {
+            verdict: "partly",
+            gaps: [{ file: "a.ts", line: 4, detail: "No test." }],
+            extras: [],
+          },
+          lookAt: [{ file: "b.ts", line: null, detail: "New pattern." }],
+        },
+      },
+      options,
+    );
+    expect(text.split("\n")).toEqual([
+      "",
+      "Summary",
+      "  Goal      Add b. (inferred)",
+      "  Changes   - Adds b.",
+      "            - Drops c.",
+      "  Goal met  partly",
+      "  Gaps      - a.ts:4 No test.",
+      "  Look at   - b.ts New pattern.",
+    ]);
+  });
+
+  it("says when the summary is missing", () => {
+    expect(formatSummary({ status: "failed", error: "timeout: slow" }, options)).toContain(
+      "Missing: the summarizer failed (timeout: slow).",
+    );
   });
 });

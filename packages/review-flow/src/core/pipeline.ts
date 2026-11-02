@@ -5,6 +5,7 @@ import type { AgentResult, AgentStatus, AgentTask, RunAgent, TokenUsage } from "
 import { rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
 import {
   assertStatusUnchanged,
+  commitMessages,
   diffAgainstBase,
   resolveCommit,
   resolveRepoRoot,
@@ -24,7 +25,13 @@ import { createRunDir, createRunDirAt, ensureStateDir, type RunDir } from "./run
 import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
-import { ReviewOutput, Verdict, type NormalizedFinding } from "./schemas.ts";
+import { ReviewOutput, Summary, Verdict, type NormalizedFinding } from "./schemas.ts";
+import {
+  buildSummarizerPrompt,
+  normalizeSummary,
+  type Intent,
+  type SummaryOutcome,
+} from "./summary.ts";
 import {
   buildChangeContext,
   buildVerifierPrompt,
@@ -34,6 +41,7 @@ import {
 
 const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
 const VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
+const SUMMARIZER_TIMEOUT_MS = 10 * 60 * 1000;
 const VERIFIER_CONCURRENCY = 3;
 
 export interface ReviewRunOptions {
@@ -60,10 +68,19 @@ export interface ReviewRunOptions {
   stateRepo?: string;
   /** The PR whose head `cwd` is checked out at; recorded so the run can be posted. */
   pr?: PullRequest;
+  /** The PR's description, the summary's source for the stated goal. */
+  prBody?: string;
+  /** Run Summarize, in parallel with Find (default: true). */
+  summarize?: boolean;
+  /** Run Find and Verify (default: true); `review-flow summary` turns it off. */
+  find?: boolean;
 }
 
 export interface ReviewRunResult {
   runDir: RunDir;
+  /** null when Summarize was skipped. */
+  summary: SummaryOutcome | null;
+  /** Empty when Find was skipped. */
   findings: NormalizedFinding[];
   /** findingId → verdict, with the code-enforced rules applied. */
   verdicts: Record<string, Verdict>;
@@ -105,6 +122,8 @@ interface TaskContext {
   runAgent: RunAgent;
   log: (message: string) => void;
   verbose: boolean;
+  /** Aborted when either branch of the run (summarize, or find and verify) throws. */
+  signal: AbortSignal;
 }
 
 /** `in 1,200 · cache read 30,000 · cache write 0 · out 800`. */
@@ -241,19 +260,17 @@ export function failedVerdict(
  */
 async function verifyFindings(
   findings: readonly NormalizedFinding[],
-  context: { change: ChangeRange; diff: string; models: RoleModels },
+  context: { change: ChangeRange; sharedContext: string; models: RoleModels },
   ctx: TaskContext,
 ): Promise<Record<string, Verdict>> {
   const template = await loadPrompt("verifier");
-  const sharedContext = buildChangeContext(
-    await loadPrompt("change"),
-    context.change,
-    context.diff,
-  );
+  const { sharedContext } = context;
   const warm = Promise.withResolvers<void>();
   // rejectOnClear: otherwise cleared tasks never settle and allSettled hangs.
   const limit = pLimit({ concurrency: VERIFIER_CONCURRENCY, rejectOnClear: true });
   const abort = new AbortController();
+  // The summarizer failing stops verification too; its error is the one the run reports.
+  ctx.signal.addEventListener("abort", () => abort.abort(ctx.signal.reason), { once: true });
   // The first thrown error, in the order thrown; cleared tasks reject later with AbortErrors.
   const errors: unknown[] = [];
   const settled = await Promise.allSettled(
@@ -305,6 +322,43 @@ async function verifyFindings(
   );
 }
 
+/**
+ * One summarizer session. An agent failure leaves the run without a summary instead of failing it;
+ * anything thrown (e.g. the working tree changed) stops the run.
+ */
+async function summarizeChange(
+  context: { change: ChangeRange; sharedContext: string; intent: Intent; models: RoleModels },
+  ctx: TaskContext,
+): Promise<SummaryOutcome> {
+  const { model, effort } = context.models.summarizer;
+  ctx.log(`Summarizing with ${model ?? "harness default model"}…`);
+  const result = await runTask(
+    {
+      taskId: "summarizer",
+      role: "summarizer",
+      prompt: buildSummarizerPrompt(await loadPrompt("summarizer"), context.change, context.intent),
+      sharedContext: context.sharedContext,
+      cwd: ctx.repo,
+      schema: Summary,
+      model,
+      effort,
+      timeoutMs: SUMMARIZER_TIMEOUT_MS,
+      signal: ctx.signal,
+    },
+    "summarize",
+    ctx,
+  );
+  if (result.output === null) {
+    const error = `${result.status}: ${result.error ?? "no output"}`;
+    ctx.log(`Summarizer failed (${error}); the report has no summary.`);
+    return { status: "failed", error };
+  }
+  const summary = normalizeSummary(result.output, ctx.repo);
+  await writeJson(ctx.runDir.summaryPath, summary);
+  ctx.log(`Summary → ${ctx.runDir.summaryPath}`);
+  return { status: "ok", summary };
+}
+
 /** The branch has no changes against the base; not a failure, just nothing to review. */
 export class NoChangesError extends Error {
   constructor(
@@ -318,10 +372,12 @@ export class NoChangesError extends Error {
   }
 }
 
-/** collect → review → normalize → verify → rank → report. */
+/** collect → (summarize ‖ review → normalize → verify → rank) → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const { base, harness, models, runAgent, log, runRoot, pr } = options;
   const verbose = options.verbose ?? false;
+  const summarize = options.summarize ?? true;
+  const find = options.find ?? true;
   const debug = verbose ? log : () => {};
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
@@ -352,8 +408,19 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     `Diff: ${stats.files} file(s), +${stats.additions} −${stats.deletions}, ${diff.length} chars`,
   );
   if (snapshot !== null) log(`Including ${snapshot.files} uncommitted file(s)`);
-  log(`Reviewer: ${describeModel(models.reviewer)}`);
-  log(`Verifier: ${describeModel(models.verifier)}`);
+  if (summarize) log(`Summarizer: ${describeModel(models.summarizer)}`);
+  if (find) {
+    log(`Reviewer: ${describeModel(models.reviewer)}`);
+    log(`Verifier: ${describeModel(models.verifier)}`);
+  }
+  const intent: Intent =
+    pr !== undefined
+      ? { kind: "pr", number: pr.number, title: pr.title, body: options.prBody ?? "" }
+      : {
+          kind: "commits",
+          messages: await commitMessages(repo, base),
+          uncommitted: snapshot !== null,
+        };
 
   if (runRoot === undefined) await ensureStateDir(stateRepo);
   // Taken after .review-flow/ exists; agents must leave the tree exactly like this.
@@ -368,60 +435,114 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
 
   const stepDurations: StepDurations = new Map([["collect", Date.now() - startedAt.getTime()]]);
   const calls: CallRecord[] = [];
-  const ctx: TaskContext = { runDir, repo, status, harness, calls, runAgent, log, verbose };
+  const abort = new AbortController();
+  const ctx: TaskContext = {
+    runDir,
+    repo,
+    status,
+    harness,
+    calls,
+    runAgent,
+    log,
+    verbose,
+    signal: abort.signal,
+  };
   let failure: string | null = null;
   // Outside the try, so a failed run still indexes what it got to.
   let findingCount: number | null = null;
   let verdictCounts: VerdictCounts | null = null;
 
   try {
-    const findings = await timeStep(stepDurations, "review", async () => {
-      const prompt = renderPrompt(await loadPrompt("reviewer"), {
-        ...change,
-        diffBlock: codeFence(diff, "diff"),
+    const sharedContext = buildChangeContext(await loadPrompt("change"), change, diff);
+    // The first error thrown by either branch, which stops the other.
+    const errors: unknown[] = [];
+    const branch = <T>(fn: () => Promise<T>): Promise<T> =>
+      fn().catch((error: unknown) => {
+        errors.push(error);
+        abort.abort(error);
+        throw error;
       });
-      log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
-      const review = await runTask(
-        {
-          taskId: "reviewer",
-          role: "reviewer",
-          prompt,
-          sharedContext: null,
-          cwd: repo,
-          schema: ReviewOutput,
-          model: models.reviewer.model,
-          effort: models.reviewer.effort,
-          timeoutMs: REVIEWER_TIMEOUT_MS,
-        },
-        "review",
-        ctx,
-      );
-      if (review.output === null) {
-        throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
-      }
 
-      const normalized = normalizeFindings(review.output, repo);
-      for (const note of normalized.notes) log(note);
-      await writeJson(runDir.findingsPath, normalized.findings);
-      log(`Reviewer returned ${normalized.findings.length} finding(s) → ${runDir.findingsPath}`);
-      return normalized.findings;
-    });
+    const summaryBranch = summarize
+      ? branch(() =>
+          timeStep(stepDurations, "summarize", () =>
+            summarizeChange({ change, sharedContext, intent, models }, ctx),
+          ),
+        )
+      : Promise.resolve(null);
 
-    findingCount = findings.length;
+    const findBranch = find
+      ? branch(async () => {
+          const findings = await timeStep(stepDurations, "review", async () => {
+            const prompt = renderPrompt(await loadPrompt("reviewer"), {
+              ...change,
+              diffBlock: codeFence(diff, "diff"),
+            });
+            log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
+            const review = await runTask(
+              {
+                taskId: "reviewer",
+                role: "reviewer",
+                prompt,
+                sharedContext: null,
+                cwd: repo,
+                schema: ReviewOutput,
+                model: models.reviewer.model,
+                effort: models.reviewer.effort,
+                timeoutMs: REVIEWER_TIMEOUT_MS,
+                signal: abort.signal,
+              },
+              "review",
+              ctx,
+            );
+            if (review.output === null) {
+              throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
+            }
 
-    const verdicts = await timeStep(stepDurations, "verify", async () => {
-      if (findings.length > 0) {
-        log(
-          `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
-        );
-      }
-      const result = await verifyFindings(findings, { change, diff, models }, ctx);
-      await writeJson(runDir.verdictsPath, result);
-      log(`Verdicts → ${runDir.verdictsPath}`);
-      return result;
-    });
+            const normalized = normalizeFindings(review.output, repo);
+            for (const note of normalized.notes) log(note);
+            await writeJson(runDir.findingsPath, normalized.findings);
+            log(
+              `Reviewer returned ${normalized.findings.length} finding(s) → ${runDir.findingsPath}`,
+            );
+            return normalized.findings;
+          });
 
-    verdictCounts = countVerdicts(verdicts);
+          findingCount = findings.length;
+          abort.signal.throwIfAborted();
+
+          const verdicts = await timeStep(stepDurations, "verify", async () => {
+            if (findings.length > 0) {
+              log(
+                `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
+              );
+            }
+            const result = await verifyFindings(findings, { change, sharedContext, models }, ctx);
+            await writeJson(runDir.verdictsPath, result);
+            log(`Verdicts → ${runDir.verdictsPath}`);
+            return result;
+          });
+
+          verdictCounts = countVerdicts(verdicts);
+          return { findings, verdicts };
+        })
+      : Promise.resolve(null);
+
+    // Both settle before run.json is written, so it records every call.
+    const [summaryResult, findResult] = await Promise.allSettled([summaryBranch, findBranch]);
+    if (errors.length > 0) throw errors[0];
+    const summary = (summaryResult as PromiseFulfilledResult<SummaryOutcome | null>).value;
+    const found = (
+      findResult as PromiseFulfilledResult<{
+        findings: NormalizedFinding[];
+        verdicts: Record<string, Verdict>;
+      } | null>
+    ).value;
+    if (!find && summary?.status === "failed") {
+      throw new Error(`Summarizer failed (${summary.error})`);
+    }
+    const findings = found?.findings ?? [];
+    const verdicts = found?.verdicts ?? {};
 
     const durationMs = Date.now() - startedAt.getTime();
     const { costUsd } = rollUp(calls, stepDurations, durationMs).totals;
@@ -434,7 +555,8 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         ...(pr === undefined ? {} : { pr }),
         durationMs,
         costUsd,
-        findings,
+        summary,
+        findings: found === null ? null : findings,
         verdicts,
       });
       await writeFile(runDir.reportPath, report);
@@ -444,7 +566,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       `Steps: ${[...stepDurations].map(([step, ms]) => `${step} ${formatDuration(ms)}`).join(" · ")}`,
     );
 
-    return { runDir, findings, verdicts, costUsd, durationMs };
+    return { runDir, summary, findings, verdicts, costUsd, durationMs };
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     throw error;

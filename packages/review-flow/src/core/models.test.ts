@@ -6,6 +6,7 @@ const none = { model: null, verifierModel: null };
 describe("resolveModels", () => {
   it("uses Sonnet 5.5 high for claude by default", () => {
     expect(resolveModels("claude", none)).toEqual({
+      summarizer: { model: "claude-sonnet-5-5", effort: "medium" },
       reviewer: { model: "claude-sonnet-5-5", effort: "high" },
       verifier: { model: "claude-sonnet-5-5", effort: "high" },
     });
@@ -13,6 +14,7 @@ describe("resolveModels", () => {
 
   it("uses Grok 4.7 low for cursor by default", () => {
     expect(resolveModels("cursor", none)).toEqual({
+      summarizer: { model: "grok-4.7-low", effort: null },
       reviewer: { model: "grok-4.7-low", effort: null },
       verifier: { model: "grok-4.7-low", effort: null },
     });
@@ -47,11 +49,23 @@ describe("resolveModels", () => {
 
   it("applies --effort to both roles, and --verifier-effort to the verifier only", () => {
     expect(resolveModels("claude", { ...none, effort: "low" })).toEqual({
+      summarizer: { model: "claude-sonnet-5-5", effort: "low" },
       reviewer: { model: "claude-sonnet-5-5", effort: "low" },
       verifier: { model: "claude-sonnet-5-5", effort: "low" },
     });
     const models = resolveModels("claude", { ...none, effort: "low", verifierEffort: "max" });
     expect(models.verifier.effort).toBe("max");
+  });
+
+  it("lets the summarizer overrides apply to the summarizer only", () => {
+    const models = resolveModels("claude", {
+      ...none,
+      model: "claude-opus-5-5",
+      summarizerModel: "claude-haiku-5-5",
+      summarizerEffort: "low",
+    });
+    expect(models.summarizer).toEqual({ model: "claude-haiku-5-5", effort: "low" });
+    expect(models.reviewer).toEqual({ model: "claude-opus-5-5", effort: "high" });
   });
 
   it("passes an explicit effort with an overridden cursor model", () => {

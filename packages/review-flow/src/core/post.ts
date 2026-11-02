@@ -1,7 +1,8 @@
 import { formatLocation } from "./format.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
-import type { NormalizedFinding, Severity, Verdict } from "./schemas.ts";
+import { renderSummary } from "./report.ts";
+import type { NormalizedFinding, Severity, Summary, Verdict } from "./schemas.ts";
 
 export const REVIEW_FLOW_URL = "https://github.com/mdjastrzebski/review-flow";
 
@@ -137,12 +138,14 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
 
 /**
  * One review with event COMMENT (never approve or request changes): findings on diff lines become
- * inline comments, the rest go in the body with a short summary and a footer.
+ * inline comments, the rest go in the body with the run's summary (when it has one), the finding
+ * counts, and a footer.
  */
 export function buildReview(
   items: readonly RankedItem[],
   diff: string,
   commitId: string,
+  summary: Summary | null = null,
 ): ReviewPlan {
   const lines = diffLines(diff);
   const comments: ReviewComment[] = [];
@@ -164,10 +167,11 @@ export function buildReview(
     inline.push(item.finding.id);
   }
 
-  const summary = [`${plural(items.length, "finding")}`];
-  if (comments.length > 0) summary.push(`${comments.length} inline`);
-  if (inBody.length > 0) summary.push(`${inBody.length} outside the diff, below`);
-  const sections = [summary.join(" · ")];
+  const counts = [`${plural(items.length, "finding")}`];
+  if (comments.length > 0) counts.push(`${comments.length} inline`);
+  if (inBody.length > 0) counts.push(`${inBody.length} outside the diff, below`);
+  const sections = summary === null ? [] : [renderSummary(summary)];
+  sections.push(counts.join(" · "));
   for (const item of inBody) {
     sections.push(`\`${formatLocation(item.finding)}\`\n\n${commentBody(item)}`);
   }

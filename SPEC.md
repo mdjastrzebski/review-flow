@@ -4,7 +4,7 @@ The target design of review-flow. It follows the [principles](contributing/princ
 
 ## 1. Goal and non-goals
 
-review-flow is a local CLI. A developer runs it to review code changes with AI agents: their own work, another branch, or someone else's PR. It finds defects, verifies them, and returns a ranked report. For a PR, the developer can post selected findings as a review.
+review-flow is a local CLI. A developer runs it to review code changes with AI agents: their own work, another branch, or someone else's PR. It summarizes the change for the human reviewer, finds defects, verifies them, and returns a ranked report. For a PR, the developer can post selected findings as a review.
 
 Not in v1 (planned later):
 
@@ -20,15 +20,16 @@ npx review-flow [target]
 
 ### Commands
 
-| Command                       | Does                                                                                                            |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `review-flow [target]`        | Review a target. `review-flow review <target>` is the explicit form, for targets that look like a command name. |
-| `review-flow post [run]`      | Post selected findings of a run (default: latest) to its PR.                                                    |
-| `review-flow eval`            | Run the eval dataset with the current config (see 11).                                                          |
-| `review-flow runs`            | List past runs and evals.                                                                                       |
-| `review-flow compare <a> <b>` | Compare two runs or evals: cost, time, and findings or scores, per step.                                        |
-| `review-flow config`          | Print the resolved config and where each value came from. `config set <key> <value>` edits a config file.       |
-| `review-flow doctor`          | Check `git`, `gh`, installed agent CLIs and their auth, and which harness would be used.                        |
+| Command                        | Does                                                                                                            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `review-flow [target]`         | Review a target. `review-flow review <target>` is the explicit form, for targets that look like a command name. |
+| `review-flow summary [target]` | Summarize a target without looking for defects (see 7). Same targets and base rules as `review`.                |
+| `review-flow post [run]`       | Post selected findings of a run (default: latest) to its PR.                                                    |
+| `review-flow eval`             | Run the eval dataset with the current config (see 11).                                                          |
+| `review-flow runs`             | List past runs and evals.                                                                                       |
+| `review-flow compare <a> <b>`  | Compare two runs or evals: cost, time, and findings or scores, per step.                                        |
+| `review-flow config`           | Print the resolved config and where each value came from. `config set <key> <value>` edits a config file.       |
+| `review-flow doctor`           | Check `git`, `gh`, installed agent CLIs and their auth, and which harness would be used.                        |
 
 `review` and `eval` print progress: each step and each agent tool call. `--quiet` prints only the run dir. `--verbose` adds what's needed to check the tool works: repo, base and head SHAs, diff size, each agent's command line, session and model, text, refused tool calls, exit code and stderr, tokens and time per call, and step times.
 
@@ -87,19 +88,21 @@ Reading from the base stops a PR from changing the rules, models, or budgets it 
 ## 4. Pipeline
 
 ```
-collect → find → dedupe → verify → filter → rank → report → (post)
+collect ─┬→ summarize ──────────────────────────────┐
+         └→ find → dedupe → verify → filter → rank ─┴→ report → (post)
 ```
 
 Each step records its own cost and time and can be skipped in config. Values marked _(eval)_ are set by measurement (see 13).
 
 1. **Collect.** Resolve the target, base, and trust level. Create a temporary detached worktree at the target SHA under `.review-flow/worktrees/` and produce the diff. All agents work in that worktree, so the developer's checkout is never touched. The worktree is removed when the run ends, including on failure or Ctrl-C. Stale worktrees are removed at the start of the next run. Exit cleanly when the diff is empty.
-2. **Find.** Finder agents read the diff and the surrounding code and return candidate findings as structured JSON. Large diffs are split into file groups, one finder each _(eval: group size)_. The `deep` preset adds finders with a narrow focus, such as security or concurrency. Finders report only concrete defects with a failure scenario.
-3. **Dedupe.** Merge findings with the same root cause, so the same bug isn't verified twice. Similar findings across files become one finding for the whole bug class.
-4. **Verify.** Verifiers try to refute each finding by reading the code. Findings are batched by file group _(eval: batch size)_ and processed highest finder severity first, so a budget cut loses the least important work. Verifiers don't see the finder's rationale or severity, to avoid anchoring. The `deep` preset uses several verifiers per finding and takes a vote. The verifier sets severity, origin, and verification (see 5).
-5. **Filter.** Drop refuted findings and noise: style, cleanup-only, and diagnostic findings _(eval: filter list)_. This applies even when `REVIEW.md` asks for those, unless the filter is disabled in config.
-6. **Rank.** Rules enforced in code: `confirmed` without a code reference becomes `inconclusive`, and a failed verifier counts as `inconclusive`. Sort as in 7.
-7. **Report.** Write the report and the terminal summary from `findings.json`.
-8. **Post.** Optional. See 7.
+2. **Summarize.** One agent call, run in parallel with Find. It gets the same diff as shared context as the verifiers, plus the PR description or commit messages. It writes `summary.json` (see 7). It runs in every preset; skip it with `--no-summary`. A failed call doesn't fail the run: the report says the summary is missing.
+3. **Find.** Finder agents read the diff and the surrounding code and return candidate findings as structured JSON. Large diffs are split into file groups, one finder each _(eval: group size)_. The `deep` preset adds finders with a narrow focus, such as security or concurrency. Finders report only concrete defects with a failure scenario.
+4. **Dedupe.** Merge findings with the same root cause, so the same bug isn't verified twice. Similar findings across files become one finding for the whole bug class.
+5. **Verify.** Verifiers try to refute each finding by reading the code. Findings are batched by file group _(eval: batch size)_ and processed highest finder severity first, so a budget cut loses the least important work. Verifiers don't see the finder's rationale or severity, to avoid anchoring. The `deep` preset uses several verifiers per finding and takes a vote. The verifier sets severity, origin, and verification (see 5).
+6. **Filter.** Drop refuted findings and noise: style, cleanup-only, and diagnostic findings _(eval: filter list)_. This applies even when `REVIEW.md` asks for those, unless the filter is disabled in config.
+7. **Rank.** Rules enforced in code: `confirmed` without a code reference becomes `inconclusive`, and a failed verifier counts as `inconclusive`. Sort as in 7.
+8. **Report.** Write the report and the terminal output from `summary.json` and `findings.json`.
+9. **Post.** Optional. See 7.
 
 ## 5. Finding model
 
@@ -123,6 +126,7 @@ Pre-existing findings are a separate category. They are written to `pre-existing
 
 A review is incremental by default when an earlier run exists for the same target. A run matches when its reviewed head is an ancestor of the current head, or, after a rebase, when the patch-ids match.
 
+- **Summarize** always covers the full diff against the base.
 - **Find** sees the full diff against the base as context, but reports only on the interdiff: what changed since the last reviewed SHA.
 - **Earlier findings** that were confirmed get a cheap check: `fixed`, `still present`, or `obsolete` (the code is gone). The report shows this in a "Since last review" section.
 - **Repeats.** A new finding that matches an earlier one (same file, anchor code, and claim) is not verified or reported again. Findings that were posted or dismissed stay suppressed.
@@ -133,15 +137,31 @@ A review is incremental by default when an earlier run exists for the same targe
 
 ### Report
 
-`report.md` and the terminal summary list:
+`report.md` and the terminal output list:
 
-1. Introduced and confirmed findings, by severity. `low` findings are collapsed.
-2. Inconclusive findings.
-3. Unverified findings.
-4. Since last review (incremental runs only).
-5. Pre-existing findings.
+1. The summary (see below), printed before any findings.
+2. Introduced and confirmed findings, by severity. `low` findings are collapsed.
+3. Inconclusive findings.
+4. Unverified findings.
+5. Since last review (incremental runs only).
+6. Pre-existing findings.
 
 Refuted findings are hidden but kept in the run data. A footer shows cost, time, preset, and the run directory. A run cut by a budget says so, for example "budget hit at $1.50, 4 of 9 findings verified".
+
+### Summary
+
+A short, human-readable account of the change, so the human can judge it at a high level while the findings cover the details. About 150 words at most:
+
+| Field      | Content                                                                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goal`     | One sentence, from the PR description or commit messages. Marked `inferred` when neither states it, and "as stated by the author" for `external` targets.      |
+| `changes`  | 3 to 6 bullets on behavior, not a file list.                                                                                                                   |
+| `achieved` | `yes`, `mostly`, `partly`, or `unclear`, with **gaps** (stated goal missing from the diff) and **extras** (diff outside the goal), each with a code reference. |
+| `lookAt`   | 1 to 3 places that need human judgment: new patterns, sensitive areas, scope changes.                                                                          |
+
+`achieved` judges the change against its goal only, not its correctness. Below the summary, the report adds a line with finding counts and coverage (files not read, findings left unverified, budget hit), without a model call. The summary never recommends merging and never comments on style. The PR description is untrusted input and is framed as data in the prompt.
+
+`review-flow summary` runs only Collect and Summarize and prints the same section. Its run is saved like any other, without findings.
 
 ### Posting
 
@@ -151,7 +171,7 @@ Posting is never automatic. It is offered after a PR review in a TTY, or run lat
 2. **Edit.** The user can edit the selected findings' text in `$EDITOR`, since they post under their own name.
 3. **Check.** If the PR head moved since the run, warn. The user can post anchored to the reviewed commit (GitHub shows those comments as outdated) or re-run first.
 4. **Preview and confirm.** Show exactly what will be posted.
-5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with a short summary and a "reviewed with review-flow" footer.
+5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with the summary and a "reviewed with review-flow" footer.
 
 Posted findings and their comment ids are saved in the run directory, for repeat suppression and response tracking.
 
@@ -197,20 +217,20 @@ From lowest to highest priority:
 
 Keys are camelCase and mirror CLI flags where a flag exists.
 
-| Key           | Holds                                                    |
-| ------------- | -------------------------------------------------------- |
-| `preset`      | Preset name (default `standard`)                         |
-| `harness`     | Harness for every role, unless `roles` overrides it      |
-| `presets`     | Overrides of built-in presets, or new named presets      |
-| `roles`       | Per role (finder, verifier, ...): harness, model, effort |
-| `harnesses`   | Harness profiles (see 9)                                 |
-| `budget`      | `usd` and `minutes` per run                              |
-| `steps`       | Steps to skip, filter settings                           |
-| `failOn`      | Exit-code threshold (see 7)                              |
-| `trust`       | Trust rules (see 3)                                      |
-| `base`        | Default base branch                                      |
-| `reviewGuide` | Path to the review guide (default `REVIEW.md`)           |
-| `prices`      | Price-table overrides (see 9)                            |
+| Key           | Holds                                                                |
+| ------------- | -------------------------------------------------------------------- |
+| `preset`      | Preset name (default `standard`)                                     |
+| `harness`     | Harness for every role, unless `roles` overrides it                  |
+| `presets`     | Overrides of built-in presets, or new named presets                  |
+| `roles`       | Per role (summarizer, finder, verifier, ...): harness, model, effort |
+| `harnesses`   | Harness profiles (see 9)                                             |
+| `budget`      | `usd` and `minutes` per run                                          |
+| `steps`       | Steps to skip, filter settings                                       |
+| `failOn`      | Exit-code threshold (see 7)                                          |
+| `trust`       | Trust rules (see 3)                                                  |
+| `base`        | Default base branch                                                  |
+| `reviewGuide` | Path to the review guide (default `REVIEW.md`)                       |
+| `prices`      | Price-table overrides (see 9)                                        |
 
 Long text, such as custom prompts, goes in separate `.md` files that the config points to.
 
@@ -295,6 +315,7 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 | `diff.patch`        | Reviewed diff                                                                                                         |
 | `prompts/<task>.md` | Exact prompt per task                                                                                                 |
 | `raw/<task>.json`   | Raw harness output                                                                                                    |
+| `summary.json`      | Summary (see 7)                                                                                                       |
 | `findings.json`     | Findings (see 5)                                                                                                      |
 | `pre-existing.json` | Pre-existing findings                                                                                                 |
 | `report.md`         | Report                                                                                                                |

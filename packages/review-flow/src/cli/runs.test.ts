@@ -22,6 +22,7 @@ function entry(overrides: Partial<ReviewIndexEntry>): ReviewIndexEntry {
     status: "ok",
     harness: "claude",
     models: {
+      summarizer: { model: "claude-sonnet-5-5", effort: "high" },
       reviewer: { model: "claude-sonnet-5-5", effort: "high" },
       verifier: { model: "claude-sonnet-5-5", effort: "high" },
     },
@@ -46,6 +47,7 @@ describe("formatRuns", () => {
           status: "failed",
           harness: "cursor",
           models: {
+            summarizer: { model: "grok-4.7-low", effort: null },
             reviewer: { model: "grok-4.7-low", effort: null },
             verifier: { model: "composer-2.5", effort: null },
           },
@@ -142,6 +144,7 @@ function loaded(
     run: {
       harness: "claude",
       models: {
+        summarizer: { model, effort: "high" },
         reviewer: { model, effort: "high" },
         verifier: { model, effort: "high" },
       },
@@ -250,6 +253,7 @@ function loadedEval(id: string, cases: CaseResult[], smoke = false): LoadedEval 
       kind: "eval",
       harness: "claude",
       models: {
+        summarizer: { model: "claude-sonnet-5-5", effort: "high" },
         reviewer: { model: "claude-sonnet-5-5", effort: "high" },
         verifier: { model: "claude-sonnet-5-5", effort: "high" },
       },

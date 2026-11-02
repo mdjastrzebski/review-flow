@@ -12,6 +12,7 @@ import {
   type NormalizedFinding,
   type PostedRecord,
   type RunRecord,
+  type Summary,
   type Verdict,
 } from "../core/index.ts";
 import { ask, confirm, interactive, parseSelection } from "./prompt.ts";
@@ -92,6 +93,7 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
     selected.map((index) => items[index]!),
     diff,
     reviewed,
+    await readJsonOrNull<Summary>(paths.summaryPath),
   );
   console.error(`\n${paint("bold", "Review body")}\n${plan.payload.body}`);
   for (const comment of plan.payload.comments) {

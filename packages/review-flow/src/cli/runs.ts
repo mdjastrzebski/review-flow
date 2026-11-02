@@ -48,6 +48,12 @@ export function shortModel({ model, effort }: ModelChoice): string {
   return effort === null ? name : `${name} ${effort}`;
 }
 
+/** `-` when the run had no summary, or predates the summarizer. */
+function summarizerOf(run: { models: { summarizer?: ModelChoice }; steps: object }): string {
+  const { summarizer } = run.models;
+  return summarizer === undefined || !("summarize" in run.steps) ? "-" : shortModel(summarizer);
+}
+
 function describeModels(models: { reviewer: ModelChoice; verifier: ModelChoice }): string {
   const reviewer = shortModel(models.reviewer);
   const verifier = shortModel(models.verifier);
@@ -182,6 +188,7 @@ export function formatCompare(a: LoadedRun, b: LoadedRun, options: TableOptions)
     ["", "A", "B"],
     ["Run", a.id, b.id],
     ["Harness", a.run.harness, b.run.harness],
+    ["Summarizer", summarizerOf(a.run), summarizerOf(b.run)],
     ["Reviewer", shortModel(a.run.models.reviewer), shortModel(b.run.models.reviewer)],
     ["Verifier", shortModel(a.run.models.verifier), shortModel(b.run.models.verifier)],
     ["Diff", diffOf(a), diffOf(b)],
@@ -355,6 +362,7 @@ export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOp
       ["", "A", "B"],
       ["Eval", a.id, b.id],
       ["Harness", a.run.harness, b.run.harness],
+      ["Summarizer", summarizerOf(a.run), summarizerOf(b.run)],
       ["Reviewer", shortModel(a.run.models.reviewer), shortModel(b.run.models.reviewer)],
       ["Verifier", shortModel(a.run.models.verifier), shortModel(b.run.models.verifier)],
       ["Cases", casesOf(a), casesOf(b)],

@@ -174,6 +174,15 @@ export async function diffAgainstBase(repo: string, base: string, head = "HEAD")
   return git(repo, ["diff", "--no-color", "--no-ext-diff", `${base}...${head}`]);
 }
 
+/** Messages of the commits on `head` that aren't on `base`, oldest first. */
+export async function commitMessages(repo: string, base: string, head = "HEAD"): Promise<string[]> {
+  const out = await git(repo, ["log", "--reverse", "--format=%B%x00", `${base}..${head}`]);
+  return out
+    .split("\0")
+    .map((message) => message.trim())
+    .filter((message) => message !== "");
+}
+
 export interface WorkingTreeSnapshot {
   /** A commit on top of HEAD holding the working tree. Unreferenced, so git gc removes it. */
   sha: string;

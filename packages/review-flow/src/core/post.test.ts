@@ -137,4 +137,21 @@ describe("buildReview", () => {
     expect(plan.payload.body).toContain("**Suggested fix:** Better.");
     expect(plan.payload.body).toContain("Reviewed with [review-flow]");
   });
+
+  it("opens the body with the run's summary", () => {
+    const plan = buildReview(
+      [{ finding: finding("1", "a.ts", 2), verdict: verdict() }],
+      diff,
+      "abc",
+      {
+        goal: { text: "Add b.", source: "stated" },
+        changes: ["Adds b."],
+        achieved: { verdict: "yes", gaps: [], extras: [] },
+        lookAt: [],
+      },
+    );
+    expect(plan.payload.body).toMatch(
+      /^\*\*Goal:\*\* Add b\.\n\n- Adds b\.\n\n\*\*Goal met:\*\* yes\n\n---\n\n1 finding/,
+    );
+  });
 });

@@ -17,6 +17,7 @@ export * from "./eval-score.ts";
 export * from "./verify.ts";
 export * from "./format.ts";
 export * from "./report.ts";
+export * from "./summary.ts";
 export * from "./user-config.ts";
 export * from "./github.ts";
 export * from "./worktree.ts";

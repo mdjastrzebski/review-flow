@@ -71,3 +71,33 @@ export type Verdict = z.infer<typeof Verdict>;
 
 /** A reviewer finding after normalization: stable run-wide id assigned. */
 export type NormalizedFinding = Finding & { id: string };
+
+/** A place in the code the summary points at; `line` is null when no single line fits. */
+export const CodeRef = z.strictObject({
+  file: z.string(),
+  line: LineNumber.nullable(),
+  detail: z.string(),
+});
+export type CodeRef = z.infer<typeof CodeRef>;
+
+/** summary.json: a short account of the change for the human reviewer (spec 7). */
+export const Summary = z.strictObject({
+  goal: z.strictObject({
+    text: z.string(),
+    /** `stated` in the PR description or commit messages, else `inferred` from the diff. */
+    source: z.enum(["stated", "inferred"]),
+  }),
+  /** Behavior changes, not a file list. */
+  changes: z.array(z.string()),
+  /** Judges the change against its goal only, not its correctness. */
+  achieved: z.strictObject({
+    verdict: z.enum(["yes", "mostly", "partly", "unclear"]),
+    /** Parts of the stated goal missing from the diff. */
+    gaps: z.array(CodeRef),
+    /** Parts of the diff outside the goal. */
+    extras: z.array(CodeRef),
+  }),
+  /** Places that need human judgment. */
+  lookAt: z.array(CodeRef),
+});
+export type Summary = z.infer<typeof Summary>;

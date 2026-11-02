@@ -1,5 +1,6 @@
 import { styleText } from "node:util";
 import {
+  formatCodeRef,
   formatCost,
   formatDuration,
   formatLocation,
@@ -7,6 +8,7 @@ import {
   type FixAssessment,
   type NormalizedFinding,
   type Severity,
+  type SummaryOutcome,
   type Verdict,
 } from "../core/index.ts";
 
@@ -66,6 +68,48 @@ export function wrap(text: string, width: number): string[] {
     lines.push(line);
   }
   return lines;
+}
+
+/** The summary, printed before the findings. */
+export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): string {
+  const paint = (style: Style, text: string) =>
+    options.color ? styleText(style, text, { validateStream: false }) : text;
+  const out: string[] = ["", paint("bold", "Summary")];
+  if (outcome.status === "failed") {
+    out.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
+    return out.join("\n");
+  }
+  const { goal, changes, achieved, lookAt } = outcome.summary;
+  const textWidth = Math.max(40, options.width - INDENT.length - LABEL_WIDTH);
+  const field = (label: string, text: string) => {
+    wrap(text, textWidth).forEach((line, index) => {
+      const prefix =
+        index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
+      out.push(`${INDENT}${prefix}${line}`);
+    });
+  };
+  const bullets = (label: string, items: string[]) => {
+    items.forEach((item, index) => {
+      const lines = wrap(item, textWidth - 2);
+      lines.forEach((line, at) => {
+        const prefix =
+          index === 0 && at === 0
+            ? paint("dim", label.padEnd(LABEL_WIDTH))
+            : " ".repeat(LABEL_WIDTH);
+        out.push(`${INDENT}${prefix}${at === 0 ? "- " : "  "}${line}`);
+      });
+    });
+  };
+  const ref = (item: Parameters<typeof formatCodeRef>[0]) =>
+    `${paint("cyan", formatCodeRef(item))} ${item.detail}`;
+
+  field("Goal", goal.source === "inferred" ? `${goal.text} (inferred)` : goal.text);
+  bullets("Changes", changes);
+  field("Goal met", achieved.verdict);
+  bullets("Gaps", achieved.gaps.map(ref));
+  bullets("Extras", achieved.extras.map(ref));
+  bullets("Look at", lookAt.map(ref));
+  return out.join("\n");
 }
 
 export function formatFindings(summary: FindingsSummary, options: FormatOptions): string {

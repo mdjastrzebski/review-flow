@@ -3,7 +3,8 @@ import type { PullRequest } from "./github.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
-import type { Evidence, NormalizedFinding, Verdict } from "./schemas.ts";
+import type { CodeRef, Evidence, NormalizedFinding, Summary, Verdict } from "./schemas.ts";
+import { formatCodeRef, type SummaryOutcome } from "./summary.ts";
 import { truncateFix } from "./verify.ts";
 
 export interface ReportInput {
@@ -15,7 +16,10 @@ export interface ReportInput {
   durationMs: number;
   /** null when the harness reported no cost (Cursor). */
   costUsd: number | null;
-  findings: readonly NormalizedFinding[];
+  /** null when Summarize was skipped. */
+  summary: SummaryOutcome | null;
+  /** null when Find was skipped (`review-flow summary`). */
+  findings: readonly NormalizedFinding[] | null;
   /** findingId → verdict; every finding must have one. */
   verdicts: Readonly<Record<string, Verdict>>;
 }
@@ -129,12 +133,49 @@ function header(input: ReportInput): string {
     [
       ...(input.pr === undefined ? [] : [`- **PR:** ${input.pr.url}`]),
       `- **Harness:** ${input.harness}`,
-      `- **Reviewer:** ${describeModel(input.models.reviewer)}`,
-      `- **Verifier:** ${describeModel(input.models.verifier)}`,
+      ...(input.summary === null
+        ? []
+        : [`- **Summarizer:** ${describeModel(input.models.summarizer)}`]),
+      ...(input.findings === null
+        ? []
+        : [
+            `- **Reviewer:** ${describeModel(input.models.reviewer)}`,
+            `- **Verifier:** ${describeModel(input.models.verifier)}`,
+          ]),
       `- **Base:** \`${input.base.ref}\` (\`${shortSha(input.base.sha)}\`) · **Head:** \`${shortSha(input.head.sha)}\`${input.head.snapshotSha === undefined ? "" : " plus uncommitted changes"}`,
       `- ${stats.join(" · ")}`,
     ].join("\n"),
   ].join("\n\n");
+}
+
+function refLine(label: string | null, ref: CodeRef): string {
+  return `- ${label === null ? "" : `${label}: `}\`${oneLine(formatCodeRef(ref))}\` — ${inline(ref.detail)}`;
+}
+
+/** The summary as Markdown, for report.md and the posted review body. */
+export function renderSummary(summary: Summary): string {
+  const { goal, changes, achieved, lookAt } = summary;
+  const parts = [
+    `**Goal:** ${inline(goal.text)}${goal.source === "inferred" ? " _(inferred)_" : ""}`,
+    changes.map((change) => `- ${inline(change)}`).join("\n"),
+  ];
+  const met = [
+    ...achieved.gaps.map((ref) => refLine("Gap", ref)),
+    ...achieved.extras.map((ref) => refLine("Extra", ref)),
+  ];
+  parts.push(`**Goal met:** ${achieved.verdict}${met.length === 0 ? "" : `\n\n${met.join("\n")}`}`);
+  if (lookAt.length > 0) {
+    parts.push(`**Look at:**\n\n${lookAt.map((ref) => refLine(null, ref)).join("\n")}`);
+  }
+  return parts.filter((part) => part !== "").join("\n\n");
+}
+
+function summarySection(outcome: SummaryOutcome): string {
+  const body =
+    outcome.status === "ok"
+      ? renderSummary(outcome.summary)
+      : `Summary missing: the summarizer failed (${inline(outcome.error)}).`;
+  return `## Summary\n\n${body}`;
 }
 
 function summaryTable(items: readonly RankedItem[]): string {
@@ -158,8 +199,15 @@ function summaryTable(items: readonly RankedItem[]): string {
   ].join("\n\n");
 }
 
-/** Renders report.md: header, summary table, then ranked findings; refuted ones collapsed. */
+/**
+ * Renders report.md: header, the summary, the findings table, then ranked findings; refuted ones
+ * collapsed.
+ */
 export function renderReport(input: ReportInput): string {
+  const sections = [header(input)];
+  if (input.summary !== null) sections.push(summarySection(input.summary));
+  if (input.findings === null) return `${sections.join("\n\n")}\n`;
+
   const items = rankFindings(
     input.findings.map((finding) => {
       const verdict = input.verdicts[finding.id];
@@ -168,7 +216,6 @@ export function renderReport(input: ReportInput): string {
     }),
   );
 
-  const sections = [header(input)];
   if (items.length === 0) {
     sections.push("No findings.");
     return `${sections.join("\n\n")}\n`;

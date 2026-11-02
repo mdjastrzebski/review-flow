@@ -64,6 +64,7 @@ function run(steps: RunRecord["steps"]): RunRecord {
   return {
     harness: "claude",
     models: {
+      summarizer: { model: "m", effort: null },
       reviewer: { model: "m", effort: null },
       verifier: { model: "m", effort: null },
     },

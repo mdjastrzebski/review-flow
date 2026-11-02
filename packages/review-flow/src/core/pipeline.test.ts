@@ -11,7 +11,7 @@ import { DEFAULT_MODELS } from "./models.ts";
 import { NoChangesError, runReview } from "./pipeline.ts";
 import { ensureStateDir } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
-import type { Finding, ReviewOutput, Verdict } from "./schemas.ts";
+import type { Finding, ReviewOutput, Summary, Verdict } from "./schemas.ts";
 import { createReviewWorktree } from "./worktree.ts";
 
 let repo: string;
@@ -64,8 +64,17 @@ const confirmed: Verdict = {
   fix: { assessment: "not_applicable", detail: "d", betterFix: "do it" },
 };
 
+const summary: Summary = {
+  goal: { text: "Add b.", source: "stated" },
+  changes: ["Adds b to a.txt."],
+  achieved: { verdict: "yes", gaps: [], extras: [] },
+  lookAt: [{ file: "a.txt", line: 2, detail: "New line." }],
+};
+
 interface StubOptions {
   review?: ReviewOutput;
+  /** Summarizer answer; null makes the summarizer fail with invalid_output. */
+  summary?: Summary | null;
   /** Verifier answer; null makes the verifier fail with invalid_output. */
   verdict?: (task: AgentTask<unknown>) => Verdict | null;
   effect?: (task: AgentTask<unknown>) => Promise<void>;
@@ -73,6 +82,7 @@ interface StubOptions {
 
 function stubAgent({
   review = output,
+  summary: summaryAnswer = summary,
   verdict = () => confirmed,
   effect = async () => {},
 }: StubOptions = {}): {
@@ -83,7 +93,12 @@ function stubAgent({
   const runAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
     tasks.push(task as AgentTask<unknown>);
     await effect(task as AgentTask<unknown>);
-    const answer = task.role === "reviewer" ? review : verdict(task as AgentTask<unknown>);
+    const answer =
+      task.role === "reviewer"
+        ? review
+        : task.role === "summarizer"
+          ? summaryAnswer
+          : verdict(task as AgentTask<unknown>);
     if (answer === null) {
       return {
         status: "invalid_output",
@@ -120,6 +135,8 @@ const baseOptions = {
   harness: "claude" as const,
   models: DEFAULT_MODELS.claude,
   log: () => {},
+  // Most tests are about Find; the summary has its own tests below.
+  summarize: false,
 };
 
 describe("runReview", () => {
@@ -494,5 +511,101 @@ describe("runReview", () => {
       runReview({ ...baseOptions, base: "feature", cwd: repo, runAgent }),
     ).rejects.toBeInstanceOf(NoChangesError);
     expect(tasks).toHaveLength(0);
+  });
+});
+
+describe("runReview summary", () => {
+  const withSummary = { ...baseOptions, summarize: true };
+
+  it("runs the summarizer next to the reviewer and writes summary.json and the report", async () => {
+    git("commit", "-q", "--allow-empty", "-m", "Second commit", "-m", "With a body.");
+    const { runAgent, tasks } = stubAgent();
+    const result = await runReview({ ...withSummary, cwd: repo, runAgent });
+
+    const summarizer = tasks.find((t) => t.role === "summarizer");
+    expect(summarizer).toMatchObject({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(summarizer?.sharedContext).toContain("+b");
+    expect(summarizer?.sharedContext).toBe(tasks.find((t) => t.role === "verifier")?.sharedContext);
+    expect(summarizer?.prompt).toContain("Commit messages, oldest first:");
+    expect(summarizer?.prompt).toMatch(/change\n\n---\n\nSecond commit\n\nWith a body\./);
+    expect(summarizer?.prompt).not.toContain("+b");
+
+    expect(result.summary).toEqual({ status: "ok", summary });
+    expect(JSON.parse(await readFile(result.runDir.summaryPath, "utf8"))).toEqual(summary);
+    const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
+    expect(run.steps.summarize).toMatchObject({ calls: 1, costUsd: 0.5 });
+    expect(run.totals.calls).toBe(3);
+    const report = await readFile(result.runDir.reportPath, "utf8");
+    expect(report.indexOf("## Summary")).toBeLessThan(report.indexOf("### [ ] F-001"));
+  });
+
+  it("gives the summarizer the PR description", async () => {
+    const { runAgent, tasks } = stubAgent();
+    const pr: PullRequest = {
+      number: 7,
+      url: "https://github.com/acme/app/pull/7",
+      title: "Add b",
+      host: "github.com",
+      repo: "acme/app",
+      baseBranch: "main",
+      headSha: "x",
+      isCrossRepository: false,
+    };
+    await runReview({ ...withSummary, cwd: repo, runAgent, pr, prBody: "Fixes ``` #3" });
+    const prompt = tasks.find((t) => t.role === "summarizer")?.prompt;
+    expect(prompt).toContain(
+      "Title and description of PR #7:\n\n````\nAdd b\n\nFixes ``` #3\n````",
+    );
+  });
+
+  it("goes on without a summary when the summarizer fails", async () => {
+    const { runAgent } = stubAgent({ summary: null });
+    const result = await runReview({ ...withSummary, cwd: repo, runAgent });
+
+    expect(result.summary).toEqual({ status: "failed", error: "invalid_output: bad json" });
+    expect(result.findings).toHaveLength(1);
+    await expect(readFile(result.runDir.summaryPath)).rejects.toThrow();
+    expect(await readFile(result.runDir.reportPath, "utf8")).toContain("Summary missing");
+  });
+
+  it("summarizes only, without Find, when find is off", async () => {
+    const { runAgent, tasks } = stubAgent();
+    const result = await runReview({ ...withSummary, find: false, cwd: repo, runAgent });
+
+    expect(tasks.map((t) => t.role)).toEqual(["summarizer"]);
+    expect(result.summary?.status).toBe("ok");
+    const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
+    expect(Object.keys(run.steps)).toEqual(["collect", "summarize", "report"]);
+    const report = await readFile(result.runDir.reportPath, "utf8");
+    expect(report).toContain("## Summary");
+    expect(report).not.toContain("finding");
+    expect((await readIndex(repo)).at(-1)).toMatchObject({ findings: null, verdicts: null });
+  });
+
+  it("fails a summary-only run when the summarizer fails", async () => {
+    const { runAgent } = stubAgent({ summary: null });
+    await expect(runReview({ ...withSummary, find: false, cwd: repo, runAgent })).rejects.toThrow(
+      "Summarizer failed (invalid_output: bad json)",
+    );
+  });
+
+  it("stops the reviewer and reports the summarizer's error when it changes the tree", async () => {
+    const { runAgent, tasks } = stubAgent({
+      effect: async (task) => {
+        if (task.role === "summarizer") {
+          await writeFile(path.join(repo, "a.txt"), "tampered\n");
+          return;
+        }
+        if (task.role !== "reviewer") return;
+        await new Promise<void>((resolve) => {
+          task.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    });
+    await expect(runReview({ ...withSummary, cwd: repo, runAgent })).rejects.toBeInstanceOf(
+      WorkingTreeChangedError,
+    );
+    expect(tasks.find((t) => t.role === "reviewer")?.signal?.aborted).toBe(true);
+    expect(tasks.some((t) => t.role === "verifier")).toBe(false);
   });
 });

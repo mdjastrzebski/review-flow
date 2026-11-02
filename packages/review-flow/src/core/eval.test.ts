@@ -123,6 +123,8 @@ function options(cases: EvalCase[], runAgent = stubAgent()): EvalRunOptions {
     cases,
     dataset: "eval/cases",
     smoke: false,
+    // Summaries are covered by the pipeline tests; here they would only add calls.
+    summarize: false,
     checkoutsDir: checkouts,
     harness: "claude",
     models: DEFAULT_MODELS.claude,

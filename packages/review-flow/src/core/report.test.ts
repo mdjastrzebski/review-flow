@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MODELS } from "./models.ts";
 import { renderReport, type ReportInput } from "./report.ts";
-import type { NormalizedFinding, Verdict } from "./schemas.ts";
+import type { NormalizedFinding, Summary, Verdict } from "./schemas.ts";
 import { MAX_FIX_LINES } from "./verify.ts";
 
 function makeFinding(overrides: Partial<NormalizedFinding> = {}): NormalizedFinding {
@@ -45,6 +45,7 @@ const input: ReportInput = {
   head: { sha: "fedcba9876543210" },
   durationMs: 125_000,
   costUsd: 1.234,
+  summary: null,
   findings: [makeFinding()],
   verdicts: { "F-001": makeVerdict() },
 };
@@ -52,6 +53,53 @@ const input: ReportInput = {
 function render(findings: NormalizedFinding[], verdicts: Record<string, Verdict>): string {
   return renderReport({ ...input, findings, verdicts });
 }
+
+const goodSummary: Summary = {
+  goal: { text: "Make cache invalidation safe.", source: "inferred" },
+  changes: ["Writers take a lock.", "Readers <retry> once."],
+  achieved: {
+    verdict: "mostly",
+    gaps: [{ file: "src/cache.ts", line: 90, detail: "invalidateAll has no lock." }],
+    extras: [{ file: "src/log.ts", line: null, detail: "Logging format changed." }],
+  },
+  lookAt: [{ file: "src/lock.ts", line: 3, detail: "New lock pattern." }],
+};
+
+describe("renderReport summary", () => {
+  it("puts the summary between the header and the findings", () => {
+    const report = renderReport({ ...input, summary: { status: "ok", summary: goodSummary } });
+    expect(report).toContain("- **Summarizer:** claude-sonnet-5-5 (effort: medium)");
+    expect(report).toContain(
+      [
+        "## Summary",
+        "**Goal:** Make cache invalidation safe. _(inferred)_",
+        "- Writers take a lock.\n- Readers &lt;retry> once.",
+        "**Goal met:** mostly\n\n- Gap: `src/cache.ts:90` — invalidateAll has no lock.\n- Extra: `src/log.ts` — Logging format changed.",
+        "**Look at:**\n\n- `src/lock.ts:3` — New lock pattern.",
+        "**1 finding:**",
+      ].join("\n\n"),
+    );
+  });
+
+  it("says when the summarizer failed", () => {
+    const report = renderReport({
+      ...input,
+      summary: { status: "failed", error: "timeout: slow" },
+    });
+    expect(report).toContain("Summary missing: the summarizer failed (timeout: slow).");
+  });
+
+  it("leaves out the findings and their models when Find was skipped", () => {
+    const report = renderReport({
+      ...input,
+      summary: { status: "ok", summary: goodSummary },
+      findings: null,
+    });
+    expect(report).toContain("## Summary");
+    expect(report).not.toContain("Reviewer");
+    expect(report).not.toContain("finding");
+  });
+});
 
 describe("renderReport", () => {
   it("has a header with harness, models, base/head, duration and cost", () => {

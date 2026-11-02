@@ -26,6 +26,8 @@ export interface EvalRunOptions {
   /** Recorded in run.json. */
   dataset: string;
   smoke: boolean;
+  /** Run Summarize on each case (default: true). */
+  summarize?: boolean;
   /** One clone per case repo, reused across evals. */
   checkoutsDir: string;
   harness: Harness;
@@ -113,6 +115,7 @@ async function runCase(
       log: (message) => options.log(`  ${message}`),
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
+      ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
     });

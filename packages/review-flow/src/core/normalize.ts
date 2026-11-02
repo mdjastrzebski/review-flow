@@ -14,7 +14,7 @@ export function findingId(index: number): string {
 }
 
 /** Repo-relative, forward-slash path; absolute paths inside the repo are made relative. */
-function normalizeFile(file: string, repo: string): string {
+export function normalizeFile(file: string, repo: string): string {
   const absolute = path.resolve(repo, file);
   const relative = path.relative(repo, absolute);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return file;
