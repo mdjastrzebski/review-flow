@@ -2,12 +2,13 @@
 
 A local CLI that reviews your code changes with AI agents. One agent looks for bugs, separate agents try to refute each finding, and you get a ranked report with the cost of the run.
 
-> **Preview (0.x).** It reviews the current branch only. Expect breaking changes.
+> **Preview (0.x).** It reviews the current branch or a GitHub PR. Expect breaking changes.
 
 ## Requirements
 
 - Node 24 or later, and `git`.
 - One agent CLI, signed in: [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`) or [Cursor CLI](https://cursor.com/cli) (`agent`).
+- For PRs: the [GitHub CLI](https://cli.github.com) (`gh`), signed in.
 
 ## Usage
 
@@ -26,6 +27,14 @@ It reviews the branch against `origin/main` (fetched first), including uncommitt
 | `--model`, `--effort` | Model and effort for all agents. `--verifier-model` and `--verifier-effort` override them for verifiers. |
 | `--committed-only`    | Review `HEAD` without uncommitted changes                                                                |
 | `-q, --quiet`         | Print only the run directory                                                                             |
+
+### Pull requests
+
+```bash
+npx review-flow 123          # or a PR URL
+```
+
+It fetches the PR, checks out its head in a temporary worktree (your checkout is untouched), and reviews it against the PR's base. PR code is treated as trusted, so only review PRs you trust. In a terminal it then offers to post findings: pick which ones, preview the review, and confirm. It posts one comment-only review: findings on lines in the diff as inline comments, the rest in the review body. `review-flow post [run]` posts a past PR review (default: the latest).
 
 Other commands: `review-flow runs` lists past runs, and `review-flow compare <a> <b>` compares two runs by cost, time, and findings.
 

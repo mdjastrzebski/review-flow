@@ -6,7 +6,12 @@ import {
   EFFORTS,
   HARNESSES,
   NoChangesError,
+  createReviewWorktree,
   defaultBase,
+  ensureStateDir,
+  fetchPr,
+  parsePrTarget,
+  postableItems,
   defaultCheckoutsDir,
   loadDataset,
   loadRun,
@@ -24,8 +29,9 @@ import {
 } from "../core/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { formatFindings } from "./format.ts";
+import { postRun } from "./post.ts";
+import { ask, confirm, interactive } from "./prompt.ts";
 import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
 
 // pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
@@ -43,18 +49,6 @@ interface AgentOptions {
 }
 
 type Log = (message: string) => void;
-
-const interactive = () => Boolean(process.stdin.isTTY && process.stderr.isTTY);
-
-/** Asks on stderr so stdout stays clean for --quiet. */
-async function ask(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  try {
-    return (await rl.question(question)).trim();
-  } finally {
-    rl.close();
-  }
-}
 
 /** --harness, else the saved one, else asked in a TTY and saved for next time. */
 async function resolveHarness(flag: Harness | undefined, log: Log): Promise<Harness> {
@@ -135,20 +129,75 @@ async function askBase(repo: string, log: Log): Promise<string> {
   return (await ask(`Base [${ref}]: `)) || ref;
 }
 
-async function review(options: ReviewOptions): Promise<void> {
+/**
+ * Fetches the PR, checks out its head in a temporary worktree, and reviews it there against the
+ * PR's base. The worktree is removed afterwards, also on Ctrl-C.
+ */
+async function reviewPr(
+  target: string,
+  agent: Awaited<ReturnType<typeof resolveAgent>>,
+  options: ReviewOptions,
+  log: Log,
+) {
+  if (options.base !== undefined) throw new Error("--base can't be used with a PR target.");
+  const repo = await resolveRepoRoot(options.repo);
+  log(`Fetching PR ${target}...`);
+  const { pr, base } = await fetchPr(repo, target);
+  log(`PR #${pr.number}: ${pr.title}`);
+  log(`Base: ${base} · Head: ${pr.headSha.slice(0, 7)}`);
+  if (pr.isCrossRepository) log("PR is from a fork; it is reviewed as trusted code.");
+
+  await ensureStateDir(repo);
+  const worktree = await createReviewWorktree(repo, pr.headSha);
+  const onSigint = () => {
+    worktree.removeSync();
+    process.exit(130);
+  };
+  process.once("SIGINT", onSigint);
+  try {
+    const result = await runReview({
+      ...agent,
+      cwd: worktree.dir,
+      stateRepo: repo,
+      pr,
+      base,
+      committedOnly: true,
+      log,
+    });
+    return { ...result, base };
+  } finally {
+    process.off("SIGINT", onSigint);
+    await worktree.remove();
+  }
+}
+
+async function review(target: string | undefined, options: ReviewOptions): Promise<void> {
   const log: Log = options.quiet ? () => {} : (message: string) => console.log(message);
+  const prTarget = target === undefined ? null : parsePrTarget(target);
+  if (target !== undefined && prTarget === null) {
+    throw new Error(
+      `Unsupported target "${target}". Only PR numbers and URLs are supported so far.`,
+    );
+  }
   const agent = await resolveAgent(options, log);
-  const base = options.base ?? (await askBase(options.repo, log));
 
   let result;
   try {
-    result = await runReview({
-      ...agent,
-      cwd: options.repo,
-      base,
-      committedOnly: options.committedOnly,
-      log,
-    });
+    if (prTarget !== null) {
+      result = await reviewPr(prTarget, agent, options, log);
+    } else {
+      const base = options.base ?? (await askBase(options.repo, log));
+      result = {
+        ...(await runReview({
+          ...agent,
+          cwd: options.repo,
+          base,
+          committedOnly: options.committedOnly,
+          log,
+        })),
+        base,
+      };
+    }
   } catch (error) {
     if (!(error instanceof NoChangesError)) throw error;
     // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
@@ -163,13 +212,35 @@ async function review(options: ReviewOptions): Promise<void> {
   }
   console.log(
     formatFindings(
-      { ...result, base, reportPath: result.runDir.reportPath },
+      { ...result, reportPath: result.runDir.reportPath },
       {
         color: process.stdout.hasColors?.() ?? false,
         width: Math.min(process.stdout.columns ?? 100, 100),
       },
     ),
   );
+
+  if (prTarget !== null && interactive()) {
+    const postable = postableItems(result.findings, result.verdicts);
+    if (postable.length > 0 && (await confirm("Post findings to the PR?"))) {
+      await postRun(result.runDir.root, colorOptions());
+    } else if (postable.length > 0) {
+      console.log(`Post later with: review-flow post ${path.basename(result.runDir.root)}`);
+    }
+  }
+}
+
+async function post(ref: string | undefined, options: { repo: string }): Promise<void> {
+  const repo = await resolveRepoRoot(options.repo);
+  let id = ref;
+  if (id === undefined) {
+    const latest = (await readIndex(repo)).findLast(
+      (e) => e.kind === "review" && e.pr !== undefined,
+    );
+    if (latest === undefined) throw new Error("No PR review to post. Review a PR first.");
+    id = latest.id;
+  }
+  await postRun((await resolveRun(repo, id, userCwd)).root, colorOptions());
 }
 
 interface EvalOptions extends AgentOptions {
@@ -228,7 +299,8 @@ const program = new Command("review-flow").version(version);
 addAgentOptions(
   program
     .command("review", { isDefault: true })
-    .description("Review the current branch against a base ref")
+    .description("Review the current branch, or a PR, against a base ref")
+    .argument("[target]", "PR number or URL; default: the current branch")
     .option(
       "-b, --base <ref>",
       "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
@@ -251,6 +323,16 @@ addAgentOptions(
   .option("--repo <path>", "repository to save the eval run in", userCwd)
   .option("-q, --quiet", "no progress or summary output; print only the eval run dir path", false)
   .action(evaluate);
+
+program
+  .command("post")
+  .description("Post selected findings of a PR review as a GitHub review comment")
+  .argument(
+    "[run]",
+    "run id, a unique part of one, or a run dir path; default: the latest PR review",
+  )
+  .option("--repo <path>", "repository", userCwd)
+  .action(post);
 
 program
   .command("runs")

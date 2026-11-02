@@ -34,6 +34,7 @@ export interface RunDir {
   readonly findingsPath: string;
   readonly verdictsPath: string;
   readonly reportPath: string;
+  readonly postedPath: string;
   promptPath(taskId: string): string;
   rawPath(taskId: string): string;
 }
@@ -47,6 +48,7 @@ export function runDirPaths(root: string): RunDir {
     findingsPath: path.join(root, "findings.json"),
     verdictsPath: path.join(root, "verdicts.json"),
     reportPath: path.join(root, "report.md"),
+    postedPath: path.join(root, "posted.json"),
     promptPath: (taskId) => path.join(root, "prompts", `${taskId}.md`),
     rawPath: (taskId) => path.join(root, "raw", `${taskId}.json`),
   };

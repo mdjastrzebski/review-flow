@@ -1,4 +1,5 @@
 import { describeModel, formatCost, formatDuration, formatLocation } from "./format.ts";
+import type { PullRequest } from "./github.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
@@ -10,6 +11,7 @@ export interface ReportInput {
   models: RoleModels;
   base: { ref: string; sha: string };
   head: { sha: string; snapshotSha?: string };
+  pr?: PullRequest;
   durationMs: number;
   /** null when the harness reported no cost (Cursor). */
   costUsd: number | null;
@@ -118,9 +120,14 @@ function renderItem(item: RankedItem): string {
 function header(input: ReportInput): string {
   const stats = [`**Duration:** ${formatDuration(input.durationMs)}`];
   if (input.costUsd !== null) stats.push(`**Cost:** ${formatCost(input.costUsd)}`);
+  const title =
+    input.pr === undefined
+      ? `# Review: ${input.base.ref}...HEAD`
+      : `# Review: PR #${input.pr.number}: ${inline(input.pr.title)}`;
   return [
-    `# Review: ${input.base.ref}...HEAD`,
+    title,
     [
+      ...(input.pr === undefined ? [] : [`- **PR:** ${input.pr.url}`]),
       `- **Harness:** ${input.harness}`,
       `- **Reviewer:** ${describeModel(input.models.reviewer)}`,
       `- **Verifier:** ${describeModel(input.models.verifier)}`,

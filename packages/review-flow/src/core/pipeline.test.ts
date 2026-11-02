@@ -1,15 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
 import type { CallRecord } from "./calls.ts";
 import { WorkingTreeChangedError } from "./git.ts";
+import type { PullRequest } from "./github.ts";
 import { DEFAULT_MODELS } from "./models.ts";
 import { NoChangesError, runReview } from "./pipeline.ts";
+import { ensureStateDir } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
 import type { Finding, ReviewOutput, Verdict } from "./schemas.ts";
+import { createReviewWorktree } from "./worktree.ts";
 
 let repo: string;
 
@@ -188,6 +191,40 @@ describe("runReview", () => {
         unknownCostCalls: 0,
       },
     ]);
+  });
+
+  it("reviews a PR worktree and keeps the run dir and index in the state repo", async () => {
+    const { runAgent, tasks } = stubAgent();
+    const pr: PullRequest = {
+      number: 7,
+      url: "https://github.com/acme/app/pull/7",
+      title: "Add b",
+      host: "github.com",
+      repo: "acme/app",
+      baseBranch: "main",
+      headSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
+      isCrossRepository: false,
+    };
+    await ensureStateDir(repo);
+    const worktree = await createReviewWorktree(repo, pr.headSha);
+    try {
+      const { runDir } = await runReview({
+        ...baseOptions,
+        cwd: worktree.dir,
+        stateRepo: repo,
+        pr,
+        committedOnly: true,
+        runAgent,
+      });
+      expect(runDir.root.startsWith(path.join(repo, ".review-flow", "runs"))).toBe(true);
+      expect(tasks[0]?.cwd).toBe(await realpath(worktree.dir));
+      expect(tasks[0]?.prompt).toContain("the head of PR #7");
+      expect(JSON.parse(await readFile(runDir.runJsonPath, "utf8")).pr).toEqual(pr);
+      expect(await readFile(runDir.reportPath, "utf8")).toContain("# Review: PR #7: Add b");
+      expect((await readIndex(repo)).at(-1)).toMatchObject({ pr: 7 });
+    } finally {
+      await worktree.remove();
+    }
   });
 
   it("computes the cost from tokens when a task reports none", async () => {

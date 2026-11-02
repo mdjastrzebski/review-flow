@@ -111,6 +111,60 @@ export async function defaultBase(cwd: string): Promise<DefaultBase> {
   throw new Error("No main or master branch found. Pass --base <ref>.");
 }
 
+/** Remote name → fetch URL. */
+export async function remoteUrls(repo: string): Promise<Map<string, string>> {
+  const remotes = new Map<string, string>();
+  for (const line of (await git(repo, ["remote", "-v"])).split("\n")) {
+    const [name, url, kind] = line.split(/\s+/);
+    if (name && url && kind === "(fetch)") remotes.set(name, url);
+  }
+  return remotes;
+}
+
+/**
+ * Fetches a GitHub PR's base branch into `<remote>/<baseBranch>` and its head commit. The head
+ * lands only in FETCH_HEAD, so no ref is added to the repo.
+ */
+export async function fetchPullRequest(
+  repo: string,
+  remote: string,
+  number: number,
+  baseBranch: string,
+  headSha: string,
+): Promise<void> {
+  await git(repo, [
+    "fetch",
+    "--quiet",
+    remote,
+    `+refs/heads/${baseBranch}:refs/remotes/${remote}/${baseBranch}`,
+    `refs/pull/${number}/head`,
+  ]);
+  if (!(await hasCommit(repo, headSha))) {
+    throw new Error(`PR #${number} moved while it was fetched; run again.`);
+  }
+}
+
+/** Adds a detached worktree at `sha`. Hooks are off, so checking out runs no repo code. */
+export async function addWorktree(repo: string, dir: string, sha: string): Promise<void> {
+  await git(repo, [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "worktree",
+    "add",
+    "--quiet",
+    "--detach",
+    dir,
+    sha,
+  ]);
+}
+
+/** Removes a worktree and its git metadata. Never throws: cleanup must not hide the real error. */
+export async function removeWorktree(repo: string, dir: string): Promise<void> {
+  await git(repo, ["worktree", "remove", "--force", dir]).catch(() => {});
+  await rm(dir, { recursive: true, force: true });
+  await git(repo, ["worktree", "prune"]).catch(() => {});
+}
+
 export async function shortSha(repo: string, ref: string): Promise<string> {
   return (await git(repo, ["rev-parse", "--short", ref])).trim();
 }

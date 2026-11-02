@@ -43,6 +43,8 @@ export interface ReviewIndexEntry {
   models: RoleModels;
   base: { ref: string; sha: string };
   head: { sha: string; snapshotSha?: string };
+  /** The PR number, for PR reviews. */
+  pr?: number;
   diff: DiffStats;
   /** null when the run failed before the reviewer returned. */
   findings: number | null;

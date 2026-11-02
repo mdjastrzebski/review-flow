@@ -14,6 +14,7 @@ import {
   type StatusSnapshot,
 } from "./git.ts";
 import { describeModel } from "./format.ts";
+import type { PullRequest } from "./github.ts";
 import { writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
@@ -50,6 +51,13 @@ export interface ReviewRunOptions {
    * `.review-flow/runs/` and is indexed; with a path, the repo's .gitignore and index are left alone.
    */
   runRoot?: string;
+  /**
+   * The repo whose `.review-flow/` holds the run dir and index, when `cwd` is a review worktree.
+   * Default: the reviewed repo.
+   */
+  stateRepo?: string;
+  /** The PR whose head `cwd` is checked out at; recorded so the run can be posted. */
+  pr?: PullRequest;
 }
 
 export interface ReviewRunResult {
@@ -69,6 +77,7 @@ export interface RunRecord {
   base: { ref: string; sha: string };
   /** snapshotSha: the commit holding uncommitted changes that was reviewed instead of HEAD. */
   head: { sha: string; snapshotSha?: string };
+  pr?: PullRequest;
   startedAt: string;
   finishedAt: string;
   status: "ok" | "failed";
@@ -289,16 +298,22 @@ export class NoChangesError extends Error {
 
 /** collect → review → normalize → verify → rank → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
-  const { base, harness, models, runAgent, log, runRoot } = options;
+  const { base, harness, models, runAgent, log, runRoot, pr } = options;
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
+  const stateRepo = options.stateRepo ?? repo;
   const baseSha = await resolveCommit(repo, base);
   const headSha = await resolveCommit(repo, "HEAD");
   const snapshot = options.committedOnly ? null : await snapshotWorkingTree(repo);
   const head = snapshot === null ? { sha: headSha } : { sha: headSha, snapshotSha: snapshot.sha };
   const change: ChangeRange = {
     base,
-    head: snapshot === null ? "`HEAD`" : "`HEAD` plus uncommitted changes",
+    head:
+      pr !== undefined
+        ? `\`HEAD\` (the head of PR #${pr.number})`
+        : snapshot === null
+          ? "`HEAD`"
+          : "`HEAD` plus uncommitted changes",
   };
 
   const diff = await diffAgainstBase(repo, base, snapshot?.sha);
@@ -309,13 +324,13 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   log(`Reviewer: ${describeModel(models.reviewer)}`);
   log(`Verifier: ${describeModel(models.verifier)}`);
 
-  if (runRoot === undefined) await ensureStateDir(repo);
+  if (runRoot === undefined) await ensureStateDir(stateRepo);
   // Taken after .review-flow/ exists; agents must leave the tree exactly like this.
   const status = await snapshotStatus(repo);
 
   const runDir =
     runRoot === undefined
-      ? await createRunDir(repo, await shortSha(repo, "HEAD"), startedAt)
+      ? await createRunDir(stateRepo, await shortSha(repo, "HEAD"), startedAt)
       : await createRunDirAt(runRoot);
   await writeFile(runDir.diffPath, diff);
   log(`Run dir: ${runDir.root}`);
@@ -385,6 +400,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         models,
         base: { ref: base, sha: baseSha },
         head,
+        ...(pr === undefined ? {} : { pr }),
         durationMs,
         costUsd,
         findings,
@@ -405,6 +421,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       models,
       base: { ref: base, sha: baseSha },
       head,
+      ...(pr === undefined ? {} : { pr }),
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       status: failure === null ? "ok" : "failed",
@@ -413,7 +430,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     };
     await writeJson(runDir.runJsonPath, run);
     if (runRoot === undefined) {
-      await appendIndexEntry(repo, {
+      await appendIndexEntry(stateRepo, {
         id: path.basename(runDir.root),
         kind: "review",
         startedAt: run.startedAt,
@@ -423,6 +440,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         models,
         base: run.base,
         head: run.head,
+        ...(pr === undefined ? {} : { pr: pr.number }),
         diff: diffStats(diff),
         findings: findingCount,
         verdicts: verdictCounts,

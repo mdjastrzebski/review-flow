@@ -4,11 +4,13 @@ What is implemented so far. The target design is [SPEC.md](SPEC.md).
 
 ## Status
 
-A working CLI that reviews a branch with agents run through a headless CLI, `claude -p` or Cursor's `agent -p`: one reviewer finds issues, verifiers check each finding, and the result is a ranked report.
+A working CLI that reviews a branch or a GitHub PR with agents run through a headless CLI, `claude -p` or Cursor's `agent -p`: one reviewer finds issues, verifiers check each finding, and the result is a ranked report.
 
 ```bash
 npx review-flow                                        # published package; asks for harness and base
 pnpm review-flow review                                # from source; or -H claude -b main
+pnpm review-flow 123                                   # a PR, by number or URL
+pnpm review-flow post                                  # post findings of the latest PR review
 pnpm review-flow eval --harness claude --smoke         # score the eval dataset
 pnpm review-flow runs                                  # past runs and evals, newest first
 pnpm review-flow compare <a> <b>                       # two runs or two evals side by side
@@ -37,6 +39,15 @@ Both spawn the CLI per task, with the prompt on stdin, and read its `stream-json
 5. **Rank.** Rules enforced in code: `confirmed` without a `code_ref` is downgraded to `inconclusive`, and a failed verifier counts as `inconclusive`. Findings are sorted by verdict, then severity, then confidence ([rank.ts](packages/review-flow/src/core/rank.ts)).
 6. **Report.** Markdown report plus a terminal summary.
 
+## Pull requests
+
+`review-flow <number or URL>` ([github.ts](packages/review-flow/src/core/github.ts), [worktree.ts](packages/review-flow/src/core/worktree.ts)):
+
+1. **Fetch.** `gh pr view` gives the PR's base branch, head SHA, and repo. The git remote pointing at that repo (`origin` on a tie) is fetched: the base into `<remote>/<base>`, the head into `FETCH_HEAD` only, so no ref is added.
+2. **Worktree.** A detached worktree at the head, with hooks off, under `.review-flow/worktrees/<pid>-<sha>/`. Agents work there; the run dir and index stay in the main repo. The worktree is removed when the run ends, also on failure or Ctrl-C. Worktrees whose process is gone are removed at the start of the next PR review.
+3. **Review.** The usual pipeline, against `<remote>/<base>`. `run.json` records the PR, and its index line the PR number. All PRs, forks included, are treated as trusted; `--base` is refused.
+4. **Post.** In a TTY, offered after the review when there is something to post; or later with `review-flow post [run]` (default: the latest PR review) ([post.ts](packages/review-flow/src/core/post.ts), [cli/post.ts](packages/review-flow/src/cli/post.ts)). Every finding that wasn't refuted is listed; confirmed findings of medium severity or higher are pre-selected. If the PR head moved since the run, it warns and asks before posting on the reviewed commit. It previews the review, asks to confirm, and sends one `COMMENT` review with `gh api`. A finding whose lines are all in the diff becomes a multi-line inline comment; one partly in the diff is anchored to its first diff line; the rest go in the review body, with a summary and a footer. A comment shows the title, severity, claim, and fix (the verifier's better fix when it found the suggested one flawed or incomplete). `posted.json` records the review and comment ids; if reading the comments back fails, it is still written, without comment ids, and a warning is printed. Posting a run again asks first.
+
 ## Safety
 
 - `claude` agents only get `Read`, `Grep`, and `Glob` (`--tools`, `--allowed-tools`, `--permission-mode dontAsk`). A `PreToolUse` command hook, passed with `--settings`, also denies any other tool and any path outside the repo, following symlinks and expanding a leading `~` as Claude Code does, and fails closed ([guard.ts](packages/review-flow/src/agents/guard.ts), [guard-hook.ts](packages/review-flow/src/agents/guard-hook.ts)).
@@ -57,6 +68,7 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/`. `.review-flow/` holds it
 | `findings.json`     | Normalized findings                                                                                                                                        |
 | `verdicts.json`     | Verdict per finding                                                                                                                                        |
 | `report.md`         | Ranked report                                                                                                                                              |
+| `posted.json`       | Posted review: id, URL, commit, and comment id per finding (PR reviews that were posted)                                                                   |
 | `run.json`          | Models, base/head SHAs (plus `head.snapshotSha` when uncommitted changes were reviewed), status, and per-step and total calls, cost, tokens, and wall time |
 
 Steps in `run.json` are `collect`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls. A call's cost source is `reported` when the CLI gave a cost, `computed` when its tokens and model are in the price table (standard API prices for Claude 5.5 models, Grok 4.7, and Composer 2.5; fast variants and long-context surcharges are not priced), else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
@@ -111,11 +123,12 @@ All CLI code is one package, [packages/review-flow](packages/review-flow), publi
 
 ## Gaps against the [spec](SPEC.md)
 
-- **Usage (2):** `--harness` (or a saved one) is required without a TTY; installed CLIs aren't detected. No PR, branch, commit, or range targets. Only `review`, `eval`, `runs`, and `compare` exist.
-- **Trust (3):** none. Reviews run in the developer's checkout, not a worktree.
+- **Usage (2):** `--harness` (or a saved one) is required without a TTY; installed CLIs aren't detected. No branch, commit, or range targets. No `config` or `doctor` commands.
+- **Trust (3):** none; every target, including fork PRs, is trusted. Branch reviews run in the developer's checkout, not a worktree.
 - **Pipeline (4):** one finder, no dedupe or filter, one verifier session per finding with the full diff each time.
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
-- **Incremental reviews (6), posting and exit codes (7):** none.
+- **Incremental reviews (6) and exit codes (7):** none.
+- **Posting (7):** no editing in `$EDITOR`. Posted findings aren't used for repeat suppression yet.
 - **Configuration (8):** CLI flags and the saved `harness` only. No other config keys, no JSONC or project files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.
 - **Instrumentation (10):** the index has no preset, config hash, or `REVIEW.md` hash, since none of those exist yet. Runs from before the index aren't listed by `runs`, though `compare` still takes their ids if their `run.json` has per-step records. The report and terminal summary don't mark totals with `unknown` calls as partial.
