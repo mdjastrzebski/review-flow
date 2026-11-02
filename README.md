@@ -51,6 +51,8 @@ The design is in [SPEC.md](SPEC.md), progress in [PROGRESS.md](PROGRESS.md), and
 pnpm install
 pnpm review-flow review     # run from source
 pnpm check                  # format, lint, typecheck, tests
+pnpm install:global         # global copy installed from a packed tarball, as npm would
+pnpm uninstall:global       # remove it
 pnpm release                # bump, publish to npm, tag, and draft a GitHub release
 ```
 

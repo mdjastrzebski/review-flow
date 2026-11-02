@@ -12,7 +12,9 @@
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "build": "pnpm --filter review-flow build",
-    "release": "pnpm --filter review-flow release"
+    "release": "pnpm --filter review-flow release",
+    "install:global": "pnpm --filter review-flow install:global",
+    "uninstall:global": "pnpm --filter review-flow uninstall:global"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

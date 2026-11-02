@@ -32,7 +32,9 @@
     "postpack": "rm README.md LICENSE",
     "release": "release-it",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "install:global": "pnpm pack --out review-flow.tgz && npm install -g ./review-flow.tgz; rm -f review-flow.tgz",
+    "uninstall:global": "npm uninstall -g review-flow"
   },
   "dependencies": {
     "commander": "^15.0.0",
