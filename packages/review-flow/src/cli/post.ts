@@ -15,13 +15,16 @@ import {
   type Summary,
   type Verdict,
 } from "../core/index.ts";
-import { ask, confirm, interactive, parseSelection } from "./prompt.ts";
+import { confirm, interactive, note, pick, type Choice } from "./prompt.ts";
 
 type Paint = (style: Parameters<typeof styleText>[0], text: string) => string;
 
+/** The picker entry for the run's summary; finding ids look like `F-001`. */
+const SUMMARY = "summary";
+
 /**
- * Posts selected findings of a PR run as one COMMENT review: select, check the PR head, preview,
- * confirm, send. Needs a TTY; nothing is posted without an explicit yes.
+ * Posts the summary and selected findings of a PR run as one COMMENT review: select, check the
+ * PR head, preview, confirm, send. Needs a TTY; nothing is posted without an explicit yes.
  */
 export async function postRun(runRoot: string, options: { color: boolean }): Promise<void> {
   const paint: Paint = (style, text) =>
@@ -38,72 +41,64 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   const findings = (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath)) ?? [];
   const verdicts = (await readJsonOrNull<Record<string, Verdict>>(paths.verdictsPath)) ?? {};
   const items = postableItems(findings, verdicts);
-  if (items.length === 0) {
-    console.error("Nothing to post: no findings, or all were refuted.");
+  const summary = await readJsonOrNull<Summary>(paths.summaryPath);
+  if (items.length === 0 && summary === null) {
+    note.info("Nothing to post: no summary, and no findings or all were refuted.");
     return;
   }
 
   const posted = await readJsonOrNull<PostedRecord>(paths.postedPath);
   if (posted !== null) {
-    console.error(`This run was already posted: ${posted.url}`);
+    note.warn(`This run was already posted: ${posted.url}`);
     if (!(await confirm("Post again?"))) return;
   }
 
-  console.error(`\nFindings for PR #${pr.number}: ${pr.title}`);
-  items.forEach(({ finding, verdict, preselected }, index) => {
-    console.error(
-      `  ${preselected ? "[x]" : "[ ]"} ${String(index + 1).padStart(2)}. ` +
-        `${paint("bold", finding.id)} ${verdict.severity} ${verdict.verdict}  ` +
-        `${paint("cyan", formatLocation(finding))}  ${finding.title}`,
-    );
-  });
-  const defaults = items.flatMap((item, index) => (item.preselected ? [index] : []));
-  let selected: number[];
-  for (;;) {
-    const answer = await ask(
-      `Post which? Numbers like 1,3-4; Enter for the [x] ones${defaults.length === 0 ? " (none)" : ""}; 0 to cancel: `,
-    );
-    if (answer === "0") return;
-    const parsed = answer === "" ? defaults : parseSelection(answer, items.length);
-    if (parsed !== null && parsed.length > 0) {
-      selected = parsed;
-      break;
-    }
-    console.error(
-      parsed === null ? `Pick numbers from 1 to ${items.length}.` : "Nothing selected.",
-    );
+  const choices: Choice<string>[] = items.map(({ finding, verdict }) => ({
+    value: finding.id,
+    label:
+      `${paint("bold", finding.id)} ${verdict.severity} ${verdict.verdict}  ` +
+      `${paint("cyan", formatLocation(finding))}  ${finding.title}`,
+  }));
+  if (summary !== null) {
+    choices.unshift({
+      value: SUMMARY,
+      label: paint("bold", "Summary"),
+      hint: "goal, changes, and where to look, in the review body",
+    });
+  }
+  const initial = [
+    ...(summary === null ? [] : [SUMMARY]),
+    ...items.flatMap((item) => (item.preselected ? [item.finding.id] : [])),
+  ];
+  const picked = await pick(`Post to PR #${pr.number}: ${pr.title}`, choices, initial);
+  if (picked === null) return;
+  const selected = items.filter((item) => picked.includes(item.finding.id));
+  if (selected.length === 0 && !picked.includes(SUMMARY)) {
+    note.info("Nothing selected.");
+    return;
   }
 
   const reviewed = run.head.sha;
   const current = await currentPrHead(runRoot, pr);
   if (current !== reviewed) {
-    console.error(
-      paint(
-        "yellow",
-        `PR #${pr.number} has moved since this review (reviewed ${reviewed.slice(0, 7)}, now ` +
-          `${current.slice(0, 7)}). Comments are anchored to the reviewed commit, so GitHub ` +
-          "shows them as outdated. To review the new commits, run the review again.",
-      ),
+    note.warn(
+      `PR #${pr.number} has moved since this review (reviewed ${reviewed.slice(0, 7)}, now ` +
+        `${current.slice(0, 7)}). Comments are anchored to the reviewed commit, so GitHub ` +
+        "shows them as outdated. To review the new commits, run the review again.",
     );
     if (!(await confirm("Post on the reviewed commit anyway?"))) return;
   }
 
   const diff = await readFile(paths.diffPath, "utf8");
-  const plan = buildReview(
-    selected.map((index) => items[index]!),
-    diff,
-    reviewed,
-    await readJsonOrNull<Summary>(paths.summaryPath),
-  );
-  console.error(`\n${paint("bold", "Review body")}\n${plan.payload.body}`);
+  const plan = buildReview(selected, diff, reviewed, picked.includes(SUMMARY) ? summary : null);
+  note.box(plan.payload.body, "Review body");
   for (const comment of plan.payload.comments) {
     const lines =
       comment.start_line === undefined
         ? `${comment.line}`
         : `${comment.start_line}-${comment.line}`;
-    console.error(`\n${paint(["bold", "cyan"], `${comment.path}:${lines}`)}\n${comment.body}`);
+    note.box(comment.body, `${comment.path}:${lines}`);
   }
-  console.error("");
   if (!(await confirm(`Post this review to ${pr.url} as a comment review?`))) return;
 
   const review = await postReview(runRoot, pr, plan.payload);
@@ -127,8 +122,6 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   await writeJson(paths.postedPath, record);
   console.log(`Posted: ${review.url}`);
   if (review.comments === null && plan.inline.length > 0) {
-    console.error(
-      paint("yellow", "Couldn't read back the inline comments; their ids aren't in posted.json."),
-    );
+    note.warn("Couldn't read back the inline comments; their ids aren't in posted.json.");
   }
 }

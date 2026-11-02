@@ -52,6 +52,17 @@ export interface ReviewRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  /** A problem that doesn't stop the run, such as a failed verifier. Default: `log`. */
+  warn?: (message: string) => void;
+  /** The summary, as soon as it is written. Default: a `Summary written` line. */
+  onSummary?: (summary: Summary) => void;
+  /** Labelled facts about the run (models, run dir), shown together. Default: one `log` each. */
+  logTable?: (title: string, rows: readonly (readonly [string, string])[]) => void;
+  /**
+   * Live agent activity, for a status line: each tool call or heartbeat, then the end of the task.
+   * Without it, each is logged as `  [taskId 0:12] text`.
+   */
+  onActivity?: (activity: TaskActivity) => void;
   /** Also log run setup, each agent's command and text, tokens per call, and step times. */
   verbose?: boolean;
   /** Review HEAD only; by default uncommitted changes are reviewed too, through a snapshot. */
@@ -105,10 +116,20 @@ export interface RunRecord {
   totals: TimedTotals;
 }
 
+export interface TaskActivity {
+  taskId: string;
+  /** Since the task started. */
+  elapsedMs: number;
+  /** A tool call or heartbeat; on the last event, the outcome, such as `done: ok, $0.06`. */
+  text: string;
+  /** The task has ended. */
+  done: boolean;
+}
+
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const QUIET_THRESHOLD_MS = 30_000;
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
@@ -121,6 +142,9 @@ interface TaskContext {
   calls: CallRecord[];
   runAgent: RunAgent;
   log: (message: string) => void;
+  warn: (message: string) => void;
+  onActivity: (activity: TaskActivity) => void;
+  onSummary: (summary: Summary) => void;
   verbose: boolean;
   /** Aborted when either branch of the run (summarize, or find and verify) throws. */
   signal: AbortSignal;
@@ -162,10 +186,12 @@ async function runTask<T>(
   let lastActivity = startedAt;
   const line = (text: string) =>
     ctx.log(`  [${task.taskId} ${formatElapsed(Date.now() - startedAt)}] ${text}`);
+  const activity = (text: string, done = false) =>
+    ctx.onActivity({ taskId: task.taskId, elapsedMs: Date.now() - startedAt, text, done });
   const heartbeat = setInterval(() => {
     const quietFor = Date.now() - lastActivity;
     if (quietFor >= QUIET_THRESHOLD_MS) {
-      line(`still working (no tool calls for ${Math.round(quietFor / 1000)}s)`);
+      activity(`still working (no tool calls for ${Math.round(quietFor / 1000)}s)`);
     }
   }, HEARTBEAT_INTERVAL_MS);
   if (ctx.verbose) {
@@ -180,17 +206,20 @@ async function runTask<T>(
       ...task,
       onProgress: ({ tool, detail }) => {
         lastActivity = Date.now();
-        line(detail === null ? tool : `${tool} ${detail}`);
+        activity(detail === null ? tool : `${tool} ${detail}`);
         onActivity?.();
       },
       ...(ctx.verbose ? { onDetail: line } : {}),
     });
+  } catch (error) {
+    activity("failed", true);
+    throw error;
   } finally {
     clearInterval(heartbeat);
   }
   const computedCost = result.costUsd === null ? computeCostUsd(task.model, result.usage) : null;
   const costUsd = result.costUsd ?? computedCost;
-  line(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`);
+  activity(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`, true);
   if (ctx.verbose) {
     if (result.error !== null) line(`error: ${result.error}`);
     line(
@@ -300,7 +329,7 @@ async function verifyFindings(
           );
           warm.resolve();
           if (result.output === null) {
-            ctx.log(`${finding.id}: verifier failed (${result.status}); marked inconclusive.`);
+            ctx.warn(`${finding.id}: verifier failed (${result.status}); marked inconclusive.`);
             return [finding.id, failedVerdict(finding, result.status, result.error)];
           }
           return [finding.id, applyVerdictRules(result.output)];
@@ -331,7 +360,7 @@ async function summarizeChange(
   ctx: TaskContext,
 ): Promise<SummaryOutcome> {
   const { model, effort } = context.models.summarizer;
-  ctx.log(`Summarizing with ${model ?? "harness default model"}…`);
+  ctx.log("Summarizing…");
   const result = await runTask(
     {
       taskId: "summarizer",
@@ -350,12 +379,12 @@ async function summarizeChange(
   );
   if (result.output === null) {
     const error = `${result.status}: ${result.error ?? "no output"}`;
-    ctx.log(`Summarizer failed (${error}); the report has no summary.`);
+    ctx.warn(`Summarizer failed (${error}); the report has no summary.`);
     return { status: "failed", error };
   }
   const summary = normalizeSummary(result.output, ctx.repo);
   await writeJson(ctx.runDir.summaryPath, summary);
-  ctx.log(`Summary → ${ctx.runDir.summaryPath}`);
+  ctx.onSummary(summary);
   return { status: "ok", summary };
 }
 
@@ -378,7 +407,6 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const verbose = options.verbose ?? false;
   const summarize = options.summarize ?? true;
   const find = options.find ?? true;
-  const debug = verbose ? log : () => {};
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
   const stateRepo = options.stateRepo ?? repo;
@@ -400,18 +428,28 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   if (diff.trim() === "") {
     throw new NoChangesError(base, snapshot !== null);
   }
-  debug(`Repo: ${repo}`);
-  debug(`Base: ${base} (${baseSha.slice(0, 7)}) · Head: ${headSha.slice(0, 7)}`);
-  if (snapshot !== null) debug(`Snapshot of uncommitted changes: ${snapshot.sha.slice(0, 7)}`);
   const stats = diffStats(diff);
-  debug(
-    `Diff: ${stats.files} file(s), +${stats.additions} −${stats.deletions}, ${diff.length} chars`,
-  );
-  if (snapshot !== null) log(`Including ${snapshot.files} uncommitted file(s)`);
-  if (summarize) log(`Summarizer: ${describeModel(models.summarizer)}`);
+  const setup: [string, string][] = [["Harness", harness]];
+  if (verbose) {
+    setup.push(
+      ["Repo", repo],
+      ["Base", `${base} (${baseSha.slice(0, 7)})`],
+      [
+        "Head",
+        headSha.slice(0, 7) +
+          (snapshot === null ? "" : ` + uncommitted (snapshot ${snapshot.sha.slice(0, 7)})`),
+      ],
+      [
+        "Diff",
+        `${stats.files} file(s), +${stats.additions} −${stats.deletions}, ${diff.length} chars`,
+      ],
+    );
+  }
+  if (snapshot !== null) setup.push(["Uncommitted", `${snapshot.files} file(s) included`]);
+  if (summarize) setup.push(["Summarizer", describeModel(models.summarizer)]);
   if (find) {
-    log(`Reviewer: ${describeModel(models.reviewer)}`);
-    log(`Verifier: ${describeModel(models.verifier)}`);
+    setup.push(["Reviewer", describeModel(models.reviewer)]);
+    setup.push(["Verifier", describeModel(models.verifier)]);
   }
   const intent: Intent =
     pr !== undefined
@@ -431,7 +469,13 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       ? await createRunDir(stateRepo, await shortSha(repo, "HEAD"), startedAt)
       : await createRunDirAt(runRoot);
   await writeFile(runDir.diffPath, diff);
-  log(`Run dir: ${runDir.root}`);
+  setup.push(["Run dir", runDir.root]);
+  const logTable =
+    options.logTable ??
+    ((_: string, rows: readonly (readonly [string, string])[]) => {
+      for (const [label, value] of rows) log(`${label}: ${value}`);
+    });
+  logTable("Review", setup);
 
   const stepDurations: StepDurations = new Map([["collect", Date.now() - startedAt.getTime()]]);
   const calls: CallRecord[] = [];
@@ -444,6 +488,10 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     calls,
     runAgent,
     log,
+    warn: options.warn ?? log,
+    onSummary: options.onSummary ?? (() => log("Summary written")),
+    onActivity:
+      options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
     verbose,
     signal: abort.signal,
   };
@@ -478,7 +526,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
               ...change,
               diffBlock: codeFence(diff, "diff"),
             });
-            log(`Reviewing with ${models.reviewer.model ?? "harness default model"}…`);
+            log("Reviewing…");
             const review = await runTask(
               {
                 taskId: "reviewer",
@@ -502,9 +550,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             const normalized = normalizeFindings(review.output, repo);
             for (const note of normalized.notes) log(note);
             await writeJson(runDir.findingsPath, normalized.findings);
-            log(
-              `Reviewer returned ${normalized.findings.length} finding(s) → ${runDir.findingsPath}`,
-            );
+            log(`Reviewer returned ${normalized.findings.length} finding(s)`);
             return normalized.findings;
           });
 
@@ -513,13 +559,16 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
 
           const verdicts = await timeStep(stepDurations, "verify", async () => {
             if (findings.length > 0) {
-              log(
-                `Verifying ${findings.length} finding(s) with ${models.verifier.model ?? "harness default model"}…`,
-              );
+              log(`Verifying ${findings.length} finding(s)…`);
             }
             const result = await verifyFindings(findings, { change, sharedContext, models }, ctx);
             await writeJson(runDir.verdictsPath, result);
-            log(`Verdicts → ${runDir.verdictsPath}`);
+            if (findings.length > 0) {
+              const counts = countVerdicts(result);
+              log(
+                `Verified: ${counts.confirmed} confirmed, ${counts.inconclusive} inconclusive, ${counts.refuted} refuted`,
+              );
+            }
             return result;
           });
 
@@ -560,11 +609,20 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         verdicts,
       });
       await writeFile(runDir.reportPath, report);
-      log(`Report → ${runDir.reportPath}`);
     });
-    debug(
-      `Steps: ${[...stepDurations].map(([step, ms]) => `${step} ${formatDuration(ms)}`).join(" · ")}`,
-    );
+    const saved: [string, string][] = [];
+    if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);
+    if (found !== null) {
+      saved.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
+    }
+    saved.push(["Report", runDir.reportPath]);
+    if (verbose) {
+      saved.push([
+        "Steps",
+        [...stepDurations].map(([step, ms]) => `${step} ${formatDuration(ms)}`).join(" · "),
+      ]);
+    }
+    logTable("Saved", saved);
 
     return { runDir, summary, findings, verdicts, costUsd, durationMs };
   } catch (error) {

@@ -36,7 +36,7 @@ It reviews the branch against `origin/main` (fetched first), including uncommitt
 npx review-flow 123          # or a PR URL
 ```
 
-It fetches the PR, checks out its head in a temporary worktree (your checkout is untouched), and reviews it against the PR's base. PR code is treated as trusted, so only review PRs you trust. In a terminal it then offers to post findings: pick which ones, preview the review, and confirm. It posts one comment-only review: findings on lines in the diff as inline comments, the rest in the review body, after the summary. `review-flow post [run]` posts a past PR review (default: the latest).
+It fetches the PR, checks out its head in a temporary worktree (your checkout is untouched), and reviews it against the PR's base. PR code is treated as trusted, so only review PRs you trust. In a terminal it then offers to post findings: pick the summary and findings with the arrow keys and Space, preview the review, and confirm. It posts one comment-only review: findings on lines in the diff as inline comments, the rest in the review body, after the summary. `review-flow post [run]` posts a past PR review (default: the latest).
 
 Other commands: `review-flow summary [target]` only summarizes the change, `review-flow runs` lists past runs, and `review-flow compare <a> <b>` compares two runs by cost, time, and findings.
 

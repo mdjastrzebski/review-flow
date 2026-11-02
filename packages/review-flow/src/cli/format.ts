@@ -8,6 +8,7 @@ import {
   type FixAssessment,
   type NormalizedFinding,
   type Severity,
+  type Summary,
   type SummaryOutcome,
   type Verdict,
 } from "../core/index.ts";
@@ -74,18 +75,30 @@ export function wrap(text: string, width: number): string[] {
 export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): string {
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
-  const out: string[] = ["", paint("bold", "Summary")];
+  const header = ["", paint("bold", "Summary")];
   if (outcome.status === "failed") {
-    out.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
-    return out.join("\n");
+    header.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
+    return header.join("\n");
   }
-  const { goal, changes, achieved, lookAt } = outcome.summary;
-  const textWidth = Math.max(40, options.width - INDENT.length - LABEL_WIDTH);
+  const body = formatSummaryFields(outcome.summary, {
+    ...options,
+    width: options.width - INDENT.length,
+  });
+  return [...header, ...body.split("\n").map((line) => `${INDENT}${line}`)].join("\n");
+}
+
+/** The summary's fields as labelled, wrapped lines, without a heading or indent. */
+export function formatSummaryFields(summary: Summary, options: FormatOptions): string {
+  const paint = (style: Style, text: string) =>
+    options.color ? styleText(style, text, { validateStream: false }) : text;
+  const out: string[] = [];
+  const { goal, changes, achieved, lookAt } = summary;
+  const textWidth = Math.max(40, options.width - LABEL_WIDTH);
   const field = (label: string, text: string) => {
     wrap(text, textWidth).forEach((line, index) => {
       const prefix =
         index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
-      out.push(`${INDENT}${prefix}${line}`);
+      out.push(`${prefix}${line}`);
     });
   };
   const bullets = (label: string, items: string[]) => {
@@ -96,7 +109,7 @@ export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): 
           index === 0 && at === 0
             ? paint("dim", label.padEnd(LABEL_WIDTH))
             : " ".repeat(LABEL_WIDTH);
-        out.push(`${INDENT}${prefix}${at === 0 ? "- " : "  "}${line}`);
+        out.push(`${prefix}${at === 0 ? "- " : "  "}${line}`);
       });
     });
   };

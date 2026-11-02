@@ -167,11 +167,11 @@ A short, human-readable account of the change, so the human can judge it at a hi
 
 Posting is never automatic. It is offered after a PR review in a TTY, or run later with `review-flow post [run]`.
 
-1. **Select.** A checkbox list of introduced findings. Confirmed findings of `medium` severity or higher are pre-selected.
+1. **Select.** A checkbox list: arrow keys move, Space marks, Enter accepts. The summary comes first, then introduced findings. The summary and confirmed findings of `medium` severity or higher are pre-selected.
 2. **Edit.** The user can edit the selected findings' text in `$EDITOR`, since they post under their own name.
 3. **Check.** If the PR head moved since the run, warn. The user can post anchored to the reviewed commit (GitHub shows those comments as outdated) or re-run first.
 4. **Preview and confirm.** Show exactly what will be posted.
-5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with the summary and a "reviewed with review-flow" footer.
+5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with the summary (when selected) and a "reviewed with review-flow" footer.
 
 Posted findings and their comment ids are saved in the run directory, for repeat suppression and response tracking.
 

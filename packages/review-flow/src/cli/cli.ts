@@ -31,7 +31,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { formatFindings, formatSummary } from "./format.ts";
 import { postRun } from "./post.ts";
-import { ask, confirm, interactive } from "./prompt.ts";
+import { createProgress, type Progress } from "./progress.ts";
+import { ask, choose, confirm, interactive, note } from "./prompt.ts";
 import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
 
 // pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
@@ -52,32 +53,30 @@ interface AgentOptions {
 
 type Log = (message: string) => void;
 
+/** The pipeline's progress hooks. */
+const progressHooks = (progress: Progress) => ({
+  log: progress.log,
+  warn: progress.warn,
+  logTable: progress.logTable,
+  ...(progress.onActivity === undefined ? {} : { onActivity: progress.onActivity }),
+  ...(progress.onSummary === undefined ? {} : { onSummary: progress.onSummary }),
+});
+
 /** --harness, else the saved one, else asked in a TTY and saved for next time. */
-async function resolveHarness(flag: Harness | undefined, log: Log): Promise<Harness> {
+async function resolveHarness(flag: Harness | undefined): Promise<Harness> {
   if (flag !== undefined) return flag;
   const saved = (await readUserConfig()).harness;
-  if (saved !== undefined) {
-    log(`Harness: ${saved} (from ${userConfigPath()})`);
-    return saved;
-  }
-  const choices = HARNESSES.join(", ");
-  if (!interactive()) throw new Error(`No harness set. Pass --harness (${choices}).`);
-  const fallback: Harness = "claude";
-  for (;;) {
-    const answer = (await ask(`Harness (${choices}) [${fallback}]: `)) || fallback;
-    const harness = HARNESSES.find((name) => name === answer);
-    if (harness === undefined) {
-      console.error(`Unknown harness: ${answer}`);
-      continue;
-    }
-    await saveUserHarness(harness);
-    console.error(`Saved to ${userConfigPath()}; --harness overrides it.`);
-    return harness;
-  }
+  if (saved !== undefined) return saved;
+  if (!interactive()) throw new Error(`No harness set. Pass --harness (${HARNESSES.join(", ")}).`);
+  const harness = await choose("Harness", HARNESSES, "claude");
+  if (harness === null) throw new Error("No harness chosen.");
+  await saveUserHarness(harness);
+  note.info(`Saved to ${userConfigPath()}; --harness overrides it.`);
+  return harness;
 }
 
-async function resolveAgent(options: AgentOptions, log: Log) {
-  const harness = await resolveHarness(options.harness, log);
+async function resolveAgent(options: AgentOptions) {
+  const harness = await resolveHarness(options.harness);
   return {
     harness,
     models: resolveModels(harness, {
@@ -145,9 +144,11 @@ interface ReviewOptions extends AgentOptions {
 async function askBase(repo: string, log: Log): Promise<string> {
   log("No --base given; fetching the default branch from origin...");
   const { ref, warning } = await defaultBase(repo);
-  if (warning !== null) console.error(warning);
+  if (warning !== null) note.warn(warning);
   if (!interactive()) return ref;
-  return (await ask(`Base [${ref}]: `)) || ref;
+  const base = await ask("Base", ref);
+  if (base === null) throw new Error("No base chosen.");
+  return base;
 }
 
 /**
@@ -158,15 +159,19 @@ async function reviewPr(
   target: string,
   agent: Awaited<ReturnType<typeof resolveAgent>>,
   options: ReviewOptions,
-  log: Log,
+  progress: Progress,
 ) {
+  const { log } = progress;
   if (options.base !== undefined) throw new Error("--base can't be used with a PR target.");
   const repo = await resolveRepoRoot(options.repo);
   log(`Fetching PR ${target}...`);
   const { pr, body, base } = await fetchPr(repo, target);
-  log(`PR #${pr.number}: ${pr.title}`);
-  log(`Base: ${base} · Head: ${pr.headSha.slice(0, 7)}`);
-  if (pr.isCrossRepository) log("PR is from a fork; it is reviewed as trusted code.");
+  progress.logTable(`PR #${pr.number}`, [
+    ["Title", pr.title],
+    ["Base", base],
+    ["Head", pr.headSha.slice(0, 7)],
+    ...(pr.isCrossRepository ? [["Fork", "yes; reviewed as trusted code"] as const] : []),
+  ]);
 
   await ensureStateDir(repo);
   const worktree = await createReviewWorktree(repo, pr.headSha);
@@ -186,7 +191,7 @@ async function reviewPr(
       committedOnly: true,
       summarize: options.summary,
       find: options.find,
-      log,
+      ...progressHooks(progress),
       verbose: options.verbose,
     });
     return { ...result, base };
@@ -197,21 +202,20 @@ async function reviewPr(
 }
 
 async function review(target: string | undefined, options: ReviewOptions): Promise<void> {
-  const log: Log = options.quiet ? () => {} : (message: string) => console.log(message);
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
   const prTarget = target === undefined ? null : parsePrTarget(target);
   if (target !== undefined && prTarget === null) {
     throw new Error(
       `Unsupported target "${target}". Only PR numbers and URLs are supported so far.`,
     );
   }
-  const agent = await resolveAgent(options, log);
-
   let result;
   try {
+    const agent = await resolveAgent(options);
     if (prTarget !== null) {
-      result = await reviewPr(prTarget, agent, options, log);
+      result = await reviewPr(prTarget, agent, options, progress);
     } else {
-      const base = options.base ?? (await askBase(options.repo, log));
+      const base = options.base ?? (await askBase(options.repo, progress.log));
       result = {
         ...(await runReview({
           ...agent,
@@ -220,18 +224,20 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
           committedOnly: options.committedOnly,
           summarize: options.summary,
           find: options.find,
-          log,
+          ...progressHooks(progress),
           verbose: options.verbose,
         })),
         base,
       };
     }
   } catch (error) {
+    progress.end();
     if (!(error instanceof NoChangesError)) throw error;
     // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
-    console.error(`Nothing to review: ${error.message}`);
+    note.info(`Nothing to review: ${error.message}`);
     return;
   }
+  progress.end();
 
   if (options.quiet) {
     // Only the run dir, so scripts can do: R=$(review-flow review --quiet ...)
@@ -239,7 +245,10 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
     return;
   }
   const format = { ...colorOptions(), width: Math.min(process.stdout.columns ?? 100, 100) };
-  if (result.summary !== null) console.log(formatSummary(result.summary, format));
+  // A live display already showed the summary (or warned that it failed) during the run.
+  if (result.summary !== null && progress.onSummary === undefined) {
+    console.log(formatSummary(result.summary, format));
+  }
   if (!options.find) {
     console.log(`\nReport: ${result.runDir.reportPath}\n`);
     return;
@@ -247,10 +256,11 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
   console.log(formatFindings({ ...result, reportPath: result.runDir.reportPath }, format));
 
   if (prTarget !== null && interactive()) {
-    const postable = postableItems(result.findings, result.verdicts);
-    if (postable.length > 0 && (await confirm("Post findings to the PR?"))) {
+    const postable =
+      result.summary?.status === "ok" || postableItems(result.findings, result.verdicts).length > 0;
+    if (postable && (await confirm("Post to the PR?"))) {
       await postRun(result.runDir.root, colorOptions());
-    } else if (postable.length > 0) {
+    } else if (postable) {
       console.log(`Post later with: review-flow post ${path.basename(result.runDir.root)}`);
     }
   }
@@ -281,19 +291,24 @@ interface EvalOptions extends AgentOptions {
 }
 
 async function evaluate(options: EvalOptions): Promise<void> {
-  const log: Log = options.quiet ? () => {} : (message: string) => console.log(message);
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
   const dataset = path.resolve(userCwd, options.dataset);
-  const result = await runEval({
-    ...(await resolveAgent(options, log)),
-    cwd: options.repo,
-    cases: await loadDataset(dataset, { smoke: options.smoke, ids: options.case ?? [] }),
-    dataset,
-    smoke: options.smoke,
-    summarize: options.summary,
-    checkoutsDir: path.resolve(userCwd, options.checkouts),
-    log,
-    verbose: options.verbose,
-  });
+  let result;
+  try {
+    result = await runEval({
+      ...(await resolveAgent(options)),
+      cwd: options.repo,
+      cases: await loadDataset(dataset, { smoke: options.smoke, ids: options.case ?? [] }),
+      dataset,
+      smoke: options.smoke,
+      summarize: options.summary,
+      checkoutsDir: path.resolve(userCwd, options.checkouts),
+      ...progressHooks(progress),
+      verbose: options.verbose,
+    });
+  } finally {
+    progress.end();
+  }
   // Like review: --quiet prints only the run dir.
   console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
 }

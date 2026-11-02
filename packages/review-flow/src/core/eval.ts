@@ -10,11 +10,17 @@ import {
   type CaseResult,
   type EvalScores,
 } from "./eval-score.ts";
-import { formatCost, formatDuration } from "./format.ts";
+import { describeModel, formatCost, formatDuration } from "./format.ts";
 import { checkoutDetached, ensureClone, resolveRepoRoot, WorkingTreeChangedError } from "./git.ts";
 import { readJsonOrNull, writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
-import { runReview, type ReviewRunResult, type RunRecord } from "./pipeline.ts";
+import {
+  runReview,
+  type ReviewRunOptions,
+  type ReviewRunResult,
+  type RunRecord,
+  type TaskActivity,
+} from "./pipeline.ts";
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
 import type { NormalizedFinding } from "./schemas.ts";
@@ -34,6 +40,9 @@ export interface EvalRunOptions {
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  warn?: (message: string) => void;
+  logTable?: ReviewRunOptions["logTable"];
+  onActivity?: (activity: TaskActivity) => void;
   verbose?: boolean;
 }
 
@@ -113,6 +122,13 @@ async function runCase(
       models: options.models,
       runAgent: options.runAgent,
       log: (message) => options.log(`  ${message}`),
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+      // The eval's own table covers the setup; per case, only --verbose keeps the details.
+      logTable: (_, rows) => {
+        if (!options.verbose) return;
+        for (const [label, value] of rows) options.log(`  ${label}: ${value}`);
+      },
+      ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
       ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
@@ -173,7 +189,20 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
   await mkdir(root);
   await mkdir(path.join(root, "cases"));
   const paths = evalRunPaths(root);
-  log(`Eval run dir: ${root}`);
+  const setup: [string, string][] = [["Harness", harness]];
+  if (options.summarize ?? true) setup.push(["Summarizer", describeModel(models.summarizer)]);
+  setup.push(
+    ["Reviewer", describeModel(models.reviewer)],
+    ["Verifier", describeModel(models.verifier)],
+    ["Cases", `${options.cases.length}${options.smoke ? " (smoke set)" : ""}`],
+    ["Dataset", options.dataset],
+    ["Run dir", root],
+  );
+  if (options.logTable === undefined) {
+    for (const [label, value] of setup) log(`${label}: ${value}`);
+  } else {
+    options.logTable("Eval", setup);
+  }
 
   const results: CaseResult[] = [];
   const runs: RunRecord[] = [];
