@@ -52,6 +52,7 @@ Goal: cover how developers actually review, in order of usefulness.
 - [ ] **Distribution (12).** The npm package `review-flow` and `review-flow doctor`. Done so far: the bundled package and `pnpm release`.
 - [x] **PR targets and trust (2, 3).** PR number or URL, trust levels and their policies, and `--trust`. `trust` rules in config come with config files; reading `REVIEW.md` and repo config from the base comes with them and the review guide.
 - [ ] **Posting (7).** `review-flow post` with selection, editing, the stale-head check, preview, and a `COMMENT` review. Done so far: all but editing in `$EDITOR`.
+- [ ] **Questions (7).** `review-flow ask [run]`: a question loop in a worktree at the reviewed SHA, the next-step menu after a review, `asks.jsonl`, and `ask --open` to hand off to the interactive CLI. Done when: a follow-up question on a PR run is answered with code references, and the cost per question, cold and warm, is in the decision log.
 - [ ] **Review guide (8).** `REVIEW.md`, read from the base for untrusted targets.
 - [ ] **Incremental reviews (6).** Interdiff focus, follow-up of earlier findings, repeat suppression, and response records.
 - [ ] **More harnesses (9).** A `codex` profile, user-defined profiles, and price-table overrides (`prices`).

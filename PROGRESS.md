@@ -43,7 +43,7 @@ In a terminal, `review` and `eval` draw progress with [@clack/prompts](https://g
 4. **Normalize.** Cap at 15 findings, assign ids (`F-001`…), make paths repo-relative, fix reversed line ranges.
 5. **Verify.** One fresh agent session per finding, up to 3 in parallel ([verifier.md](packages/review-flow/prompts/verifier.md)). The verifier tries to refute the claim and returns `confirmed`, `refuted`, or `inconclusive`, plus severity, confidence, fix cost, evidence, and an assessment of the suggested fix. To avoid anchoring, it doesn't see the reviewer's rationale, severity, or category. The diff is shared context ([change.md](packages/review-flow/prompts/change.md)), framed as data, not instructions. The first verifier runs alone until its first tool call, so its request has cached the diff before the others start.
 6. **Rank.** Rules enforced in code: `confirmed` without a `code_ref` is downgraded to `inconclusive`, and a failed verifier counts as `inconclusive`. Findings are sorted by verdict, then severity, then confidence ([rank.ts](packages/review-flow/src/core/rank.ts)).
-7. **Report.** Markdown report plus terminal output, both with the summary before the findings.
+7. **Report.** Markdown report plus terminal output, both with the summary before the findings. Refuted findings come last, apart: a collapsed section in the report, a "Refuted" section in the terminal with no severity and only the verifier's reason. The terminal's finding count leaves them out.
 
 `review-flow summary [target]` runs only Collect, Summarize, and Report, with the same targets, base, and flags as `review`. Its run is saved and indexed like any other, without findings; a failed summarizer fails it.
 

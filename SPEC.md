@@ -24,6 +24,7 @@ npx review-flow [target]
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `review-flow [target]`         | Review a target. `review-flow review <target>` is the explicit form, for targets that look like a command name. |
 | `review-flow summary [target]` | Summarize a target without looking for defects (see 7). Same targets and base rules as `review`.                |
+| `review-flow ask [run]`        | Ask follow-up questions about a reviewed change (default: latest run; see 7).                                   |
 | `review-flow post [run]`       | Post selected findings of a run (default: latest) to its PR.                                                    |
 | `review-flow eval`             | Run the eval dataset with the current config (see 11).                                                          |
 | `review-flow runs`             | List past runs and evals.                                                                                       |
@@ -146,7 +147,7 @@ A review is incremental by default when an earlier run exists for the same targe
 5. Since last review (incremental runs only).
 6. Pre-existing findings.
 
-Refuted findings are hidden but kept in the run data. A footer shows cost, time, preset, and the run directory. A run cut by a budget says so, for example "budget hit at $1.50, 4 of 9 findings verified".
+Refuted findings are kept in the run data and listed last, in their own section, so they are not mistaken for real ones. A footer shows cost, time, preset, and the run directory. A run cut by a budget says so, for example "budget hit at $1.50, 4 of 9 findings verified".
 
 ### Summary
 
@@ -165,7 +166,7 @@ A short, human-readable account of the change, so the human can judge it at a hi
 
 ### Posting
 
-Posting is never automatic. It is offered after a PR review in a TTY, or run later with `review-flow post [run]`.
+Posting is never automatic. It is offered in the next-step menu after a PR review in a TTY (see Questions), or run later with `review-flow post [run]`.
 
 1. **Select.** A checkbox list: arrow keys move, Space marks, Enter accepts. The summary comes first, then introduced findings. The summary and confirmed findings of `medium` severity or higher are pre-selected.
 2. **Edit.** The user can edit the selected findings' text in `$EDITOR`, since they post under their own name.
@@ -174,6 +175,22 @@ Posting is never automatic. It is offered after a PR review in a TTY, or run lat
 5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with the summary (when selected) and a "reviewed with review-flow" footer.
 
 Posted findings and their comment ids are saved in the run directory, for repeat suppression and response tracking.
+
+### Questions
+
+After reading the summary or findings, the developer may have follow-up questions, such as "why did the cache key change?" or "what else calls `parseToken`?". `review-flow ask [run]` (default: the latest run) answers them in the terminal. After a review or summary in a TTY, a next-step menu offers: ask a question, post (PR runs only), or done.
+
+- **Context.** The answerer gets the diff as shared context, plus `summary.json`, the findings with their verdicts, and the PR description or commit messages, framed as untrusted data. Follow-ups in the same session read this context from cache.
+- **Worktree.** A disposable worktree at the run's head (or snapshot) SHA, so answers describe the reviewed code, not the current checkout. If that commit is gone, a PR run fetches it again; other runs fail with exit `3`.
+- **Loop.** Each question is one headless call (see 9), with the same read-only flags, guard hook, and worktree check as the review. Follow-ups get the earlier questions and answers in the prompt, so no saved agent session is needed. An empty line or Ctrl-D ends the session. `ask [run] "<question>"` answers one question and exits.
+- **Answers.** Short Markdown, with a code reference (`file:line`) for each claim about the code. The answerer says when it doesn't know, and never recommends merging. Each answer prints its cost and time; the session total prints at the end.
+- **Trust.** The run's trust level applies (see 3). The questions are the developer's own input, so they are trusted.
+- **Records.** Questions and answers go to `asks.jsonl`, and each call to `calls.jsonl` under step `ask`. Ask cost is kept out of the review totals and the index line, so `compare` and `eval` stay comparable.
+- **Role.** `answerer`, set under `roles`. It defaults to the verifier's harness, model, and effort, since both read code to check claims.
+
+`ask --open` hands off to the harness's own interactive CLI (such as `claude`) in the same worktree, with the same context and read-only flags, for longer exploration. The worktree is removed when that CLI exits. Its cost is recorded as `unknown`, and a `best-effort` harness follows the trust rules in 3.
+
+Out of scope: editing code from `ask` (check out the branch for that), and posting answers to the PR.
 
 ### Exit codes
 
@@ -188,7 +205,7 @@ Posted findings and their comment ids are saved in the run directory, for repeat
 
 If a budget was hit after a finding at or above `failOn` was confirmed, the code is `1`. Only introduced, confirmed findings count toward `1`. `failOn` is `critical`, `high`, `medium`, `low`, or `never`, with default `high`.
 
-For other commands, `doctor` returns `0` (ready) or `3` (missing tool or auth), and `post` returns `0` or `3`.
+For other commands, `doctor` returns `0` (ready) or `3` (missing tool or auth), and `post` and `ask` return `0` or `3`.
 
 ## 8. Configuration
 
@@ -222,7 +239,7 @@ Keys are camelCase and mirror CLI flags where a flag exists.
 | `preset`      | Preset name (default `standard`)                                     |
 | `harness`     | Harness for every role, unless `roles` overrides it                  |
 | `presets`     | Overrides of built-in presets, or new named presets                  |
-| `roles`       | Per role (summarizer, finder, verifier, ...): harness, model, effort |
+| `roles`       | Per role (summarizer, finder, verifier, answerer, ...): harness, model, effort |
 | `harnesses`   | Harness profiles (see 9)                                             |
 | `budget`      | `usd` and `minutes` per run                                          |
 | `steps`       | Steps to skip, filter settings                                       |
@@ -320,6 +337,7 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 | `pre-existing.json` | Pre-existing findings                                                                                                 |
 | `report.md`         | Report                                                                                                                |
 | `posted.json`       | What was posted, with comment ids                                                                                     |
+| `asks.jsonl`        | Questions and answers from `ask` (see 7)                                                                              |
 
 Each run also appends one summary line to `.review-flow/index.jsonl`: preset, config hash, `REVIEW.md` hash, diff size, finding counts, cost, and time. Eval runs are included and marked as evals. `runs` and `compare` read from it.
 
