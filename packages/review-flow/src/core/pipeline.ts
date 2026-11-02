@@ -22,9 +22,17 @@ import { normalizeFindings } from "./normalize.ts";
 import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, createRunDirAt, ensureStateDir, type RunDir } from "./run-dir.ts";
-import { appendIndexEntry, countVerdicts, diffStats, type VerdictCounts } from "./run-index.ts";
+import {
+  appendIndexEntry,
+  countVerdicts,
+  diffStats,
+  readIndex,
+  type DiffStats,
+  type VerdictCounts,
+} from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
+import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "./trust.ts";
 import { ReviewOutput, Summary, Verdict, type NormalizedFinding } from "./schemas.ts";
 import {
   buildSummarizerPrompt,
@@ -48,14 +56,21 @@ export interface ReviewRunOptions {
   /** Any directory inside the repository to review. */
   cwd: string;
   base: string;
+  /** The target's trust level; recorded, and sets the policies of section 3 of the spec. */
+  trust: Trust;
   harness: Harness;
   models: RoleModels;
   runAgent: RunAgent;
   log: (message: string) => void;
+  /**
+   * Asked before any agent runs on an `external` target, with the diff size and a cost estimate
+   * from past runs; false stops the run with a DeclinedError. Without it, external targets run.
+   */
+  confirmSpend?: (preflight: Preflight) => Promise<boolean>;
   /** A problem that doesn't stop the run, such as a failed verifier. Default: `log`. */
   warn?: (message: string) => void;
   /** The summary, as soon as it is written. Default: a `Summary written` line. */
-  onSummary?: (summary: Summary) => void;
+  onSummary?: (summary: Summary, trust: TrustLevel) => void;
   /** Labelled facts about the run (models, run dir), shown together. Default: one `log` each. */
   logTable?: (title: string, rows: readonly (readonly [string, string])[]) => void;
   /**
@@ -108,6 +123,8 @@ export interface RunRecord {
   /** snapshotSha: the commit holding uncommitted changes that was reviewed instead of HEAD. */
   head: { sha: string; snapshotSha?: string };
   pr?: PullRequest;
+  /** Missing in runs from before trust levels. */
+  trust?: Trust;
   startedAt: string;
   finishedAt: string;
   status: "ok" | "failed";
@@ -144,7 +161,8 @@ interface TaskContext {
   log: (message: string) => void;
   warn: (message: string) => void;
   onActivity: (activity: TaskActivity) => void;
-  onSummary: (summary: Summary) => void;
+  onSummary: (summary: Summary, trust: TrustLevel) => void;
+  trust: TrustLevel;
   verbose: boolean;
   /** Aborted when either branch of the run (summarize, or find and verify) throws. */
   signal: AbortSignal;
@@ -384,7 +402,7 @@ async function summarizeChange(
   }
   const summary = normalizeSummary(result.output, ctx.repo);
   await writeJson(ctx.runDir.summaryPath, summary);
-  ctx.onSummary(summary);
+  ctx.onSummary(summary, ctx.trust);
   return { status: "ok", summary };
 }
 
@@ -401,15 +419,30 @@ export class NoChangesError extends Error {
   }
 }
 
+/** What `confirmSpend` is shown. */
+export interface Preflight {
+  trust: Trust;
+  diff: DiffStats;
+  /** null without past runs to base it on. */
+  estimate: CostEstimate | null;
+}
+
+/** The user declined to spend on the review; nothing ran. */
+export class DeclinedError extends Error {
+  constructor() {
+    super("Review declined; no agents ran.");
+    this.name = "DeclinedError";
+  }
+}
+
 /** collect → (summarize ‖ review → normalize → verify → rank) → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
-  const { base, harness, models, runAgent, log, runRoot, pr } = options;
+  const { base, trust, harness, models, runAgent, log, runRoot, pr } = options;
   const verbose = options.verbose ?? false;
   const summarize = options.summarize ?? true;
   const find = options.find ?? true;
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
-  const stateRepo = options.stateRepo ?? repo;
   const baseSha = await resolveCommit(repo, base);
   const headSha = await resolveCommit(repo, "HEAD");
   const snapshot = options.committedOnly ? null : await snapshotWorkingTree(repo);
@@ -429,7 +462,15 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     throw new NoChangesError(base, snapshot !== null);
   }
   const stats = diffStats(diff);
-  const setup: [string, string][] = [["Harness", harness]];
+  const stateRepo = options.stateRepo ?? repo;
+  if (trust.level === "external" && options.confirmSpend !== undefined) {
+    const estimate = estimateCost(await readIndex(stateRepo), harness, stats, find);
+    if (!(await options.confirmSpend({ trust, diff: stats, estimate }))) throw new DeclinedError();
+  }
+  const setup: [string, string][] = [
+    ["Trust", `${trust.level} (${trust.reason})`],
+    ["Harness", harness],
+  ];
   if (verbose) {
     setup.push(
       ["Repo", repo],
@@ -490,6 +531,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     log,
     warn: options.warn ?? log,
     onSummary: options.onSummary ?? (() => log("Summary written")),
+    trust: trust.level,
     onActivity:
       options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
     verbose,
@@ -602,6 +644,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         base: { ref: base, sha: baseSha },
         head,
         ...(pr === undefined ? {} : { pr }),
+        trust: trust.level,
         durationMs,
         costUsd,
         summary,
@@ -636,6 +679,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       base: { ref: base, sha: baseSha },
       head,
       ...(pr === undefined ? {} : { pr }),
+      trust,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       status: failure === null ? "ok" : "failed",

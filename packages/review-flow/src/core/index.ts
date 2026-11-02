@@ -23,3 +23,4 @@ export * from "./github.ts";
 export * from "./worktree.ts";
 export * from "./post.ts";
 export * from "./json.ts";
+export * from "./trust.ts";

@@ -43,6 +43,7 @@ const input: ReportInput = {
   models: DEFAULT_MODELS.claude,
   base: { ref: "main", sha: "0123456789abcdef" },
   head: { sha: "fedcba9876543210" },
+  trust: "own",
   durationMs: 125_000,
   costUsd: 1.234,
   summary: null,
@@ -78,6 +79,15 @@ describe("renderReport summary", () => {
         "**Look at:**\n\n- `src/lock.ts:3` — New lock pattern.",
         "**1 finding:**",
       ].join("\n\n"),
+    );
+  });
+
+  it("marks a stated goal of an external target as the author's", () => {
+    const stated = { ...goodSummary, goal: { text: "Fix it.", source: "stated" as const } };
+    const summary = { status: "ok" as const, summary: stated };
+    expect(renderReport({ ...input, summary })).toContain("**Goal:** Fix it.\n");
+    expect(renderReport({ ...input, trust: "external", summary })).toContain(
+      "**Goal:** Fix it. _(as stated by the author)_",
     );
   });
 

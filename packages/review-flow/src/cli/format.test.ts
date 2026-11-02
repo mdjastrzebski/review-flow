@@ -149,6 +149,7 @@ describe("formatSummary", () => {
           lookAt: [{ file: "b.ts", line: null, detail: "New pattern." }],
         },
       },
+      "own",
       options,
     );
     expect(text.split("\n")).toEqual([
@@ -164,7 +165,7 @@ describe("formatSummary", () => {
   });
 
   it("says when the summary is missing", () => {
-    expect(formatSummary({ status: "failed", error: "timeout: slow" }, options)).toContain(
+    expect(formatSummary({ status: "failed", error: "timeout: slow" }, "own", options)).toContain(
       "Missing: the summarizer failed (timeout: slow).",
     );
   });

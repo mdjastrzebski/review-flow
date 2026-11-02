@@ -53,8 +53,22 @@ In a terminal, `review` and `eval` draw progress with [@clack/prompts](https://g
 
 1. **Fetch.** `gh pr view` gives the PR's base branch, head SHA, and repo. The git remote pointing at that repo (`origin` on a tie) is fetched: the base into `<remote>/<base>`, the head into `FETCH_HEAD` only, so no ref is added.
 2. **Worktree.** A detached worktree at the head, with hooks off, under `.review-flow/worktrees/<pid>-<sha>/`. Agents work there; the run dir and index stay in the main repo. The worktree is removed when the run ends, also on failure or Ctrl-C. Worktrees whose process is gone are removed at the start of the next PR review.
-3. **Review.** The usual pipeline, against `<remote>/<base>`. `run.json` records the PR, and its index line the PR number. All PRs, forks included, are treated as trusted; `--base` is refused.
+3. **Review.** The usual pipeline, against `<remote>/<base>`. `run.json` records the PR, and its index line the PR number. `--base` is refused.
 4. **Post.** In a TTY, offered after the review when there is something to post; or later with `review-flow post [run]` (default: the latest PR review) ([post.ts](packages/review-flow/src/core/post.ts), [cli/post.ts](packages/review-flow/src/cli/post.ts)). A checkbox list ([@clack/prompts](https://github.com/bombshell-dev/clack/tree/main/packages/prompts); arrow keys move, Space marks, Enter accepts) shows the summary first, then every finding that wasn't refuted; the summary and confirmed findings of medium severity or higher are pre-selected, and the summary can be posted alone. If the PR head moved since the run, it warns and asks before posting on the reviewed commit. It previews the review, asks to confirm, and sends one `COMMENT` review with `gh api`. A finding whose lines are all in the diff becomes a multi-line inline comment; one partly in the diff is anchored to its first diff line; the rest go in the review body, after the summary (when selected) and the finding counts, with a footer. A comment shows the title, severity, claim, and fix (the verifier's better fix when it found the suggested one flawed or incomplete). `posted.json` records the review and comment ids; if reading the comments back fails, it is still written, without comment ids, and a warning is printed. Posting a run again asks first.
+
+## Trust levels
+
+Each target gets a trust level ([trust.ts](packages/review-flow/src/core/trust.ts)), shown in the review setup and saved in `run.json` with its reason:
+
+- `own`: the current checkout.
+- `collaborator`: a same-repo PR (`isCrossRepository == false`). Eval cases count as `collaborator` too: merged PRs of public repos.
+- `external`: a fork PR.
+
+`--trust <level>` replaces the detected level; the reason keeps what was detected. What the level changes:
+
+- **Pre-flight.** For an `external` target in a TTY, the diff size and a cost estimate are shown before any agent runs, and the review goes on only on a yes. The estimate is the cost range of the 5 past completed runs in the index, with the same harness and steps and a full cost, closest in changed lines. Declining leaves no run dir. Without a terminal, it warns and goes on. The facts and prompt go to stderr, so `--quiet` shows them too.
+- **Harness.** Each harness has an enforcement level; `claude` and `cursor` are both `enforced`. A `best-effort` one would be allowed for `own`, warned about for `collaborator`, and refused for `external` without `--allow-unenforced`.
+- **Summary.** A stated goal of an `external` target is marked "as stated by the author", in the terminal, the report, and a posted review.
 
 ## Safety
 
@@ -67,18 +81,18 @@ In a terminal, `review` and `eval` draw progress with [@clack/prompts](https://g
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/`. `.review-flow/` holds its own `.gitignore` (`*`), so the repo's `.gitignore` is never edited.
 
-| File                | Content                                                                                                                                                    |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `diff.patch`        | Reviewed diff                                                                                                                                              |
-| `prompts/<task>.md` | Exact prompt per task                                                                                                                                      |
-| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                                                                              |
-| `calls.jsonl`       | One line per agent task: role, step, model, effort, status, tokens, cost and cost source, start, duration, reads outside the repo that ran                 |
-| `summary.json`      | Summary of the change (when the summarizer succeeded)                                                                                                      |
-| `findings.json`     | Normalized findings                                                                                                                                        |
-| `verdicts.json`     | Verdict per finding                                                                                                                                        |
-| `report.md`         | Ranked report                                                                                                                                              |
-| `posted.json`       | Posted review: id, URL, commit, and comment id per finding (PR reviews that were posted)                                                                   |
-| `run.json`          | Models, base/head SHAs (plus `head.snapshotSha` when uncommitted changes were reviewed), status, and per-step and total calls, cost, tokens, and wall time |
+| File                | Content                                                                                                                                                                 |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diff.patch`        | Reviewed diff                                                                                                                                                           |
+| `prompts/<task>.md` | Exact prompt per task                                                                                                                                                   |
+| `raw/<task>.json`   | CLI args, all stream messages, stderr tail, denied tool calls                                                                                                           |
+| `calls.jsonl`       | One line per agent task: role, step, model, effort, status, tokens, cost and cost source, start, duration, reads outside the repo that ran                              |
+| `summary.json`      | Summary of the change (when the summarizer succeeded)                                                                                                                   |
+| `findings.json`     | Normalized findings                                                                                                                                                     |
+| `verdicts.json`     | Verdict per finding                                                                                                                                                     |
+| `report.md`         | Ranked report                                                                                                                                                           |
+| `posted.json`       | Posted review: id, URL, commit, and comment id per finding (PR reviews that were posted)                                                                                |
+| `run.json`          | Models, base/head SHAs (plus `head.snapshotSha` when uncommitted changes were reviewed), trust level, status, and per-step and total calls, cost, tokens, and wall time |
 
 Steps in `run.json` are `collect`, `summarize`, `review` (including normalize), `verify` (including the verdict rules), and `report`. Step time is wall time, so `verify` is less than the sum of its parallel calls, and `summarize` overlaps `review` and `verify`. A call's cost source is `reported` when the CLI gave a cost, `computed` when its tokens and model are in the price table (standard API prices for Claude 5.5 models, Grok 4.7, and Composer 2.5; fast variants and long-context surcharges are not priced), else `unknown`; `unknownCostCalls` counts them, and when above 0 the cost is a lower bound. `calls.jsonl` is appended as each call ends, so a failed run keeps its records.
 
@@ -102,7 +116,7 @@ Each run, including a failed one, also appends a summary line to `.review-flow/i
 
 ## Configuration
 
-CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (every role unless overridden), `--verifier-model`, `--summarizer-model`, `--effort` (likewise), `--verifier-effort`, `--summarizer-effort`, `--no-summary`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--repo`, `--quiet`, `--verbose`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks with an arrow-key list (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base` and `--committed-only`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`. `summary` takes the same flags as `review`, minus `--no-summary`.
+CLI flags, plus `harness` in `~/.review-flow/config.json`: `-b, --base`, `-H, --harness`, `--model` (every role unless overridden), `--verifier-model`, `--summarizer-model`, `--effort` (likewise), `--verifier-effort`, `--summarizer-effort`, `--no-summary`, `--claude-bin`, `--cursor-bin`, `--committed-only`, `--trust`, `--allow-unenforced`, `--repo`, `--quiet`, `--verbose`. Without `--base`, `review` fetches `main` (or `master`) from origin and uses `origin/main`, asking to confirm it in a TTY; with no origin or a failed fetch it uses local `main` and warns that it may be stale. Without `--harness`, `review` and `eval` use the saved `harness`; if none is saved, a TTY run asks with an arrow-key list (default `claude`) and saves the answer, and a non-TTY run fails. `eval` takes the same, minus `--base`, `--committed-only`, `--trust`, and `--allow-unenforced`, plus `--smoke`, `--case`, `--dataset`, and `--checkouts`. `summary` takes the same flags as `review`, minus `--no-summary`.
 
 Defaults ([models.ts](packages/review-flow/src/core/models.ts)):
 
@@ -134,11 +148,11 @@ All CLI code is one package, [packages/review-flow](packages/review-flow), publi
 ## Gaps against the [spec](SPEC.md)
 
 - **Usage (2):** `--harness` (or a saved one) is required without a TTY; installed CLIs aren't detected. No branch, commit, or range targets. No `config` or `doctor` commands.
-- **Trust (3):** none; every target, including fork PRs, is trusted. Branch reviews run in the developer's checkout, not a worktree.
+- **Trust (3):** only the current checkout and PRs are classified, since there are no branch or commit targets yet. No `trust` rules in config. `REVIEW.md` and repo config don't exist yet, so nothing is read from the base. No `best-effort` harness exists, so `--allow-unenforced` has no effect yet. Branch reviews run in the developer's checkout, not a worktree.
 - **Pipeline (4):** one finder, no dedupe or filter, one verifier session per finding with the full diff each time.
 - **Finding model (5):** no origin, no `unverified`. Pre-existing bugs are not reported.
 - **Incremental reviews (6) and exit codes (7):** none.
-- **Summary (7):** the goal isn't marked "as stated by the author" for untrusted targets, since there are no trust levels yet. The line below the summary has finding counts only: no files not read, unverified findings, or budget hits, since those don't exist yet.
+- **Summary (7):** the line below the summary has finding counts only: no files not read, unverified findings, or budget hits, since those don't exist yet.
 - **Posting (7):** no editing in `$EDITOR`. Posted findings aren't used for repeat suppression yet.
 - **Configuration (8):** CLI flags and the saved `harness` only. No other config keys, no JSONC or project files, presets, budgets, or `REVIEW.md`.
 - **Harnesses (9):** `claude` and `cursor` profiles, hard-coded. No `codex` profile or user profiles. The price table is small and can't be overridden.

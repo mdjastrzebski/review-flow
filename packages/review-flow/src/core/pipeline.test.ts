@@ -8,10 +8,11 @@ import type { CallRecord } from "./calls.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import type { PullRequest } from "./github.ts";
 import { DEFAULT_MODELS } from "./models.ts";
-import { NoChangesError, runReview } from "./pipeline.ts";
+import { DeclinedError, NoChangesError, runReview, type Preflight } from "./pipeline.ts";
 import { ensureStateDir } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
 import type { Finding, ReviewOutput, Summary, Verdict } from "./schemas.ts";
+import { OWN_CHECKOUT, type Trust } from "./trust.ts";
 import { createReviewWorktree } from "./worktree.ts";
 
 let repo: string;
@@ -134,6 +135,7 @@ const baseOptions = {
   base: "main",
   harness: "claude" as const,
   models: DEFAULT_MODELS.claude,
+  trust: OWN_CHECKOUT,
   log: () => {},
   // Most tests are about Find; the summary has its own tests below.
   summarize: false,
@@ -607,5 +609,57 @@ describe("runReview summary", () => {
     );
     expect(tasks.find((t) => t.role === "reviewer")?.signal?.aborted).toBe(true);
     expect(tasks.some((t) => t.role === "verifier")).toBe(false);
+  });
+});
+
+describe("runReview trust", () => {
+  const fork: Trust = { level: "external", reason: "fork PR" };
+
+  it("records the trust level in run.json", async () => {
+    const { runAgent } = stubAgent();
+    const { runDir } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+    expect(JSON.parse(await readFile(runDir.runJsonPath, "utf8")).trust).toEqual(OWN_CHECKOUT);
+  });
+
+  it("asks before spending on an external target, with the diff size", async () => {
+    const { runAgent, tasks } = stubAgent();
+    const asked: Preflight[] = [];
+    await expect(
+      runReview({
+        ...baseOptions,
+        trust: fork,
+        cwd: repo,
+        runAgent,
+        confirmSpend: async (preflight) => {
+          asked.push(preflight);
+          return false;
+        },
+      }),
+    ).rejects.toBeInstanceOf(DeclinedError);
+    expect(asked).toEqual([
+      { trust: fork, diff: { files: 1, additions: 1, deletions: 0 }, estimate: null },
+    ]);
+    expect(tasks).toEqual([]);
+    await expect(readdir(path.join(repo, ".review-flow", "runs"))).rejects.toThrow();
+  });
+
+  it("doesn't ask for targets that aren't external", async () => {
+    const { runAgent } = stubAgent();
+    let asked = 0;
+    await runReview({ ...baseOptions, cwd: repo, runAgent, confirmSpend: async () => !!++asked });
+    expect(asked).toBe(0);
+  });
+
+  it("runs an external target once confirmed", async () => {
+    const { runAgent, tasks } = stubAgent();
+    const { runDir } = await runReview({
+      ...baseOptions,
+      trust: fork,
+      cwd: repo,
+      runAgent,
+      confirmSpend: async () => true,
+    });
+    expect(tasks.length).toBeGreaterThan(0);
+    expect(JSON.parse(await readFile(runDir.runJsonPath, "utf8")).status).toBe("ok");
   });
 });

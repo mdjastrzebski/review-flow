@@ -4,7 +4,8 @@ import type { Harness, RoleModels } from "./models.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import type { CodeRef, Evidence, NormalizedFinding, Summary, Verdict } from "./schemas.ts";
-import { formatCodeRef, type SummaryOutcome } from "./summary.ts";
+import { formatCodeRef, goalNote, type SummaryOutcome } from "./summary.ts";
+import type { TrustLevel } from "./trust.ts";
 import { truncateFix } from "./verify.ts";
 
 export interface ReportInput {
@@ -13,6 +14,7 @@ export interface ReportInput {
   base: { ref: string; sha: string };
   head: { sha: string; snapshotSha?: string };
   pr?: PullRequest;
+  trust: TrustLevel;
   durationMs: number;
   /** null when the harness reported no cost (Cursor). */
   costUsd: number | null;
@@ -153,10 +155,11 @@ function refLine(label: string | null, ref: CodeRef): string {
 }
 
 /** The summary as Markdown, for report.md and the posted review body. */
-export function renderSummary(summary: Summary): string {
+export function renderSummary(summary: Summary, trust: TrustLevel): string {
   const { goal, changes, achieved, lookAt } = summary;
+  const note = goalNote(goal, trust);
   const parts = [
-    `**Goal:** ${inline(goal.text)}${goal.source === "inferred" ? " _(inferred)_" : ""}`,
+    `**Goal:** ${inline(goal.text)}${note === null ? "" : ` _(${note})_`}`,
     changes.map((change) => `- ${inline(change)}`).join("\n"),
   ];
   const met = [
@@ -170,10 +173,10 @@ export function renderSummary(summary: Summary): string {
   return parts.filter((part) => part !== "").join("\n\n");
 }
 
-function summarySection(outcome: SummaryOutcome): string {
+function summarySection(outcome: SummaryOutcome, trust: TrustLevel): string {
   const body =
     outcome.status === "ok"
-      ? renderSummary(outcome.summary)
+      ? renderSummary(outcome.summary, trust)
       : `Summary missing: the summarizer failed (${inline(outcome.error)}).`;
   return `## Summary\n\n${body}`;
 }
@@ -205,7 +208,7 @@ function summaryTable(items: readonly RankedItem[]): string {
  */
 export function renderReport(input: ReportInput): string {
   const sections = [header(input)];
-  if (input.summary !== null) sections.push(summarySection(input.summary));
+  if (input.summary !== null) sections.push(summarySection(input.summary, input.trust));
   if (input.findings === null) return `${sections.join("\n\n")}\n`;
 
   const items = rankFindings(

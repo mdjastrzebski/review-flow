@@ -1,5 +1,5 @@
 import * as clack from "@clack/prompts";
-import { formatElapsed, type Summary, type TaskActivity } from "../core/index.ts";
+import { formatElapsed, type Summary, type TaskActivity, type TrustLevel } from "../core/index.ts";
 import { formatSummaryFields } from "./format.ts";
 
 /** Where review and eval report progress. Call `end` before printing results. */
@@ -10,7 +10,7 @@ export interface Progress {
   /** Set only for the live display; without it the pipeline logs each activity as a line. */
   onActivity?: (activity: TaskActivity) => void;
   /** Set only for the live display, which shows the summary when it's ready. */
-  onSummary?: (summary: Summary) => void;
+  onSummary?: (summary: Summary, trust: TrustLevel) => void;
   end(): void;
 }
 
@@ -93,10 +93,13 @@ export function createProgress(options: {
       print(() => clack.note(lines.join("\n"), title, { output }));
     },
     ...(options.verbose ? {} : { onActivity }),
-    onSummary: (summary) => {
+    onSummary: (summary, trust) => {
       // The box adds a border and padding on each side.
       const width = Math.min(output.columns ?? 100, 100) - 6;
-      const fields = formatSummaryFields(summary, { color: output.hasColors?.() ?? false, width });
+      const fields = formatSummaryFields(summary, trust, {
+        color: output.hasColors?.() ?? false,
+        width,
+      });
       print(() => clack.note(short(fields), "Summary", { output }));
     },
     end() {

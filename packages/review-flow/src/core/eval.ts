@@ -24,6 +24,7 @@ import {
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
 import type { NormalizedFinding } from "./schemas.ts";
+import type { Trust } from "./trust.ts";
 
 export interface EvalRunOptions {
   /** Any directory inside the repository the eval run is saved in. */
@@ -100,6 +101,9 @@ export function describeCase(result: CaseResult): string {
   return result.error === null ? text : `${text}: ${result.error.split("\n")[0]}`;
 }
 
+/** Cases are merged PRs of public repos: third-party code, but reviewed by its maintainers. */
+const EVAL_CASE_TRUST: Trust = { level: "collaborator", reason: "eval case, a merged PR" };
+
 /**
  * Clones (or reuses) the case repo, checks out the case head, and reviews it against the base.
  * Failures are recorded on the case; a changed working tree is rethrown to stop the eval.
@@ -118,6 +122,7 @@ async function runCase(
     review = await runReview({
       cwd: checkout,
       base: evalCase.base,
+      trust: EVAL_CASE_TRUST,
       harness: options.harness,
       models: options.models,
       runAgent: options.runAgent,

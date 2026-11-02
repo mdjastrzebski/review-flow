@@ -1,6 +1,7 @@
 import { normalizeFile } from "./normalize.ts";
 import { codeFence, renderPrompt } from "./prompts.ts";
 import type { CodeRef, Summary } from "./schemas.ts";
+import type { TrustLevel } from "./trust.ts";
 import type { ChangeRange } from "./verify.ts";
 
 export const MAX_CHANGES = 6;
@@ -64,6 +65,12 @@ export function normalizeSummary(summary: Summary, repo: string): Summary {
     },
     lookAt: summary.lookAt.slice(0, MAX_LOOK_AT).map(ref),
   };
+}
+
+/** The note after the goal: `inferred`, or for an `external` target, whose author is unknown, `as stated by the author`. */
+export function goalNote(goal: Summary["goal"], trust: TrustLevel): string | null {
+  if (goal.source === "inferred") return "inferred";
+  return trust === "external" ? "as stated by the author" : null;
 }
 
 /** `file:line`, or `file` when no line fits. */

@@ -6,6 +6,7 @@ import {
   formatLocation,
   postableItems,
   postReview,
+  prTrust,
   readJsonOrNull,
   runDirPaths,
   writeJson,
@@ -90,7 +91,13 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   }
 
   const diff = await readFile(paths.diffPath, "utf8");
-  const plan = buildReview(selected, diff, reviewed, picked.includes(SUMMARY) ? summary : null);
+  const plan = buildReview(
+    selected,
+    diff,
+    reviewed,
+    picked.includes(SUMMARY) ? summary : null,
+    (run.trust ?? prTrust(pr)).level,
+  );
   note.box(plan.payload.body, "Review body");
   for (const comment of plan.payload.comments) {
     const lines =

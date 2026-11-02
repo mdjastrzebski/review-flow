@@ -4,12 +4,14 @@ import {
   formatCost,
   formatDuration,
   formatLocation,
+  goalNote,
   rankFindings,
   type FixAssessment,
   type NormalizedFinding,
   type Severity,
   type Summary,
   type SummaryOutcome,
+  type TrustLevel,
   type Verdict,
 } from "../core/index.ts";
 
@@ -72,7 +74,11 @@ export function wrap(text: string, width: number): string[] {
 }
 
 /** The summary, printed before the findings. */
-export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): string {
+export function formatSummary(
+  outcome: SummaryOutcome,
+  trust: TrustLevel,
+  options: FormatOptions,
+): string {
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
   const header = ["", paint("bold", "Summary")];
@@ -80,7 +86,7 @@ export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): 
     header.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
     return header.join("\n");
   }
-  const body = formatSummaryFields(outcome.summary, {
+  const body = formatSummaryFields(outcome.summary, trust, {
     ...options,
     width: options.width - INDENT.length,
   });
@@ -88,7 +94,11 @@ export function formatSummary(outcome: SummaryOutcome, options: FormatOptions): 
 }
 
 /** The summary's fields as labelled, wrapped lines, without a heading or indent. */
-export function formatSummaryFields(summary: Summary, options: FormatOptions): string {
+export function formatSummaryFields(
+  summary: Summary,
+  trust: TrustLevel,
+  options: FormatOptions,
+): string {
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
   const out: string[] = [];
@@ -116,7 +126,8 @@ export function formatSummaryFields(summary: Summary, options: FormatOptions): s
   const ref = (item: Parameters<typeof formatCodeRef>[0]) =>
     `${paint("cyan", formatCodeRef(item))} ${item.detail}`;
 
-  field("Goal", goal.source === "inferred" ? `${goal.text} (inferred)` : goal.text);
+  const note = goalNote(goal, trust);
+  field("Goal", note === null ? goal.text : `${goal.text} (${note})`);
   bullets("Changes", changes);
   field("Goal met", achieved.verdict);
   bullets("Gaps", achieved.gaps.map(ref));

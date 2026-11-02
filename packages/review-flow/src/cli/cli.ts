@@ -5,7 +5,15 @@ import {
   DEFAULT_DATASET_DIR,
   EFFORTS,
   HARNESSES,
+  HARNESS_ENFORCEMENT,
+  OWN_CHECKOUT,
+  TRUST_LEVELS,
+  DeclinedError,
   NoChangesError,
+  checkHarnessTrust,
+  formatCost,
+  overrideTrust,
+  prTrust,
   createReviewWorktree,
   defaultBase,
   ensureStateDir,
@@ -26,6 +34,9 @@ import {
   userConfigPath,
   type Effort,
   type Harness,
+  type Preflight,
+  type Trust,
+  type TrustLevel,
 } from "../core/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -135,9 +146,57 @@ interface ReviewOptions extends AgentOptions {
   /** false for `review-flow summary`. */
   find: boolean;
   committedOnly: boolean;
+  trust?: TrustLevel;
+  allowUnenforced: boolean;
   repo: string;
   quiet: boolean;
   verbose: boolean;
+}
+
+/**
+ * Applies --trust and the harness policy, and in a TTY returns the pre-flight confirmation that
+ * the pipeline asks for external targets.
+ */
+function applyTrust(
+  detected: Trust,
+  harness: Harness,
+  options: ReviewOptions,
+  progress: Progress,
+): { trust: Trust; confirmSpend?: (preflight: Preflight) => Promise<boolean> } {
+  const trust = overrideTrust(detected, options.trust);
+  const warning = checkHarnessTrust(
+    harness,
+    HARNESS_ENFORCEMENT[harness],
+    trust,
+    options.allowUnenforced,
+  );
+  if (warning !== null) progress.warn(warning);
+  if (interactive()) return { trust, confirmSpend };
+  if (trust.level === "external") {
+    progress.warn(`Reviewing an external target (${trust.reason}) without asking: no terminal.`);
+  }
+  return { trust };
+}
+
+/**
+ * Shows the diff size and the cost estimate, and asks before any agent runs. Drawn on stderr with
+ * the prompt, so --quiet still shows what the yes is for.
+ */
+async function confirmSpend({ trust, diff, estimate }: Preflight): Promise<boolean> {
+  const range =
+    estimate === null
+      ? "no past runs to estimate from"
+      : `${formatCost(estimate.minUsd)}–${formatCost(estimate.maxUsd)}, from ${estimate.runs} past run(s) of similar size`;
+  const rows = [
+    ["Trust", `${trust.level} (${trust.reason})`],
+    ["Diff", `${diff.files} file(s), +${diff.additions} −${diff.deletions}`],
+    ["Estimate", range],
+  ];
+  note.box(
+    rows.map(([label, value]) => `${label!.padEnd(8)}  ${value}`).join("\n"),
+    "Before spending",
+  );
+  return confirm("Review it?");
 }
 
 /** The default base, fetched from origin; in a TTY the user can confirm or replace it. */
@@ -170,8 +229,8 @@ async function reviewPr(
     ["Title", pr.title],
     ["Base", base],
     ["Head", pr.headSha.slice(0, 7)],
-    ...(pr.isCrossRepository ? [["Fork", "yes; reviewed as trusted code"] as const] : []),
   ]);
+  const trust = applyTrust(prTrust(pr), agent.harness, options, progress);
 
   await ensureStateDir(repo);
   const worktree = await createReviewWorktree(repo, pr.headSha);
@@ -183,6 +242,7 @@ async function reviewPr(
   try {
     const result = await runReview({
       ...agent,
+      ...trust,
       cwd: worktree.dir,
       stateRepo: repo,
       pr,
@@ -194,7 +254,7 @@ async function reviewPr(
       ...progressHooks(progress),
       verbose: options.verbose,
     });
-    return { ...result, base };
+    return { ...result, base, trust: trust.trust };
   } finally {
     process.off("SIGINT", onSigint);
     await worktree.remove();
@@ -215,10 +275,12 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
     if (prTarget !== null) {
       result = await reviewPr(prTarget, agent, options, progress);
     } else {
+      const trust = applyTrust(OWN_CHECKOUT, agent.harness, options, progress);
       const base = options.base ?? (await askBase(options.repo, progress.log));
       result = {
         ...(await runReview({
           ...agent,
+          ...trust,
           cwd: options.repo,
           base,
           committedOnly: options.committedOnly,
@@ -228,10 +290,15 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
           verbose: options.verbose,
         })),
         base,
+        trust: trust.trust,
       };
     }
   } catch (error) {
     progress.end();
+    if (error instanceof DeclinedError) {
+      note.info(error.message);
+      return;
+    }
     if (!(error instanceof NoChangesError)) throw error;
     // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
     note.info(`Nothing to review: ${error.message}`);
@@ -247,7 +314,7 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
   const format = { ...colorOptions(), width: Math.min(process.stdout.columns ?? 100, 100) };
   // A live display already showed the summary (or warned that it failed) during the run.
   if (result.summary !== null && progress.onSummary === undefined) {
-    console.log(formatSummary(result.summary, format));
+    console.log(formatSummary(result.summary, result.trust.level, format));
   }
   if (!options.find) {
     console.log(`\nReport: ${result.runDir.reportPath}\n`);
@@ -353,6 +420,17 @@ function addTargetOptions(command: Command): Command {
   )
     .option("--repo <path>", "repository to review", userCwd)
     .option("--committed-only", "review HEAD only, without uncommitted changes", false)
+    .addOption(
+      new Option(
+        "--trust <level>",
+        "trust level of the target; default: detected (own checkout, same-repo PR, fork PR)",
+      ).choices(TRUST_LEVELS),
+    )
+    .option(
+      "--allow-unenforced",
+      "allow a harness that can't enforce read-only agents on an external target",
+      false,
+    )
     .option("-q, --quiet", "no progress or other output; print only the run dir path", false)
     .addOption(verboseOption());
 }

@@ -3,6 +3,7 @@ import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import { renderSummary } from "./report.ts";
 import type { NormalizedFinding, Severity, Summary, Verdict } from "./schemas.ts";
+import type { TrustLevel } from "./trust.ts";
 
 export const REVIEW_FLOW_URL = "https://github.com/mdjastrzebski/review-flow";
 
@@ -146,6 +147,7 @@ export function buildReview(
   diff: string,
   commitId: string,
   summary: Summary | null = null,
+  trust: TrustLevel = "collaborator",
 ): ReviewPlan {
   const lines = diffLines(diff);
   const comments: ReviewComment[] = [];
@@ -170,7 +172,7 @@ export function buildReview(
   const counts = [`${plural(items.length, "finding")}`];
   if (comments.length > 0) counts.push(`${comments.length} inline`);
   if (inBody.length > 0) counts.push(`${inBody.length} outside the diff, below`);
-  const sections = summary === null ? [] : [renderSummary(summary)];
+  const sections = summary === null ? [] : [renderSummary(summary, trust)];
   sections.push(counts.join(" · "));
   for (const item of inBody) {
     sections.push(`\`${formatLocation(item.finding)}\`\n\n${commentBody(item)}`);
