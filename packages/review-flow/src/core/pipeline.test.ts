@@ -142,6 +142,53 @@ const baseOptions = {
 };
 
 describe("runReview", () => {
+  it("writes run.json as running, with its checkout and intent, while agents work", async () => {
+    let during: Record<string, unknown> | null = null;
+    let runRoot = "";
+    const { runAgent } = stubAgent({
+      effect: async (task) => {
+        if (task.role !== "reviewer") return;
+        const runs = path.join(repo, ".review-flow", "runs");
+        runRoot = path.join(runs, (await readdir(runs))[0]!);
+        during = JSON.parse(await readFile(path.join(runRoot, "run.json"), "utf8"));
+      },
+    });
+    const { runDir, checkout } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+    expect(during).toMatchObject({
+      status: "running",
+      pid: process.pid,
+      finishedAt: null,
+      checkout: await realpath(repo),
+      summarize: false,
+      find: true,
+    });
+    expect(checkout).toBe(await realpath(repo));
+    const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
+    expect(run).toMatchObject({ status: "ok", checkout: await realpath(repo) });
+    expect(run.pid).toBeUndefined();
+    expect(JSON.parse(await readFile(runDir.intentPath, "utf8"))).toEqual({
+      kind: "commits",
+      messages: ["change"],
+      uncommitted: false,
+    });
+  });
+
+  it("shows the checkout and the ask command in the review box", async () => {
+    const { runAgent } = stubAgent();
+    const tables: [string, (readonly [string, string])[]][] = [];
+    const { runDir } = await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+      askCommand: (id) => `review-flow ask ${id}`,
+      logTable: (title, rows) => tables.push([title, [...rows]]),
+    });
+    const rows = new Map(tables.find(([title]) => title === "Review")![1]);
+    expect(rows.get("Checkout")).toBe(await realpath(repo));
+    expect(rows.get("Ask")).toBe(`review-flow ask ${path.basename(runDir.root)}`);
+  });
+
   it("writes the prompt, raw output, findings and run.json", async () => {
     const { runAgent, tasks } = stubAgent();
     const { runDir, findings } = await runReview({ ...baseOptions, cwd: repo, runAgent });

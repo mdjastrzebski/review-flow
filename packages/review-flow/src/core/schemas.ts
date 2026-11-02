@@ -101,3 +101,9 @@ export const Summary = z.strictObject({
   lookAt: z.array(CodeRef),
 });
 export type Summary = z.infer<typeof Summary>;
+
+/** An `ask` answer: short Markdown, with a `file:line` reference for each claim about the code. */
+export const Answer = z.strictObject({
+  answer: z.string(),
+});
+export type Answer = z.infer<typeof Answer>;

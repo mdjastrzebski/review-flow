@@ -38,6 +38,22 @@ export interface ChangeRange {
   head: string;
 }
 
+/** The range under review, for prompts: a PR head, HEAD, or HEAD plus uncommitted changes. */
+export function changeRangeOf(
+  base: string,
+  head: { pr?: { number: number } | undefined; uncommitted: boolean },
+): ChangeRange {
+  return {
+    base,
+    head:
+      head.pr !== undefined
+        ? `\`HEAD\` (the head of PR #${head.pr.number})`
+        : head.uncommitted
+          ? "`HEAD` plus uncommitted changes"
+          : "`HEAD`",
+  };
+}
+
 /**
  * Builds the verifier prompt from the finding's title, location, claim and (truncated) suggested
  * fix. The reviewer's rationale, severity and category are deliberately left out so they can't

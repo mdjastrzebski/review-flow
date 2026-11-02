@@ -95,7 +95,12 @@ collect ─┬→ summarize ─────────────────�
 
 Each step records its own cost and time and can be skipped in config. Values marked _(eval)_ are set by measurement (see 13).
 
-1. **Collect.** Resolve the target, base, and trust level. Create a temporary detached worktree at the target SHA under `.review-flow/worktrees/` and produce the diff. All agents work in that worktree, so the developer's checkout is never touched. The worktree is removed when the run ends, including on failure or Ctrl-C. Stale worktrees are removed at the start of the next run. Exit cleanly when the diff is empty.
+1. **Collect.** Resolve the target, base, and trust level, pick the checkout agents work in, and produce the diff. Exit cleanly when the diff is empty.
+   - **Current branch** (no target): the developer's own checkout, since it holds the code under review, uncommitted changes included.
+   - **Any other target** (PR, branch, commit, range): a temporary detached worktree at the target SHA under `.review-flow/worktrees/`, so the developer's checkout is never touched. It is removed when the run ends, including on failure or Ctrl-C, unless an `ask` holds it (see 7). Stale worktrees are removed at the start of the next run.
+
+   The review setup box shows the checkout's path and the `ask` command for this run (see 7), and `run.json` records the path.
+
 2. **Summarize.** One agent call, run in parallel with Find. It gets the same diff as shared context as the verifiers, plus the PR description or commit messages. It writes `summary.json` (see 7). It runs in every preset; skip it with `--no-summary`. A failed call doesn't fail the run: the report says the summary is missing.
 3. **Find.** Finder agents read the diff and the surrounding code and return candidate findings as structured JSON. Large diffs are split into file groups, one finder each _(eval: group size)_. The `deep` preset adds finders with a narrow focus, such as security or concurrency. Finders report only concrete defects with a failure scenario.
 4. **Dedupe.** Merge findings with the same root cause, so the same bug isn't verified twice. Similar findings across files become one finding for the whole bug class.
@@ -166,7 +171,7 @@ A short, human-readable account of the change, so the human can judge it at a hi
 
 ### Posting
 
-Posting is never automatic. It is offered in the next-step menu after a PR review in a TTY (see Questions), or run later with `review-flow post [run]`.
+Posting is never automatic. It is offered after a PR review in a TTY, or run later with `review-flow post [run]`.
 
 1. **Select.** A checkbox list: arrow keys move, Space marks, Enter accepts. The summary comes first, then introduced findings. The summary and confirmed findings of `medium` severity or higher are pre-selected.
 2. **Edit.** The user can edit the selected findings' text in `$EDITOR`, since they post under their own name.
@@ -178,17 +183,28 @@ Posted findings and their comment ids are saved in the run directory, for repeat
 
 ### Questions
 
-After reading the summary or findings, the developer may have follow-up questions, such as "why did the cache key change?" or "what else calls `parseToken`?". `review-flow ask [run]` (default: the latest run) answers them in the terminal. After a review or summary in a TTY, a next-step menu offers: ask a question, post (PR runs only), or done.
+After reading the summary or findings, the developer may have follow-up questions, such as "why did the cache key change?" or "what else calls `parseToken`?". `review-flow ask [run]` (default: the latest run) answers them in a terminal of its own. The review's terminal never takes questions: it keeps showing the review.
 
 - **Context.** The answerer gets the diff as shared context, plus `summary.json`, the findings with their verdicts, and the PR description or commit messages, framed as untrusted data. Follow-ups in the same session read this context from cache.
-- **Worktree.** A disposable worktree at the run's head (or snapshot) SHA, so answers describe the reviewed code, not the current checkout. If that commit is gone, a PR run fetches it again; other runs fail with exit `3`.
-- **Loop.** Each question is one headless call (see 9), with the same read-only flags, guard hook, and worktree check as the review. Follow-ups get the earlier questions and answers in the prompt, so no saved agent session is needed. An empty line or Ctrl-D ends the session. `ask [run] "<question>"` answers one question and exits.
+- **Start.** `ask` prints the run's summary first, so the developer sees what they are asking about. If the summarizer is still running, it waits for it; if the summarizer failed or was skipped, it says so. A line below gives the findings' state: pending, or their counts. Then it prompts for questions.
+- **Checkout.** `ask` uses the run's checkout (see 4) and does no fetch, `gh` call, or new checkout. It prints the checkout's path under the summary.
+  - **Current-branch runs** use the developer's checkout. If `HEAD` or the uncommitted changes differ from the reviewed snapshot, `ask` says so: answers describe the files as they are now.
+  - **Other runs** reuse the run's worktree. A running `ask` holds a lease on the worktree in the run dir (`leases/<pid>`), so the review leaves the worktree in place when it ends, and the last `ask` to exit removes it. Stale-worktree cleanup skips worktrees with a live lease. If the worktree is already gone, `ask` adds a new one at the run's head (or snapshot) SHA from local objects; if that commit is gone too, it fails with exit `3` and suggests running the review again.
+- **Loop.** Each question is one headless call (see 9), with the same read-only flags, guard hook, and worktree check as the review. Follow-ups get the earlier questions and answers in the prompt, so no saved agent session is needed. An empty line or Ctrl-D ends the session. `ask [run] "<question>"` answers one question and exits; a single argument with a space is the question, for the latest run.
 - **Answers.** Short Markdown, with a code reference (`file:line`) for each claim about the code. The answerer says when it doesn't know, and never recommends merging. Each answer prints its cost and time; the session total prints at the end.
 - **Trust.** The run's trust level applies (see 3). The questions are the developer's own input, so they are trusted.
 - **Records.** Questions and answers go to `asks.jsonl`, and each call to `calls.jsonl` under step `ask`. Ask cost is kept out of the review totals and the index line, so `compare` and `eval` stay comparable.
 - **Role.** `answerer`, set under `roles`. It defaults to the verifier's harness, model, and effort, since both read code to check claims.
 
-`ask --open` hands off to the harness's own interactive CLI (such as `claude`) in the same worktree, with the same context and read-only flags, for longer exploration. The worktree is removed when that CLI exits. Its cost is recorded as `unknown`, and a `best-effort` harness follows the trust rules in 3.
+**During the review.** Find and Verify take much longer than Summarize, so the developer can ask questions from a second terminal while they run:
+
+- The review setup box has a command to copy into another terminal, naming the run and using the same launcher as the review, for example `npx review-flow ask 20261102-1432-4f9633c`.
+- `summary.json` and `diff.patch` are written as soon as they are ready, and `run.json` has status `running` until the review ends. So `ask` works on a running run, and the answerer is told findings are still pending.
+- `ask` reads `findings.json` again before each question, so answers include the findings once they exist. When they land, the next answer starts with a line giving their counts.
+- Ask calls don't count toward the review's budget, and stopping the review doesn't stop `ask`.
+- `ask` without a run picks the latest one, running or not. With more than one running, it asks which, or fails without a TTY.
+
+`ask --open` hands off to the harness's own interactive CLI (such as `claude`) in the same checkout, with the same context and read-only flags, for longer exploration. For a worktree, it holds the lease until that CLI exits. Its cost is recorded as `unknown`, and a `best-effort` harness follows the trust rules in 3.
 
 Out of scope: editing code from `ask` (check out the branch for that), and posting answers to the PR.
 
@@ -234,20 +250,20 @@ From lowest to highest priority:
 
 Keys are camelCase and mirror CLI flags where a flag exists.
 
-| Key           | Holds                                                                |
-| ------------- | -------------------------------------------------------------------- |
-| `preset`      | Preset name (default `standard`)                                     |
-| `harness`     | Harness for every role, unless `roles` overrides it                  |
-| `presets`     | Overrides of built-in presets, or new named presets                  |
+| Key           | Holds                                                                          |
+| ------------- | ------------------------------------------------------------------------------ |
+| `preset`      | Preset name (default `standard`)                                               |
+| `harness`     | Harness for every role, unless `roles` overrides it                            |
+| `presets`     | Overrides of built-in presets, or new named presets                            |
 | `roles`       | Per role (summarizer, finder, verifier, answerer, ...): harness, model, effort |
-| `harnesses`   | Harness profiles (see 9)                                             |
-| `budget`      | `usd` and `minutes` per run                                          |
-| `steps`       | Steps to skip, filter settings                                       |
-| `failOn`      | Exit-code threshold (see 7)                                          |
-| `trust`       | Trust rules (see 3)                                                  |
-| `base`        | Default base branch                                                  |
-| `reviewGuide` | Path to the review guide (default `REVIEW.md`)                       |
-| `prices`      | Price-table overrides (see 9)                                        |
+| `harnesses`   | Harness profiles (see 9)                                                       |
+| `budget`      | `usd` and `minutes` per run                                                    |
+| `steps`       | Steps to skip, filter settings                                                 |
+| `failOn`      | Exit-code threshold (see 7)                                                    |
+| `trust`       | Trust rules (see 3)                                                            |
+| `base`        | Default base branch                                                            |
+| `reviewGuide` | Path to the review guide (default `REVIEW.md`)                                 |
+| `prices`      | Price-table overrides (see 9)                                                  |
 
 Long text, such as custom prompts, goes in separate `.md` files that the config points to.
 
@@ -311,10 +327,10 @@ Totals that include `unknown` calls are shown as partial, for example "≥ $1.20
 
 Safety is layered, so it doesn't depend on any one CLI:
 
-1. Every review runs in a disposable worktree (see 4).
+1. Every review of a target other than the current branch runs in a disposable worktree (see 4).
 2. Every profile passes read-only flags. For `claude`, a `PreToolUse` guard hook, passed with `--settings`, also denies other tools and paths outside the worktree, following symlinks. `cursor` has no such hook, so each tool call is checked once it completes. A read outside the worktree that ran is recorded in the call record and the task goes on: the sandbox blocks the network, so what it read can only reach the report. Any other forbidden call that ran stops the task.
 3. Sessions are isolated: no user or project agent settings, no memory files, no MCP servers, no saved sessions, as far as each CLI allows.
-4. The worktree's state is snapshotted, and checked after every task. Any change aborts the run (exit `3`).
+4. The checkout's state is snapshotted, and checked after every task. Any change aborts the run (exit `3`).
 5. Trust levels limit which profiles may run (see 3).
 
 ## 10. Instrumentation
@@ -325,19 +341,21 @@ Each call records: role, step, harness, model, effort, tokens (input, cache read
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 
-| File                | Content                                                                                                               |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `run.json`          | Resolved config, target, base and head SHAs (and snapshot SHA), trust level, status, per-step and total cost and time |
-| `calls.jsonl`       | One record per model call                                                                                             |
-| `diff.patch`        | Reviewed diff                                                                                                         |
-| `prompts/<task>.md` | Exact prompt per task                                                                                                 |
-| `raw/<task>.json`   | Raw harness output                                                                                                    |
-| `summary.json`      | Summary (see 7)                                                                                                       |
-| `findings.json`     | Findings (see 5)                                                                                                      |
-| `pre-existing.json` | Pre-existing findings                                                                                                 |
-| `report.md`         | Report                                                                                                                |
-| `posted.json`       | What was posted, with comment ids                                                                                     |
-| `asks.jsonl`        | Questions and answers from `ask` (see 7)                                                                              |
+| File                | Content                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `run.json`          | Resolved config, target, base and head SHAs (and snapshot SHA), checkout path, trust level, status, per-step and total cost and time |
+| `calls.jsonl`       | One record per model call                                                                                                            |
+| `diff.patch`        | Reviewed diff                                                                                                                        |
+| `prompts/<task>.md` | Exact prompt per task                                                                                                                |
+| `raw/<task>.json`   | Raw harness output                                                                                                                   |
+| `summary.json`      | Summary (see 7)                                                                                                                      |
+| `findings.json`     | Findings (see 5)                                                                                                                     |
+| `pre-existing.json` | Pre-existing findings                                                                                                                |
+| `report.md`         | Report                                                                                                                               |
+| `posted.json`       | What was posted, with comment ids                                                                                                    |
+| `intent.json`       | PR title and description, or commit messages, for `ask`                                                                              |
+| `asks.jsonl`        | Questions and answers from `ask` (see 7)                                                                                             |
+| `leases/<pid>`      | One per running `ask` that holds the run's worktree                                                                                  |
 
 Each run also appends one summary line to `.review-flow/index.jsonl`: preset, config hash, `REVIEW.md` hash, diff size, finding counts, cost, and time. Eval runs are included and marked as evals. `runs` and `compare` read from it.
 

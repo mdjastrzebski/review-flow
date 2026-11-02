@@ -151,6 +151,25 @@ export function cursorArgs(
   ];
 }
 
+/** Flags for `ask --open`: interactive, read-only ask mode, with the sandbox on. */
+export function cursorOpenArgs({
+  model,
+  effort,
+}: {
+  model: string | null;
+  effort: Effort | null;
+}): string[] {
+  const modelArg = model === null ? null : effort === null ? model : `${model}[effort=${effort}]`;
+  return [
+    "--mode",
+    "ask",
+    "--sandbox",
+    "enabled",
+    "--trust",
+    ...(modelArg === null ? [] : ["--model", modelArg]),
+  ];
+}
+
 interface ToolCall {
   /** `read`, `glob`, `shell`, … */
   name: string;

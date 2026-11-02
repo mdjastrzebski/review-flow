@@ -1,8 +1,11 @@
 import type { AgentStatus, TokenUsage } from "./agent.ts";
 import type { Effort, Harness, Role } from "./models.ts";
 
-/** Pipeline steps that are timed. Ranking runs inside verify (rules) and report (sort). */
-export type Step = "collect" | "summarize" | "review" | "verify" | "report";
+/**
+ * Pipeline steps that are timed. Ranking runs inside verify (rules) and report (sort). `ask` calls
+ * go to calls.jsonl only, never into a run's totals.
+ */
+export type Step = "collect" | "summarize" | "review" | "verify" | "report" | "ask";
 
 /**
  * `reported`: the harness reported the cost. `computed`: tokens × the price table (prices.ts).

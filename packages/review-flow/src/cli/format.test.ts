@@ -70,9 +70,7 @@ describe("formatFindings", () => {
     );
     const order = ["F-003", "F-002", "F-001"].map((id) => text.indexOf(id));
     expect(order).toEqual(order.toSorted((a, b) => a - b));
-    expect(text).toContain(
-      "2 findings  2 confirmed · 1 refuted  main...HEAD · 1m 2s · $0.18",
-    );
+    expect(text).toContain("2 findings  2 confirmed · 1 refuted  main...HEAD · 1m 2s · $0.18");
     expect(text).toContain("F-003  HIGH  confirmed (high confidence)  Title");
   });
 
@@ -80,9 +78,7 @@ describe("formatFindings", () => {
     const text = formatFindings(
       {
         ...summary,
-        findings: [
-          makeFinding({ id: "F-001", lineEnd: 9, suggestedFix: "Do X." }),
-        ],
+        findings: [makeFinding({ id: "F-001", lineEnd: 9, suggestedFix: "Do X." })],
         verdicts: {
           "F-001": makeVerdict({
             fix: {
@@ -134,17 +130,14 @@ describe("formatFindings", () => {
   });
 
   it("omits the cost when unknown", () => {
-    const text = formatFindings(
-      { ...summary, costUsd: null, findings: [], verdicts: {} },
-      plain,
-    );
+    const text = formatFindings({ ...summary, costUsd: null, findings: [], verdicts: {} }, plain);
     expect(text).toContain("main...HEAD · 1m 2s\n");
   });
 
   it("says so when there are no findings", () => {
-    expect(
-      formatFindings({ ...summary, findings: [], verdicts: {} }, plain),
-    ).toContain("No findings");
+    expect(formatFindings({ ...summary, findings: [], verdicts: {} }, plain)).toContain(
+      "No findings",
+    );
   });
 
   it("emits no ANSI codes without color", () => {
@@ -198,12 +191,8 @@ describe("formatSummary", () => {
   });
 
   it("says when the summary is missing", () => {
-    expect(
-      formatSummary(
-        { status: "failed", error: "timeout: slow" },
-        "own",
-        options,
-      ),
-    ).toContain("Missing: the summarizer failed (timeout: slow).");
+    expect(formatSummary({ status: "failed", error: "timeout: slow" }, "own", options)).toContain(
+      "Missing: the summarizer failed (timeout: slow).",
+    );
   });
 });

@@ -83,12 +83,7 @@ export function formatSummary(
     options.color ? styleText(style, text, { validateStream: false }) : text;
   const header = ["", paint("bold", "Summary")];
   if (outcome.status === "failed") {
-    header.push(
-      paint(
-        "yellow",
-        `${INDENT}Missing: the summarizer failed (${outcome.error}).`,
-      ),
-    );
+    header.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
     return header.join("\n");
   }
   const body = formatSummaryFields(outcome.summary, trust, {
@@ -120,9 +115,7 @@ export function formatSummaryFields(
     gap();
     wrap(text, textWidth).forEach((line, index) => {
       const prefix =
-        index === 0
-          ? paint("dim", label.padEnd(LABEL_WIDTH))
-          : " ".repeat(LABEL_WIDTH);
+        index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
       out.push(`${prefix}${line}`);
     });
   };
@@ -152,10 +145,7 @@ export function formatSummaryFields(
   return out.join("\n");
 }
 
-export function formatFindings(
-  summary: FindingsSummary,
-  options: FormatOptions,
-): string {
+export function formatFindings(summary: FindingsSummary, options: FormatOptions): string {
   const paint = (style: Style, text: string) =>
     options.color ? styleText(style, text, { validateStream: false }) : text;
 
@@ -192,27 +182,19 @@ export function formatFindings(
     kept.length === 0
       ? paint(["bold", "green"], "No findings")
       : paint("bold", `${kept.length} finding${kept.length === 1 ? "" : "s"}`);
-  out.push(
-    [title, ...(breakdown === "" ? [] : [breakdown]), stats].join("  "),
-    "",
-  );
+  out.push([title, ...(breakdown === "" ? [] : [breakdown]), stats].join("  "), "");
 
   const textWidth = Math.max(40, options.width - INDENT.length - LABEL_WIDTH);
   const field = (label: string, text: string) => {
     wrap(text, textWidth).forEach((line, index) => {
       const prefix =
-        index === 0
-          ? paint("dim", label.padEnd(LABEL_WIDTH))
-          : " ".repeat(LABEL_WIDTH);
+        index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
       out.push(`${INDENT}${prefix}${line}`);
     });
   };
 
   for (const { finding, verdict } of kept) {
-    const severity = paint(
-      SEVERITY_STYLE[verdict.severity],
-      ` ${verdict.severity.toUpperCase()} `,
-    );
+    const severity = paint(SEVERITY_STYLE[verdict.severity], ` ${verdict.severity.toUpperCase()} `);
     const status = paint(VERDICT_STYLE[verdict.verdict], verdict.verdict);
     out.push(
       `${paint("bold", finding.id)} ${severity} ${status} ${paint("dim", `(${verdict.confidence} confidence)`)}  ${paint("bold", finding.title)}`,
@@ -223,10 +205,7 @@ export function formatFindings(
     field("Claim", finding.claim);
     field("Verifier", verdict.summary);
     if (finding.suggestedFix !== null) field("Fix", finding.suggestedFix);
-    field(
-      "Fix check",
-      `${FIX_LABEL[verdict.fix.assessment]}: ${verdict.fix.detail}`,
-    );
+    field("Fix check", `${FIX_LABEL[verdict.fix.assessment]}: ${verdict.fix.detail}`);
     if (verdict.fix.betterFix !== null) field("Better", verdict.fix.betterFix);
     out.push("");
   }
@@ -239,14 +218,9 @@ export function formatFindings(
     );
     for (const { finding, verdict } of refuted) {
       out.push(
-        paint(
-          "dim",
-          `${finding.id}  refuted (${verdict.confidence} confidence)  ${finding.title}`,
-        ),
+        paint("dim", `${finding.id}  refuted (${verdict.confidence} confidence)  ${finding.title}`),
       );
-      out.push(
-        `${INDENT}${paint("dim", `${formatLocation(finding)} ${finding.category}`)}`,
-      );
+      out.push(`${INDENT}${paint("dim", `${formatLocation(finding)} ${finding.category}`)}`);
       field("Why", verdict.summary);
       out.push("");
     }

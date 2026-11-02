@@ -40,7 +40,9 @@ import {
 } from "../core/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { askCommand, type AskOptions } from "./ask.ts";
 import { formatFindings, formatSummary } from "./format.ts";
+import { launcher } from "./launcher.ts";
 import { postRun } from "./post.ts";
 import { createProgress, type Progress } from "./progress.ts";
 import { ask, choose, confirm, interactive, note } from "./prompt.ts";
@@ -71,6 +73,8 @@ const progressHooks = (progress: Progress) => ({
   logTable: progress.logTable,
   ...(progress.onActivity === undefined ? {} : { onActivity: progress.onActivity }),
   ...(progress.onSummary === undefined ? {} : { onSummary: progress.onSummary }),
+  // Questions go to another terminal; this one keeps showing the review.
+  askCommand: (runId: string) => `${launcher()} ask ${runId}`,
 });
 
 /** --harness, else the saved one, else asked in a TTY and saved for next time. */
@@ -212,7 +216,7 @@ async function askBase(repo: string, log: Log): Promise<string> {
 
 /**
  * Fetches the PR, checks out its head in a temporary worktree, and reviews it there against the
- * PR's base. The worktree is removed afterwards, also on Ctrl-C.
+ * PR's base. The worktree is removed afterwards, also on Ctrl-C, unless an `ask` holds it.
  */
 async function reviewPr(
   target: string,
@@ -328,7 +332,7 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
     if (postable && (await confirm("Post to the PR?"))) {
       await postRun(result.runDir.root, colorOptions());
     } else if (postable) {
-      console.log(`Post later with: review-flow post ${path.basename(result.runDir.root)}`);
+      console.log(`Post later with: ${launcher()} post ${path.basename(result.runDir.root)}`);
     }
   }
 }
@@ -477,6 +481,34 @@ program
   )
   .option("--repo <path>", "repository", userCwd)
   .action(post);
+
+program
+  .command("ask")
+  .description("Ask follow-up questions about a reviewed change, also while the review runs")
+  .argument("[run]", "run id, a unique part of one, or a run dir path; default: the latest run")
+  .argument("[question]", "answer this one question and exit")
+  .addOption(
+    new Option("-H, --harness <name>", "agent harness; default: the run's").choices(HARNESSES),
+  )
+  .option("--model <id>", "answerer model; default: the run's verifier model")
+  .addOption(new Option("--effort <level>", "answerer effort").choices(EFFORTS))
+  .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
+  .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
+  .option(
+    "--open",
+    "hand off to the harness's interactive CLI, read-only, with the same context",
+    false,
+  )
+  .option("--repo <path>", "repository", userCwd)
+  .addOption(verboseOption())
+  .action(async (ref: string | undefined, question: string | undefined, options: AskOptions) => {
+    try {
+      await askCommand(ref, question, options, userCwd);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 3;
+    }
+  });
 
 program
   .command("runs")

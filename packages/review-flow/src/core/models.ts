@@ -1,7 +1,10 @@
 export const HARNESSES = ["claude", "cursor"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
-export type Role = "summarizer" | "reviewer" | "verifier";
+/** Roles of the review pipeline, each with its model in `run.json`. */
+export type ReviewRole = "summarizer" | "reviewer" | "verifier";
+/** `answerer` answers `ask` questions after (or during) a review. */
+export type Role = ReviewRole | "answerer";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -13,7 +16,7 @@ export interface ModelChoice {
   effort: Effort | null;
 }
 
-export type RoleModels = Record<Role, ModelChoice>;
+export type RoleModels = Record<ReviewRole, ModelChoice>;
 
 // Claude: Sonnet 5.5 high matched Opus 5.5 on quality at about half the cost. Effort is set
 // explicitly, since lower efforts answer from the diff without reading the repo.
@@ -48,7 +51,7 @@ export function resolveModels(harness: Harness, overrides: ModelOverrides): Role
   const defaults = DEFAULT_MODELS[harness];
   // Cursor model ids often carry their own effort (gpt-5.3-codex-high), and not every model
   // accepts an effort parameter, so an overridden Cursor model gets none unless one is given.
-  const choose = (role: Role, model: string | null, effort: Effort | null): ModelChoice => ({
+  const choose = (role: ReviewRole, model: string | null, effort: Effort | null): ModelChoice => ({
     model: model ?? defaults[role].model,
     effort: effort ?? (model !== null && harness === "cursor" ? null : defaults[role].effort),
   });
@@ -65,5 +68,23 @@ export function resolveModels(harness: Harness, overrides: ModelOverrides): Role
       overrides.verifierModel ?? overrides.model,
       overrides.verifierEffort ?? effort,
     ),
+  };
+}
+
+/**
+ * The answerer's model: the run's verifier model, since both read code to check claims, or the
+ * harness's default verifier when `ask` uses another harness than the run. Overrides apply as in
+ * `resolveModels`.
+ */
+export function resolveAnswerer(
+  harness: Harness,
+  run: { harness: Harness; models: RoleModels },
+  overrides: { model: string | null; effort: Effort | null },
+): ModelChoice {
+  const base = run.harness === harness ? run.models.verifier : DEFAULT_MODELS[harness].verifier;
+  const { model, effort } = overrides;
+  return {
+    model: model ?? base.model,
+    effort: effort ?? (model !== null && harness === "cursor" ? null : base.effort),
   };
 }

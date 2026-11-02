@@ -36,6 +36,11 @@ export interface RunDir {
   readonly verdictsPath: string;
   readonly reportPath: string;
   readonly postedPath: string;
+  /** The PR description or commit messages, for `ask`. */
+  readonly intentPath: string;
+  readonly asksPath: string;
+  /** One file per running `ask` that holds the run's worktree, named by its pid. */
+  readonly leasesDir: string;
   promptPath(taskId: string): string;
   rawPath(taskId: string): string;
 }
@@ -51,6 +56,9 @@ export function runDirPaths(root: string): RunDir {
     verdictsPath: path.join(root, "verdicts.json"),
     reportPath: path.join(root, "report.md"),
     postedPath: path.join(root, "posted.json"),
+    intentPath: path.join(root, "intent.json"),
+    asksPath: path.join(root, "asks.jsonl"),
+    leasesDir: path.join(root, "leases"),
     promptPath: (taskId) => path.join(root, "prompts", `${taskId}.md`),
     rawPath: (taskId) => path.join(root, "raw", `${taskId}.json`),
   };

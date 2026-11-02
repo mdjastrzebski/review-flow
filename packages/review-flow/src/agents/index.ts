@@ -15,3 +15,5 @@ export function getAgent(harness: Harness, options: AgentOptions): RunAgent {
       return createCursorAgent({ bin: options.cursorBin });
   }
 }
+
+export { openInteractive } from "./open.ts";

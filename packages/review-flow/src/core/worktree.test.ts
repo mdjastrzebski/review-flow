@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addWorktree, resolveCommit } from "./git.ts";
 import { ensureStateDir } from "./run-dir.ts";
-import { createReviewWorktree } from "./worktree.ts";
+import { createReviewWorktree, leasedWorktrees, takeLease } from "./worktree.ts";
 
 let repo: string;
 
@@ -60,5 +60,29 @@ describe("createReviewWorktree", () => {
     const worktree = await createReviewWorktree(repo, sha);
     expect(await readdir(dir)).toEqual([path.basename(worktree.dir)]);
     await worktree.remove();
+  });
+
+  it("keeps a worktree that a running ask holds, until the lease is released", async () => {
+    const sha = await resolveCommit(repo, "HEAD");
+    const worktree = await createReviewWorktree(repo, sha);
+    const leases = path.join(repo, ".review-flow", "runs", "run-1", "leases");
+    const lease = await takeLease(leases, worktree.dir);
+
+    await worktree.remove();
+    worktree.removeSync();
+    expect(await exists(worktree.dir)).toBe(true);
+
+    await lease.release();
+    await worktree.remove();
+    expect(await exists(worktree.dir)).toBe(false);
+  });
+
+  it("ignores and deletes leases of processes that are gone", async () => {
+    const leases = path.join(repo, ".review-flow", "runs", "run-1", "leases");
+    await mkdir(leases, { recursive: true });
+    await writeFile(path.join(leases, "99999999"), "/some/worktree\n");
+
+    expect(leasedWorktrees(repo)).toEqual(new Set());
+    expect(await readdir(leases)).toEqual([]);
   });
 });

@@ -86,6 +86,36 @@ export function claudeArgs(
   ];
 }
 
+/**
+ * Flags for `ask --open`: an interactive session with the same tools, guard, and isolation as a
+ * task, and the context in the system prompt. Session persistence can only be turned off with -p.
+ */
+export function claudeOpenArgs(
+  { model, effort }: { model: string | null; effort: string | null },
+  settings: string,
+  contextFile: string,
+): string[] {
+  const tools = READ_ONLY_TOOLS.join(",");
+  return [
+    ...(model === null ? [] : ["--model", model]),
+    ...(effort === null ? [] : ["--effort", effort]),
+    "--tools",
+    tools,
+    "--allowed-tools",
+    tools,
+    "--permission-mode",
+    "dontAsk",
+    "--setting-sources",
+    "",
+    "--settings",
+    settings,
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--append-system-prompt-file",
+    contextFile,
+  ];
+}
+
 /** The fields of a `stream-json` message that the harness reads. */
 interface StreamMessage {
   type?: string;

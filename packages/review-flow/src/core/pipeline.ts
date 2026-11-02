@@ -1,10 +1,9 @@
-import { appendFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import pLimit from "p-limit";
-import type { AgentResult, AgentStatus, AgentTask, RunAgent, TokenUsage } from "./agent.ts";
-import { rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
+import type { AgentStatus, RunAgent } from "./agent.ts";
+import { EMPTY_TOTALS, rollUp, type CallRecord, type Step, type TimedTotals } from "./calls.ts";
 import {
-  assertStatusUnchanged,
   commitMessages,
   diffAgainstBase,
   resolveCommit,
@@ -12,14 +11,12 @@ import {
   shortSha,
   snapshotStatus,
   snapshotWorkingTree,
-  type StatusSnapshot,
 } from "./git.ts";
 import { describeModel, formatDuration } from "./format.ts";
 import type { PullRequest } from "./github.ts";
 import { writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { normalizeFindings } from "./normalize.ts";
-import { computeCostUsd } from "./prices.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, createRunDirAt, ensureStateDir, type RunDir } from "./run-dir.ts";
 import {
@@ -32,6 +29,7 @@ import {
 } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
+import { formatElapsed, runTask, type TaskActivity, type TaskContext } from "./task.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "./trust.ts";
 import { ReviewOutput, Summary, Verdict, type NormalizedFinding } from "./schemas.ts";
 import {
@@ -43,6 +41,7 @@ import {
 import {
   buildChangeContext,
   buildVerifierPrompt,
+  changeRangeOf,
   verifierTaskId,
   type ChangeRange,
 } from "./verify.ts";
@@ -71,6 +70,11 @@ export interface ReviewRunOptions {
   warn?: (message: string) => void;
   /** The summary, as soon as it is written. Default: a `Summary written` line. */
   onSummary?: (summary: Summary, trust: TrustLevel) => void;
+  /**
+   * The command that asks about this run from another terminal, shown in the review box.
+   * Without it, no such row.
+   */
+  askCommand?: (runId: string) => string;
   /** Labelled facts about the run (models, run dir), shown together. Default: one `log` each. */
   logTable?: (title: string, rows: readonly (readonly [string, string])[]) => void;
   /**
@@ -104,6 +108,8 @@ export interface ReviewRunOptions {
 
 export interface ReviewRunResult {
   runDir: RunDir;
+  /** The checkout agents read: the repo root, or the review worktree. */
+  checkout: string;
   /** null when Summarize was skipped. */
   summary: SummaryOutcome | null;
   /** Empty when Find was skipped. */
@@ -115,7 +121,10 @@ export interface ReviewRunResult {
   durationMs: number;
 }
 
-/** run.json. Per-call detail is in calls.jsonl. */
+/**
+ * run.json, written as `running` when the run dir is made and again when the run ends. Per-call
+ * detail is in calls.jsonl.
+ */
 export interface RunRecord {
   harness: Harness;
   models: RoleModels;
@@ -125,54 +134,28 @@ export interface RunRecord {
   pr?: PullRequest;
   /** Missing in runs from before trust levels. */
   trust?: Trust;
+  /** The checkout agents read. Missing in runs from before `ask`. */
+  checkout?: string;
+  /** Steps the run was started with. Missing in runs from before `ask`. */
+  summarize?: boolean;
+  find?: boolean;
+  /** The reviewing process, while the run is `running`; a dead pid means it was killed. */
+  pid?: number;
   startedAt: string;
-  finishedAt: string;
-  status: "ok" | "failed";
+  /** null while running. */
+  finishedAt: string | null;
+  status: "running" | "ok" | "failed";
   error: string | null;
   steps: Partial<Record<Step, TimedTotals>>;
   totals: TimedTotals;
 }
 
-export interface TaskActivity {
-  taskId: string;
-  /** Since the task started. */
-  elapsedMs: number;
-  /** A tool call or heartbeat; on the last event, the outcome, such as `done: ok, $0.06`. */
-  text: string;
-  /** The task has ended. */
-  done: boolean;
-}
-
-const HEARTBEAT_INTERVAL_MS = 15_000;
-const QUIET_THRESHOLD_MS = 30_000;
-
-export function formatElapsed(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-interface TaskContext {
-  runDir: RunDir;
-  repo: string;
-  status: StatusSnapshot;
-  harness: Harness;
-  calls: CallRecord[];
-  runAgent: RunAgent;
-  log: (message: string) => void;
+interface PipelineContext extends TaskContext {
   warn: (message: string) => void;
-  onActivity: (activity: TaskActivity) => void;
   onSummary: (summary: Summary, trust: TrustLevel) => void;
   trust: TrustLevel;
-  verbose: boolean;
   /** Aborted when either branch of the run (summarize, or find and verify) throws. */
   signal: AbortSignal;
-}
-
-/** `in 1,200 · cache read 30,000 · cache write 0 · out 800`. */
-function describeUsage(usage: TokenUsage | null): string {
-  if (usage === null) return "tokens: not reported";
-  const n = (count: number) => count.toLocaleString("en-US");
-  return `tokens: in ${n(usage.input)} · cache read ${n(usage.cacheRead)} · cache write ${n(usage.cacheWrite)} · out ${n(usage.output)}`;
 }
 
 /** Wall time of each step, in the order the steps ran. */
@@ -185,90 +168,6 @@ async function timeStep<T>(durations: StepDurations, step: Step, fn: () => Promi
   } finally {
     durations.set(step, Date.now() - startedAt);
   }
-}
-
-/**
- * Runs one agent task with the run's bookkeeping: prompt + raw output on disk, a line in
- * calls.jsonl, progress lines (each tool call, plus a heartbeat when the agent is quiet), tree
- * check after.
- */
-async function runTask<T>(
-  task: Omit<AgentTask<T>, "onProgress" | "onDetail">,
-  step: Step,
-  ctx: TaskContext,
-  onActivity?: () => void,
-): Promise<AgentResult<T>> {
-  await writeFile(ctx.runDir.promptPath(task.taskId), task.prompt);
-
-  const startedAt = Date.now();
-  let lastActivity = startedAt;
-  const line = (text: string) =>
-    ctx.log(`  [${task.taskId} ${formatElapsed(Date.now() - startedAt)}] ${text}`);
-  const activity = (text: string, done = false) =>
-    ctx.onActivity({ taskId: task.taskId, elapsedMs: Date.now() - startedAt, text, done });
-  const heartbeat = setInterval(() => {
-    const quietFor = Date.now() - lastActivity;
-    if (quietFor >= QUIET_THRESHOLD_MS) {
-      activity(`still working (no tool calls for ${Math.round(quietFor / 1000)}s)`);
-    }
-  }, HEARTBEAT_INTERVAL_MS);
-  if (ctx.verbose) {
-    const shared =
-      task.sharedContext === null ? "" : `, shared context ${task.sharedContext.length} chars`;
-    line(`prompt: ${task.prompt.length} chars${shared} → ${ctx.runDir.promptPath(task.taskId)}`);
-  }
-
-  let result: AgentResult<T>;
-  try {
-    result = await ctx.runAgent({
-      ...task,
-      onProgress: ({ tool, detail }) => {
-        lastActivity = Date.now();
-        activity(detail === null ? tool : `${tool} ${detail}`);
-        onActivity?.();
-      },
-      ...(ctx.verbose ? { onDetail: line } : {}),
-    });
-  } catch (error) {
-    activity("failed", true);
-    throw error;
-  } finally {
-    clearInterval(heartbeat);
-  }
-  const computedCost = result.costUsd === null ? computeCostUsd(task.model, result.usage) : null;
-  const costUsd = result.costUsd ?? computedCost;
-  activity(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`, true);
-  if (ctx.verbose) {
-    if (result.error !== null) line(`error: ${result.error}`);
-    line(
-      `${describeUsage(result.usage)} · ${formatDuration(result.durationMs)} · cost ${result.costUsd !== null ? "reported" : computedCost !== null ? "computed" : "unknown"}`,
-    );
-  }
-
-  await writeJson(ctx.runDir.rawPath(task.taskId), result.raw);
-  const call: CallRecord = {
-    taskId: task.taskId,
-    role: task.role,
-    step,
-    harness: ctx.harness,
-    model: task.model,
-    effort: task.effort,
-    status: result.status,
-    error: result.error,
-    usage: result.usage,
-    costUsd,
-    costSource:
-      result.costUsd !== null ? "reported" : computedCost !== null ? "computed" : "unknown",
-    startedAt: new Date(startedAt).toISOString(),
-    durationMs: result.durationMs,
-    outsideReads: result.outsideReads ?? [],
-  };
-  ctx.calls.push(call);
-  // Appended as each call ends, so a crashed run still keeps its records.
-  await appendFile(ctx.runDir.callsPath, `${JSON.stringify(call)}\n`);
-  // Agents are read-only by configuration; this is the safety net if that ever fails.
-  await assertStatusUnchanged(ctx.repo, ctx.status);
-  return result;
 }
 
 /**
@@ -308,7 +207,7 @@ export function failedVerdict(
 async function verifyFindings(
   findings: readonly NormalizedFinding[],
   context: { change: ChangeRange; sharedContext: string; models: RoleModels },
-  ctx: TaskContext,
+  ctx: PipelineContext,
 ): Promise<Record<string, Verdict>> {
   const template = await loadPrompt("verifier");
   const { sharedContext } = context;
@@ -375,7 +274,7 @@ async function verifyFindings(
  */
 async function summarizeChange(
   context: { change: ChangeRange; sharedContext: string; intent: Intent; models: RoleModels },
-  ctx: TaskContext,
+  ctx: PipelineContext,
 ): Promise<SummaryOutcome> {
   const { model, effort } = context.models.summarizer;
   ctx.log("Summarizing…");
@@ -447,15 +346,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const headSha = await resolveCommit(repo, "HEAD");
   const snapshot = options.committedOnly ? null : await snapshotWorkingTree(repo);
   const head = snapshot === null ? { sha: headSha } : { sha: headSha, snapshotSha: snapshot.sha };
-  const change: ChangeRange = {
-    base,
-    head:
-      pr !== undefined
-        ? `\`HEAD\` (the head of PR #${pr.number})`
-        : snapshot === null
-          ? "`HEAD`"
-          : "`HEAD` plus uncommitted changes",
-  };
+  const change = changeRangeOf(base, { pr, uncommitted: snapshot !== null });
 
   const diff = await diffAgainstBase(repo, base, snapshot?.sha);
   if (diff.trim() === "") {
@@ -510,7 +401,33 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       ? await createRunDir(stateRepo, await shortSha(repo, "HEAD"), startedAt)
       : await createRunDirAt(runRoot);
   await writeFile(runDir.diffPath, diff);
-  setup.push(["Run dir", runDir.root]);
+  await writeJson(runDir.intentPath, intent);
+  const record = {
+    harness,
+    models,
+    base: { ref: base, sha: baseSha },
+    head,
+    ...(pr === undefined ? {} : { pr }),
+    trust,
+    checkout: repo,
+    summarize,
+    find,
+    startedAt: startedAt.toISOString(),
+  };
+  // So `ask` can find the run, and read the diff and summary, while it goes on.
+  await writeJson(runDir.runJsonPath, {
+    ...record,
+    pid: process.pid,
+    finishedAt: null,
+    status: "running",
+    error: null,
+    steps: {},
+    totals: EMPTY_TOTALS,
+  } satisfies RunRecord);
+  setup.push(["Checkout", repo], ["Run dir", runDir.root]);
+  if (options.askCommand !== undefined) {
+    setup.push(["Ask", options.askCommand(path.basename(runDir.root))]);
+  }
   const logTable =
     options.logTable ??
     ((_: string, rows: readonly (readonly [string, string])[]) => {
@@ -521,7 +438,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const stepDurations: StepDurations = new Map([["collect", Date.now() - startedAt.getTime()]]);
   const calls: CallRecord[] = [];
   const abort = new AbortController();
-  const ctx: TaskContext = {
+  const ctx: PipelineContext = {
     runDir,
     repo,
     status,
@@ -667,22 +584,17 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     }
     logTable("Saved", saved);
 
-    return { runDir, summary, findings, verdicts, costUsd, durationMs };
+    return { runDir, checkout: repo, summary, findings, verdicts, costUsd, durationMs };
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
     const finishedAt = new Date();
+    const outcome = failure === null ? "ok" : "failed";
     const run: RunRecord = {
-      harness,
-      models,
-      base: { ref: base, sha: baseSha },
-      head,
-      ...(pr === undefined ? {} : { pr }),
-      trust,
-      startedAt: startedAt.toISOString(),
+      ...record,
       finishedAt: finishedAt.toISOString(),
-      status: failure === null ? "ok" : "failed",
+      status: outcome,
       error: failure,
       ...rollUp(calls, stepDurations, finishedAt.getTime() - startedAt.getTime()),
     };
@@ -693,7 +605,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         kind: "review",
         startedAt: run.startedAt,
         durationMs: run.totals.durationMs,
-        status: run.status,
+        status: outcome,
         harness,
         models,
         base: run.base,

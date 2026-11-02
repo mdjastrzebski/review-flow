@@ -24,3 +24,5 @@ export * from "./worktree.ts";
 export * from "./post.ts";
 export * from "./json.ts";
 export * from "./trust.ts";
+export * from "./task.ts";
+export * from "./ask.ts";

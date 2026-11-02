@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 // prompts/ at the package root, from both src/core/ and dist/core/.
 const PROMPTS_DIR = new URL("../../prompts/", import.meta.url);
 
-export type PromptName = "summarizer" | "reviewer" | "verifier" | "change";
+export type PromptName = "summarizer" | "reviewer" | "verifier" | "answerer" | "change";
 
 export async function loadPrompt(name: PromptName): Promise<string> {
   return readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");

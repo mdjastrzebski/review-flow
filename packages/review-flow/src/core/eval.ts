@@ -19,8 +19,8 @@ import {
   type ReviewRunOptions,
   type ReviewRunResult,
   type RunRecord,
-  type TaskActivity,
 } from "./pipeline.ts";
+import type { TaskActivity } from "./task.ts";
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
 import type { NormalizedFinding } from "./schemas.ts";

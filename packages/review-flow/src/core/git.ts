@@ -28,7 +28,7 @@ export async function resolveCommit(repo: string, ref: string): Promise<string> 
   }
 }
 
-async function hasCommit(repo: string, sha: string): Promise<boolean> {
+export async function hasCommit(repo: string, sha: string): Promise<boolean> {
   try {
     await git(repo, ["cat-file", "-e", `${sha}^{commit}`]);
     return true;
@@ -163,6 +163,11 @@ export async function removeWorktree(repo: string, dir: string): Promise<void> {
   await git(repo, ["worktree", "remove", "--force", dir]).catch(() => {});
   await rm(dir, { recursive: true, force: true });
   await git(repo, ["worktree", "prune"]).catch(() => {});
+}
+
+/** The tree a commit points at, to compare content regardless of commit metadata. */
+export async function treeOf(repo: string, ref: string): Promise<string> {
+  return (await git(repo, ["rev-parse", `${ref}^{tree}`])).trim();
 }
 
 export async function shortSha(repo: string, ref: string): Promise<string> {
