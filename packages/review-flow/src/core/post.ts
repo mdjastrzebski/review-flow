@@ -2,7 +2,8 @@ import { formatLocation } from "./format.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import { renderSummary } from "./report.ts";
-import type { NormalizedFinding, Severity, Summary, Verdict } from "./schemas.ts";
+import { keptRoughEdges } from "./rough-edges.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Severity, Summary, Verdict } from "./schemas.ts";
 import type { TrustLevel } from "./trust.ts";
 
 export const REVIEW_FLOW_URL = "https://github.com/mdjastrzebski/review-flow";
@@ -66,7 +67,7 @@ export interface Anchor {
  * first line of the range that is. null when no line is, so the finding goes in the review body.
  */
 export function anchorFinding(
-  finding: NormalizedFinding,
+  finding: Pick<NormalizedFinding, "file" | "lineStart" | "lineEnd">,
   lines: ReadonlyMap<string, ReadonlySet<number>>,
 ): Anchor | null {
   const inDiff = lines.get(finding.file);
@@ -93,20 +94,34 @@ function fixToPost({ finding, verdict }: RankedItem): string | null {
   return finding.suggestedFix ?? betterFix;
 }
 
+function suggestionField(label: string, text: string): string {
+  return text.includes("\n") && !text.includes("```")
+    ? `**${label}:**\n\n${codeFence(text)}`
+    : `**${label}:** ${text}`;
+}
+
 export function commentBody(item: RankedItem): string {
   const parts = [
     `**${item.finding.title.trim()}** (${item.verdict.severity})`,
     item.finding.claim.trim(),
   ];
   const fix = fixToPost(item)?.trim();
-  if (fix !== undefined && fix !== "") {
-    parts.push(
-      fix.includes("\n") && !fix.includes("```")
-        ? `**Suggested fix:**\n\n${codeFence(fix)}`
-        : `**Suggested fix:** ${fix}`,
-    );
-  }
+  if (fix !== undefined && fix !== "") parts.push(suggestionField("Suggested fix", fix));
   return parts.join("\n\n");
+}
+
+/** Rough edges that may be posted: all the checker did not rule out. Never pre-selected. */
+export function postableRoughEdges(edges: readonly CheckedRoughEdge[]): CheckedRoughEdge[] {
+  return keptRoughEdges(edges);
+}
+
+/** Labelled, so a reader can tell it from a finding: it is not a defect. */
+export function roughEdgeBody(edge: CheckedRoughEdge): string {
+  return [
+    `**Rough edge (${edge.lens}): ${edge.title.trim()}**`,
+    edge.observation.trim(),
+    suggestionField("Suggestion", edge.suggestion.trim()),
+  ].join("\n\n");
 }
 
 /** A comment of the GitHub "create a review" API. */
@@ -129,53 +144,91 @@ export interface ReviewPayload {
 
 export interface ReviewPlan {
   payload: ReviewPayload;
-  /** Finding id of each entry of `payload.comments`, in order. */
+  /** Finding or rough edge id of each entry of `payload.comments`, in order. */
   inline: string[];
-  /** Ids of findings placed in the review body. */
+  /** Ids of findings and rough edges placed in the review body. */
   inBody: string[];
+}
+
+/** One comment to place: a finding or a rough edge. */
+interface Entry {
+  id: string;
+  location: Pick<NormalizedFinding, "file" | "lineStart" | "lineEnd">;
+  body: string;
+}
+
+function toEntries(items: readonly RankedItem[], roughEdges: readonly CheckedRoughEdge[]): Entry[] {
+  return [
+    ...items.map((item) => ({
+      id: item.finding.id,
+      location: item.finding,
+      body: commentBody(item),
+    })),
+    ...roughEdges.map((edge) => ({
+      id: edge.id,
+      location: edge,
+      body: roughEdgeBody(edge),
+    })),
+  ];
+}
+
+/** Entries on diff lines become inline comments; the rest are left for the review body. */
+function placeEntries(
+  entries: readonly Entry[],
+  lines: ReadonlyMap<string, ReadonlySet<number>>,
+): { comments: ReviewComment[]; inline: string[]; inBody: Entry[] } {
+  const comments: ReviewComment[] = [];
+  const inline: string[] = [];
+  const inBody: Entry[] = [];
+  for (const entry of entries) {
+    const anchor = anchorFinding(entry.location, lines);
+    if (anchor === null) {
+      inBody.push(entry);
+      continue;
+    }
+    comments.push({
+      path: entry.location.file,
+      line: anchor.line,
+      side: "RIGHT",
+      ...(anchor.startLine === null ? {} : { start_line: anchor.startLine, start_side: "RIGHT" }),
+      body: entry.body,
+    });
+    inline.push(entry.id);
+  }
+  return { comments, inline, inBody };
 }
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
+export interface BuildReviewOptions {
+  /** The run's summary, put at the top of the body. */
+  summary?: Summary | null;
+  /** Trust level shown with the summary. */
+  trust?: TrustLevel;
+  roughEdges?: readonly CheckedRoughEdge[];
+}
+
 /**
- * One review with event COMMENT (never approve or request changes): findings on diff lines become
- * inline comments, the rest go in the body with the run's summary (when it has one), the finding
- * counts, and a footer.
+ * One review with event COMMENT (never approve or request changes): findings and rough edges on
+ * diff lines become inline comments, the rest go in the body with the run's summary (when it has
+ * one), the counts, and a footer.
  */
 export function buildReview(
   items: readonly RankedItem[],
   diff: string,
   commitId: string,
-  summary: Summary | null = null,
-  trust: TrustLevel = "collaborator",
+  { summary = null, trust = "collaborator", roughEdges = [] }: BuildReviewOptions = {},
 ): ReviewPlan {
-  const lines = diffLines(diff);
-  const comments: ReviewComment[] = [];
-  const inline: string[] = [];
-  const inBody: RankedItem[] = [];
-  for (const item of items) {
-    const anchor = anchorFinding(item.finding, lines);
-    if (anchor === null) {
-      inBody.push(item);
-      continue;
-    }
-    comments.push({
-      path: item.finding.file,
-      line: anchor.line,
-      side: "RIGHT",
-      ...(anchor.startLine === null ? {} : { start_line: anchor.startLine, start_side: "RIGHT" }),
-      body: commentBody(item),
-    });
-    inline.push(item.finding.id);
-  }
+  const { comments, inline, inBody } = placeEntries(toEntries(items, roughEdges), diffLines(diff));
 
-  const counts = [`${plural(items.length, "finding")}`];
+  const counts = [plural(items.length, "finding")];
+  if (roughEdges.length > 0) counts.push(plural(roughEdges.length, "rough edge"));
   if (comments.length > 0) counts.push(`${comments.length} inline`);
   if (inBody.length > 0) counts.push(`${inBody.length} outside the diff, below`);
   const sections = summary === null ? [] : [renderSummary(summary, trust)];
   sections.push(counts.join(" · "));
-  for (const item of inBody) {
-    sections.push(`\`${formatLocation(item.finding)}\`\n\n${commentBody(item)}`);
+  for (const entry of inBody) {
+    sections.push(`\`${formatLocation(entry.location)}\`\n\n${entry.body}`);
   }
   sections.push(`<sub>Reviewed with [review-flow](${REVIEW_FLOW_URL}).</sub>`);
 
@@ -187,7 +240,7 @@ export function buildReview(
       comments,
     },
     inline,
-    inBody: inBody.map((item) => item.finding.id),
+    inBody: inBody.map((entry) => entry.id),
   };
 }
 

@@ -5,11 +5,13 @@ import {
   currentPrHead,
   formatLocation,
   postableItems,
+  postableRoughEdges,
   postReview,
   prTrust,
   readJsonOrNull,
   runDirPaths,
   writeJson,
+  type CheckedRoughEdge,
   type NormalizedFinding,
   type PostedRecord,
   type RunRecord,
@@ -42,9 +44,12 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   const findings = (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath)) ?? [];
   const verdicts = (await readJsonOrNull<Record<string, Verdict>>(paths.verdictsPath)) ?? {};
   const items = postableItems(findings, verdicts);
+  const edges = postableRoughEdges(
+    (await readJsonOrNull<CheckedRoughEdge[]>(paths.roughEdgesPath)) ?? [],
+  );
   const summary = await readJsonOrNull<Summary>(paths.summaryPath);
-  if (items.length === 0 && summary === null) {
-    note.info("Nothing to post: no summary, and no findings or all were refuted.");
+  if (items.length === 0 && edges.length === 0 && summary === null) {
+    note.info("Nothing to post: no summary, and no findings or rough edges, or all were refuted.");
     return;
   }
 
@@ -60,6 +65,15 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
       `${paint("bold", finding.id)} ${verdict.severity} ${verdict.verdict}  ` +
       `${paint("cyan", formatLocation(finding))}  ${finding.title}`,
   }));
+  for (const edge of edges) {
+    choices.push({
+      value: edge.id,
+      label:
+        `${paint("bold", edge.id)} ${edge.lens} rough edge  ` +
+        `${paint("cyan", formatLocation(edge))}  ${edge.title}`,
+      hint: "not a defect",
+    });
+  }
   if (summary !== null) {
     choices.unshift({
       value: SUMMARY,
@@ -74,7 +88,8 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   const picked = await pick(`Post to PR #${pr.number}: ${pr.title}`, choices, initial);
   if (picked === null) return;
   const selected = items.filter((item) => picked.includes(item.finding.id));
-  if (selected.length === 0 && !picked.includes(SUMMARY)) {
+  const selectedEdges = edges.filter((edge) => picked.includes(edge.id));
+  if (selected.length === 0 && selectedEdges.length === 0 && !picked.includes(SUMMARY)) {
     note.info("Nothing selected.");
     return;
   }
@@ -91,13 +106,11 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   }
 
   const diff = await readFile(paths.diffPath, "utf8");
-  const plan = buildReview(
-    selected,
-    diff,
-    reviewed,
-    picked.includes(SUMMARY) ? summary : null,
-    (run.trust ?? prTrust(pr)).level,
-  );
+  const plan = buildReview(selected, diff, reviewed, {
+    summary: picked.includes(SUMMARY) ? summary : null,
+    trust: (run.trust ?? prTrust(pr)).level,
+    roughEdges: selectedEdges,
+  });
   note.box(plan.payload.body, "Review body");
   for (const comment of plan.payload.comments) {
     const lines =

@@ -5,7 +5,9 @@ import {
   formatDuration,
   formatLocation,
   goalNote,
+  keptRoughEdges,
   rankFindings,
+  type CheckedRoughEdge,
   type FixAssessment,
   type NormalizedFinding,
   type Severity,
@@ -26,6 +28,7 @@ export interface FormatOptions {
 export interface FindingsSummary {
   findings: NormalizedFinding[];
   verdicts: Record<string, Verdict>;
+  roughEdges: CheckedRoughEdge[];
   base: string;
   reportPath: string;
   costUsd: number | null;
@@ -222,6 +225,25 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
       );
       out.push(`${INDENT}${paint("dim", `${formatLocation(finding)} ${finding.category}`)}`);
       field("Why", verdict.summary);
+      out.push("");
+    }
+  }
+
+  // Not defects, so apart from the findings and out of their count.
+  const edges = keptRoughEdges(summary.roughEdges);
+  if (edges.length > 0) {
+    out.push(
+      `${paint("bold", `Rough edges (${edges.length})`)}  ${paint("dim", "not defects: harder to follow or change than needed")}`,
+      "",
+    );
+    for (const edge of edges) {
+      out.push(
+        `${paint("bold", edge.id)} ${paint("magenta", edge.lens)}  ${paint("bold", edge.title)}`,
+      );
+      out.push(`${INDENT}${paint("cyan", formatLocation(edge))}`);
+      field("Seen", edge.observation);
+      field("Try", edge.suggestion);
+      field("Check", `${edge.check.status}: ${edge.check.note}`);
       out.push("");
     }
   }

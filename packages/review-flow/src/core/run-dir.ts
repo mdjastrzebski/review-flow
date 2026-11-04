@@ -34,6 +34,7 @@ export interface RunDir {
   readonly summaryPath: string;
   readonly findingsPath: string;
   readonly verdictsPath: string;
+  readonly roughEdgesPath: string;
   readonly reportPath: string;
   readonly postedPath: string;
   /** The PR description or commit messages, for `ask`. */
@@ -54,6 +55,7 @@ export function runDirPaths(root: string): RunDir {
     summaryPath: path.join(root, "summary.json"),
     findingsPath: path.join(root, "findings.json"),
     verdictsPath: path.join(root, "verdicts.json"),
+    roughEdgesPath: path.join(root, "rough-edges.json"),
     reportPath: path.join(root, "report.md"),
     postedPath: path.join(root, "posted.json"),
     intentPath: path.join(root, "intent.json"),

@@ -36,8 +36,28 @@ export const Finding = z.strictObject({
 });
 export type Finding = z.infer<typeof Finding>;
 
+export const Lens = z.enum(["readability", "structure", "testability"]);
+export type Lens = z.infer<typeof Lens>;
+
+/** Not a defect: the code works, but could be easier to follow or change (spec 5). */
+export const RoughEdge = z.strictObject({
+  localId: z.string(),
+  title: z.string(),
+  file: z.string(),
+  lineStart: LineNumber,
+  lineEnd: LineNumber,
+  lens: Lens,
+  /** What is in the code, and why it is hard to follow or change. */
+  observation: z.string(),
+  /** A concrete change, described, not a patch. */
+  suggestion: z.string(),
+});
+export type RoughEdge = z.infer<typeof RoughEdge>;
+
 export const ReviewOutput = z.strictObject({
   findings: z.array(Finding),
+  /** Always present; empty when the reviewer was not asked for rough edges. */
+  roughEdges: z.array(RoughEdge),
 });
 export type ReviewOutput = z.infer<typeof ReviewOutput>;
 
@@ -68,6 +88,25 @@ export const Verdict = z.strictObject({
   fix: FixAssessment,
 });
 export type Verdict = z.infer<typeof Verdict>;
+
+export const RoughEdgeCheck = z.strictObject({
+  status: z.enum(["accurate", "inaccurate", "unclear"]),
+  /** One line: what the checker found in the code. */
+  note: z.string(),
+});
+export type RoughEdgeCheck = z.infer<typeof RoughEdgeCheck>;
+
+/** The checker's answer: one check per rough edge, matched by `localId`. */
+export const RoughEdgeChecks = z.strictObject({
+  checks: z.array(RoughEdgeCheck.extend({ localId: z.string() })),
+});
+export type RoughEdgeChecks = z.infer<typeof RoughEdgeChecks>;
+
+/** A rough edge after normalization: stable run-wide id (`R-001`…) assigned. */
+export type NormalizedRoughEdge = RoughEdge & { id: string };
+
+/** A normalized rough edge with its check; the record in rough-edges.json. */
+export type CheckedRoughEdge = NormalizedRoughEdge & { check: RoughEdgeCheck };
 
 /** A reviewer finding after normalization: stable run-wide id assigned. */
 export type NormalizedFinding = Finding & { id: string };

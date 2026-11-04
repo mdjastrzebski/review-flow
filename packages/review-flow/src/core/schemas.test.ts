@@ -54,8 +54,12 @@ describe("Finding", () => {
 });
 
 describe("ReviewOutput", () => {
-  it("accepts an empty findings list", () => {
-    expect(ReviewOutput.safeParse({ findings: [] }).success).toBe(true);
+  it("accepts empty findings and rough edges", () => {
+    expect(ReviewOutput.safeParse({ findings: [], roughEdges: [] }).success).toBe(true);
+  });
+
+  it("requires roughEdges, since absent values are not allowed", () => {
+    expect(ReviewOutput.safeParse({ findings: [] }).success).toBe(false);
   });
 
   it("rejects a bare array", () => {

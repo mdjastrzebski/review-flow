@@ -37,6 +37,7 @@ const summary = {
   reportPath: "/repo/.review-flow/runs/x/report.md",
   costUsd: 0.183,
   durationMs: 62_000,
+  roughEdges: [],
 };
 const plain = { color: false, width: 80 };
 

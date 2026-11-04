@@ -23,7 +23,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 describe("normalizeFindings", () => {
   it("assigns F-001… ids in reviewer order", () => {
     const { findings } = normalizeFindings(
-      { findings: [makeFinding({ localId: "a" }), makeFinding({ localId: "b" })] },
+      { findings: [makeFinding({ localId: "a" }), makeFinding({ localId: "b" })], roughEdges: [] },
       repo,
     );
     expect(findings.map((f) => [f.id, f.localId])).toEqual([
@@ -39,14 +39,17 @@ describe("normalizeFindings", () => {
 
   it("caps the list and notes it", () => {
     const many = Array.from({ length: MAX_FINDINGS + 3 }, () => makeFinding());
-    const { findings, notes } = normalizeFindings({ findings: many }, repo);
+    const { findings, notes } = normalizeFindings({ findings: many, roughEdges: [] }, repo);
     expect(findings).toHaveLength(MAX_FINDINGS);
     expect(notes).toHaveLength(1);
   });
 
   it("makes paths repo-relative", () => {
     const { findings } = normalizeFindings(
-      { findings: [makeFinding({ file: "/repo/src/a.ts" }), makeFinding({ file: "./src/b.ts" })] },
+      {
+        findings: [makeFinding({ file: "/repo/src/a.ts" }), makeFinding({ file: "./src/b.ts" })],
+        roughEdges: [],
+      },
       repo,
     );
     expect(findings.map((f) => f.file)).toEqual(["src/a.ts", "src/b.ts"]);
@@ -54,7 +57,7 @@ describe("normalizeFindings", () => {
 
   it("leaves paths outside the repo untouched", () => {
     const { findings } = normalizeFindings(
-      { findings: [makeFinding({ file: "/etc/hosts" })] },
+      { findings: [makeFinding({ file: "/etc/hosts" })], roughEdges: [] },
       repo,
     );
     expect(findings[0]?.file).toBe("/etc/hosts");
@@ -62,7 +65,7 @@ describe("normalizeFindings", () => {
 
   it("swaps a reversed line range and notes it", () => {
     const { findings, notes } = normalizeFindings(
-      { findings: [makeFinding({ lineStart: 9, lineEnd: 3 })] },
+      { findings: [makeFinding({ lineStart: 9, lineEnd: 3 })], roughEdges: [] },
       repo,
     );
     expect([findings[0]?.lineStart, findings[0]?.lineEnd]).toEqual([3, 9]);

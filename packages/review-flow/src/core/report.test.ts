@@ -39,6 +39,7 @@ function makeVerdict(overrides: Partial<Verdict> = {}): Verdict {
 }
 
 const input: ReportInput = {
+  roughEdges: [],
   harness: "claude",
   models: DEFAULT_MODELS.claude,
   base: { ref: "main", sha: "0123456789abcdef" },
@@ -253,5 +254,46 @@ describe("renderReport", () => {
 
   it("throws on a finding without a verdict", () => {
     expect(() => render([makeFinding()], {})).toThrow("No verdict for F-001");
+  });
+});
+
+describe("renderReport rough edges", () => {
+  const edge = (id: string, status: "accurate" | "inaccurate" | "unclear") => ({
+    id,
+    localId: id,
+    title: `Edge ${id}`,
+    file: "src/a.ts",
+    lineStart: 3,
+    lineEnd: 4,
+    lens: "testability" as const,
+    observation: "Obs.",
+    suggestion: "Do this.",
+    check: { status, note: "checked" },
+  });
+
+  it("lists them after the findings, without the ones the checker ruled out", () => {
+    const report = renderReport({
+      ...input,
+      roughEdges: [
+        edge("R-001", "accurate"),
+        edge("R-002", "inaccurate"),
+        edge("R-003", "unclear"),
+      ],
+    });
+    expect(report.indexOf("## Rough edges (2)")).toBeGreaterThan(report.indexOf("F-001"));
+    expect(report).toContain("### [ ] R-001 · testability · `src/a.ts:3-4`");
+    expect(report).toContain("**Check:** unclear — checked");
+    expect(report).not.toContain("R-002");
+  });
+
+  it("lists them even when there are no findings", () => {
+    const report = renderReport({
+      ...input,
+      findings: [],
+      verdicts: {},
+      roughEdges: [edge("R-001", "accurate")],
+    });
+    expect(report).toContain("No findings.");
+    expect(report).toContain("## Rough edges (1)");
   });
 });

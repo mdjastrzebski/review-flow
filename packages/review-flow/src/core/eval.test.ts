@@ -74,6 +74,7 @@ const bugCase = (id: string, line: number) =>
   });
 
 const review: ReviewOutput = {
+  roughEdges: [],
   findings: [
     {
       localId: "1",

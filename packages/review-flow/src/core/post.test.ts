@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anchorFinding, buildReview, diffLines, postableItems } from "./post.ts";
-import type { NormalizedFinding, Verdict } from "./schemas.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
 const diff = `diff --git a/a.ts b/a.ts
 index 1..2 100644
@@ -69,11 +69,17 @@ describe("anchorFinding", () => {
   const lines = diffLines(diff);
 
   it("anchors a range fully in the diff as a multi-line comment", () => {
-    expect(anchorFinding(finding("1", "a.ts", 2, 3), lines)).toEqual({ line: 3, startLine: 2 });
+    expect(anchorFinding(finding("1", "a.ts", 2, 3), lines)).toEqual({
+      line: 3,
+      startLine: 2,
+    });
   });
 
   it("anchors a single line", () => {
-    expect(anchorFinding(finding("1", "a.ts", 22), lines)).toEqual({ line: 22, startLine: null });
+    expect(anchorFinding(finding("1", "a.ts", 22), lines)).toEqual({
+      line: 22,
+      startLine: null,
+    });
   });
 
   it("uses the first diff line of a range that is only partly in the diff", () => {
@@ -113,7 +119,9 @@ describe("buildReview", () => {
         { finding: finding("1", "a.ts", 2, 3), verdict: verdict() },
         {
           finding: finding("2", "b.ts", 5),
-          verdict: verdict({ fix: { assessment: "flawed", detail: "d", betterFix: "Better." } }),
+          verdict: verdict({
+            fix: { assessment: "flawed", detail: "d", betterFix: "Better." },
+          }),
         },
       ],
       diff,
@@ -144,14 +152,42 @@ describe("buildReview", () => {
       diff,
       "abc",
       {
-        goal: { text: "Add b.", source: "stated" },
-        changes: ["Adds b."],
-        achieved: { verdict: "yes", gaps: [], extras: [] },
-        lookAt: [],
+        summary: {
+          goal: { text: "Add b.", source: "stated" },
+          changes: ["Adds b."],
+          achieved: { verdict: "yes", gaps: [], extras: [] },
+          lookAt: [],
+        },
       },
     );
     expect(plan.payload.body).toMatch(
       /^\*\*Goal:\*\* Add b\.\n\n- Adds b\.\n\n\*\*Goal met:\*\* yes\n\n---\n\n1 finding/,
     );
+  });
+});
+
+describe("buildReview with rough edges", () => {
+  const edge = (id: string, file: string, lineStart: number): CheckedRoughEdge => ({
+    id,
+    localId: id,
+    title: `Edge ${id}`,
+    file,
+    lineStart,
+    lineEnd: lineStart,
+    lens: "structure",
+    observation: "Obs.",
+    suggestion: "Do this.",
+    check: { status: "accurate", note: "n" },
+  });
+
+  it("anchors a rough edge like a finding and labels it as one", () => {
+    const plan = buildReview([], diff, "sha", {
+      roughEdges: [edge("R-001", "a.ts", 2), edge("R-002", "other.ts", 5)],
+    });
+    expect(plan.inline).toEqual(["R-001"]);
+    expect(plan.inBody).toEqual(["R-002"]);
+    expect(plan.payload.comments[0]!.body).toContain("**Rough edge (structure): Edge R-001**");
+    expect(plan.payload.comments[0]!.body).toContain("**Suggestion:** Do this.");
+    expect(plan.payload.body).toContain("0 findings · 2 rough edges · 1 inline");
   });
 });

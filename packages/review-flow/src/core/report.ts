@@ -3,7 +3,15 @@ import type { PullRequest } from "./github.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
-import type { CodeRef, Evidence, NormalizedFinding, Summary, Verdict } from "./schemas.ts";
+import { keptRoughEdges } from "./rough-edges.ts";
+import type {
+  CheckedRoughEdge,
+  CodeRef,
+  Evidence,
+  NormalizedFinding,
+  Summary,
+  Verdict,
+} from "./schemas.ts";
 import { formatCodeRef, goalNote, type SummaryOutcome } from "./summary.ts";
 import type { TrustLevel } from "./trust.ts";
 import { truncateFix } from "./verify.ts";
@@ -24,6 +32,8 @@ export interface ReportInput {
   findings: readonly NormalizedFinding[] | null;
   /** findingId → verdict; every finding must have one. */
   verdicts: Readonly<Record<string, Verdict>>;
+  /** Checked rough edges; the report lists those the checker did not rule out. */
+  roughEdges: readonly CheckedRoughEdge[];
 }
 
 const shortSha = (sha: string) => sha.slice(0, 7);
@@ -123,6 +133,26 @@ function renderItem(item: RankedItem): string {
   return parts.join("\n\n");
 }
 
+function renderRoughEdge(edge: CheckedRoughEdge): string {
+  return [
+    `### [ ] ${edge.id} · ${edge.lens} · \`${formatLocation(edge)}\``,
+    `**${escapeHtml(oneLine(edge.title), CODE_OR_LT_OR_STAR)}**`,
+    field("Observation", edge.observation, { fence: false }),
+    field("Suggestion", edge.suggestion),
+    `**Check:** ${edge.check.status} — ${inline(edge.check.note)}`,
+  ].join("\n\n");
+}
+
+function roughEdgesSection(edges: readonly CheckedRoughEdge[]): string[] {
+  const kept = keptRoughEdges(edges);
+  if (kept.length === 0) return [];
+  return [
+    `## Rough edges (${kept.length})`,
+    "Not defects: code that works but is harder to follow or change than it needs to be.",
+    ...kept.map(renderRoughEdge),
+  ];
+}
+
 function header(input: ReportInput): string {
   const stats = [`**Duration:** ${formatDuration(input.durationMs)}`];
   if (input.costUsd !== null) stats.push(`**Cost:** ${formatCost(input.costUsd)}`);
@@ -220,7 +250,7 @@ export function renderReport(input: ReportInput): string {
   );
 
   if (items.length === 0) {
-    sections.push("No findings.");
+    sections.push("No findings.", ...roughEdgesSection(input.roughEdges));
     return `${sections.join("\n\n")}\n`;
   }
 
@@ -244,5 +274,6 @@ export function renderReport(input: ReportInput): string {
       ].join("\n\n"),
     );
   }
+  sections.push(...roughEdgesSection(input.roughEdges));
   return `${sections.join("\n\n")}\n`;
 }

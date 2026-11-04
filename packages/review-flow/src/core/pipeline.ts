@@ -16,7 +16,7 @@ import { describeModel, formatDuration } from "./format.ts";
 import type { PullRequest } from "./github.ts";
 import { writeJson } from "./json.ts";
 import type { Harness, RoleModels } from "./models.ts";
-import { normalizeFindings } from "./normalize.ts";
+import { normalizeFindings, normalizeRoughEdges } from "./normalize.ts";
 import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
 import { createRunDir, createRunDirAt, ensureStateDir, type RunDir } from "./run-dir.ts";
 import {
@@ -29,9 +29,22 @@ import {
 } from "./run-index.ts";
 import { applyVerdictRules } from "./rank.ts";
 import { renderReport } from "./report.ts";
+import {
+  ROUGH_EDGE_CHECKER_TASK_ID,
+  applyChecks,
+  buildRoughEdgeCheckerPrompt,
+} from "./rough-edges.ts";
 import { formatElapsed, runTask, type TaskActivity, type TaskContext } from "./task.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "./trust.ts";
-import { ReviewOutput, Summary, Verdict, type NormalizedFinding } from "./schemas.ts";
+import {
+  ReviewOutput,
+  RoughEdgeChecks,
+  Summary,
+  Verdict,
+  type CheckedRoughEdge,
+  type NormalizedFinding,
+  type NormalizedRoughEdge,
+} from "./schemas.ts";
 import {
   buildSummarizerPrompt,
   normalizeSummary,
@@ -104,6 +117,11 @@ export interface ReviewRunOptions {
   summarize?: boolean;
   /** Run Find and Verify (default: true); `review-flow summary` turns it off. */
   find?: boolean;
+  /**
+   * Ask the reviewer for rough edges and check them (default: true). Off for evals, which score
+   * findings only.
+   */
+  roughEdges?: boolean;
 }
 
 export interface ReviewRunResult {
@@ -116,6 +134,8 @@ export interface ReviewRunResult {
   findings: NormalizedFinding[];
   /** findingId → verdict, with the code-enforced rules applied. */
   verdicts: Record<string, Verdict>;
+  /** Checked rough edges, `inaccurate` ones included; empty when not asked for. */
+  roughEdges: CheckedRoughEdge[];
   /** null when no call has a reported or computed cost. */
   costUsd: number | null;
   durationMs: number;
@@ -139,6 +159,7 @@ export interface RunRecord {
   /** Steps the run was started with. Missing in runs from before `ask`. */
   summarize?: boolean;
   find?: boolean;
+  roughEdges?: boolean;
   /** The reviewing process, while the run is `running`; a dead pid means it was killed. */
   pid?: number;
   startedAt: string;
@@ -213,10 +234,15 @@ async function verifyFindings(
   const { sharedContext } = context;
   const warm = Promise.withResolvers<void>();
   // rejectOnClear: otherwise cleared tasks never settle and allSettled hangs.
-  const limit = pLimit({ concurrency: VERIFIER_CONCURRENCY, rejectOnClear: true });
+  const limit = pLimit({
+    concurrency: VERIFIER_CONCURRENCY,
+    rejectOnClear: true,
+  });
   const abort = new AbortController();
   // The summarizer failing stops verification too; its error is the one the run reports.
-  ctx.signal.addEventListener("abort", () => abort.abort(ctx.signal.reason), { once: true });
+  ctx.signal.addEventListener("abort", () => abort.abort(ctx.signal.reason), {
+    once: true,
+  });
   // The first thrown error, in the order thrown; cleared tasks reject later with AbortErrors.
   const errors: unknown[] = [];
   const settled = await Promise.allSettled(
@@ -269,11 +295,60 @@ async function verifyFindings(
 }
 
 /**
+ * One batched checker session for all rough edges, on the verifier's model. It runs after the
+ * finding verifiers so the shared diff is already cached. A failed or incomplete answer leaves
+ * the edges `unclear`; anything thrown stops the run.
+ */
+async function checkRoughEdges(
+  edges: readonly NormalizedRoughEdge[],
+  context: {
+    change: ChangeRange;
+    sharedContext: string;
+    models: Pick<RoleModels, "verifier">;
+  },
+  ctx: PipelineContext,
+  signal: AbortSignal,
+): Promise<CheckedRoughEdge[]> {
+  if (edges.length === 0) return [];
+  const result = await runTask(
+    {
+      taskId: ROUGH_EDGE_CHECKER_TASK_ID,
+      role: "verifier",
+      prompt: buildRoughEdgeCheckerPrompt(
+        await loadPrompt("rough-edge-checker"),
+        edges,
+        context.change,
+      ),
+      sharedContext: context.sharedContext,
+      cwd: ctx.repo,
+      schema: RoughEdgeChecks,
+      model: context.models.verifier.model,
+      effort: context.models.verifier.effort,
+      timeoutMs: VERIFIER_TIMEOUT_MS,
+      signal,
+    },
+    "check",
+    ctx,
+  );
+  if (result.output === null) {
+    const failure = `${result.status}: ${result.error ?? "no output"}`;
+    ctx.warn(`Rough edge check failed (${failure}); marked unclear.`);
+    return applyChecks(edges, null, failure);
+  }
+  return applyChecks(edges, result.output, null);
+}
+
+/**
  * One summarizer session. An agent failure leaves the run without a summary instead of failing it;
  * anything thrown (e.g. the working tree changed) stops the run.
  */
 async function summarizeChange(
-  context: { change: ChangeRange; sharedContext: string; intent: Intent; models: RoleModels },
+  context: {
+    change: ChangeRange;
+    sharedContext: string;
+    intent: Intent;
+    models: RoleModels;
+  },
   ctx: PipelineContext,
 ): Promise<SummaryOutcome> {
   const { model, effort } = context.models.summarizer;
@@ -340,6 +415,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   const verbose = options.verbose ?? false;
   const summarize = options.summarize ?? true;
   const find = options.find ?? true;
+  const roughEdges = (options.roughEdges ?? true) && find;
   const startedAt = new Date();
   const repo = await resolveRepoRoot(options.cwd);
   const baseSha = await resolveCommit(repo, base);
@@ -385,7 +461,12 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   }
   const intent: Intent =
     pr !== undefined
-      ? { kind: "pr", number: pr.number, title: pr.title, body: options.prBody ?? "" }
+      ? {
+          kind: "pr",
+          number: pr.number,
+          title: pr.title,
+          body: options.prBody ?? "",
+        }
       : {
           kind: "commits",
           messages: await commitMessages(repo, base),
@@ -412,6 +493,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     checkout: repo,
     summarize,
     find,
+    roughEdges,
     startedAt: startedAt.toISOString(),
   };
   // So `ask` can find the run, and read the diff and summary, while it goes on.
@@ -464,6 +546,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   // Outside the try, so a failed run still indexes what it got to.
   let findingCount: number | null = null;
   let verdictCounts: VerdictCounts | null = null;
+  let checkedEdges: CheckedRoughEdge[] = [];
 
   try {
     const sharedContext = buildChangeContext(await loadPrompt("change"), change, diff);
@@ -486,10 +569,11 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
 
     const findBranch = find
       ? branch(async () => {
-          const findings = await timeStep(stepDurations, "review", async () => {
+          const reviewed = await timeStep(stepDurations, "review", async () => {
             const prompt = renderPrompt(await loadPrompt("reviewer"), {
               ...change,
               diffBlock: codeFence(diff, "diff"),
+              roughEdges: await loadPrompt(roughEdges ? "rough-edges" : "rough-edges-off"),
             });
             log("Reviewing…");
             const review = await runTask(
@@ -516,8 +600,15 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             for (const note of normalized.notes) log(note);
             await writeJson(runDir.findingsPath, normalized.findings);
             log(`Reviewer returned ${normalized.findings.length} finding(s)`);
-            return normalized.findings;
+            const edges = roughEdges ? normalizeRoughEdges(review.output, repo) : null;
+            for (const note of edges?.notes ?? []) log(note);
+            if (edges !== null) log(`Reviewer returned ${edges.roughEdges.length} rough edge(s)`);
+            return {
+              findings: normalized.findings,
+              edges: edges?.roughEdges ?? [],
+            };
           });
+          const { findings, edges } = reviewed;
 
           findingCount = findings.length;
           abort.signal.throwIfAborted();
@@ -537,8 +628,15 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             return result;
           });
 
+          if (edges.length > 0) {
+            checkedEdges = await timeStep(stepDurations, "check", () =>
+              checkRoughEdges(edges, { change, sharedContext, models }, ctx, abort.signal),
+            );
+          }
+          if (roughEdges) await writeJson(runDir.roughEdgesPath, checkedEdges);
+
           verdictCounts = countVerdicts(verdicts);
-          return { findings, verdicts };
+          return { findings, verdicts, roughEdges: checkedEdges };
         })
       : Promise.resolve(null);
 
@@ -550,6 +648,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       findResult as PromiseFulfilledResult<{
         findings: NormalizedFinding[];
         verdicts: Record<string, Verdict>;
+        roughEdges: CheckedRoughEdge[];
       } | null>
     ).value;
     if (!find && summary?.status === "failed") {
@@ -557,6 +656,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     }
     const findings = found?.findings ?? [];
     const verdicts = found?.verdicts ?? {};
+    const edges = found?.roughEdges ?? [];
 
     const durationMs = Date.now() - startedAt.getTime();
     const { costUsd } = rollUp(calls, stepDurations, durationMs).totals;
@@ -573,6 +673,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
         summary,
         findings: found === null ? null : findings,
         verdicts,
+        roughEdges: edges,
       });
       await writeFile(runDir.reportPath, report);
     });
@@ -580,6 +681,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);
     if (found !== null) {
       saved.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
+      if (roughEdges) saved.push(["Rough edges", runDir.roughEdgesPath]);
     }
     saved.push(["Report", runDir.reportPath]);
     if (verbose) {
@@ -590,7 +692,16 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     }
     logTable("Saved", saved);
 
-    return { runDir, checkout: repo, summary, findings, verdicts, costUsd, durationMs };
+    return {
+      runDir,
+      checkout: repo,
+      summary,
+      findings,
+      verdicts,
+      roughEdges: edges,
+      costUsd,
+      durationMs,
+    };
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     throw error;

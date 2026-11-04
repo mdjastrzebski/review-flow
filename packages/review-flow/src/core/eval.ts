@@ -174,6 +174,8 @@ async function runCase(
       ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
+      // Evals score findings only; rough edges are measured apart (PLAN).
+      roughEdges: false,
       ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
