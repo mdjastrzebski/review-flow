@@ -1,3 +1,4 @@
+import path from "node:path";
 import { styleText } from "node:util";
 import {
   formatCost,
@@ -7,6 +8,7 @@ import {
   rankFindings,
   compareSteps,
   caseOutcome,
+  describeModel,
   type CaseResult,
   type RoughEdgeJudgeScores,
   type RoughEdgeScores,
@@ -17,6 +19,7 @@ import {
   type LoadedRun,
   type ModelChoice,
   type NormalizedFinding,
+  type PairwiseRecord,
   type TimedTotals,
   type Verdict,
 } from "../core/index.ts";
@@ -529,4 +532,53 @@ export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOp
     }
   }
   return out.join("\n");
+}
+
+const MAX_REASON_CHARS = 100;
+
+/** A judge's reason, cut to one table cell. */
+const reason = (text: string | null) =>
+  text === null
+    ? ""
+    : text.length > MAX_REASON_CHARS
+      ? `${text.slice(0, MAX_REASON_CHARS - 1)}…`
+      : text;
+
+/** The pairwise judge's verdict per case, and the tally: which eval's rough edges it prefers. */
+export function formatPairwise(record: PairwiseRecord, options: TableOptions): string {
+  const paint = painter(options);
+  const [a, b] = [path.basename(record.a), path.basename(record.b)];
+  const [header = "", ...lines] = table(
+    [
+      ["Case", "Preferred", "Kept A", "Kept B", "Reason"],
+      ...record.cases.map((c) => [
+        c.id,
+        c.winner === null ? "failed" : c.winner === "tie" ? "tie" : c.winner.toUpperCase(),
+        String(c.kept.a),
+        String(c.kept.b),
+        reason(c.winner === null ? c.error : c.reason),
+      ]),
+    ],
+    new Set([2, 3]),
+  );
+  const { scores } = record;
+  const rows = [
+    ["A", a],
+    ["B", b],
+    ["Judge", describeModel(record.judge)],
+    ["Preferred", `A ${scores.aWins}, B ${scores.bWins}, tie ${scores.ties} (of ${scores.cases})`],
+    ["B win rate (ties count half)", scores.bWinRate === null ? "-" : percent(scores.bWinRate)],
+  ];
+  if (scores.failed > 0) rows.push(["Failed", `${scores.failed} case(s)`]);
+  if (scores.costUsd !== null) rows.push(["Judge cost", formatCost(scores.costUsd)]);
+  return [
+    "Rough edges, judged pairwise and blind",
+    "",
+    paint("dim", header),
+    ...lines,
+    "",
+    ...table(rows),
+    "",
+    `Saved: ${path.join(record.a, `pairwise-${b}.json`)}`,
+  ].join("\n");
 }

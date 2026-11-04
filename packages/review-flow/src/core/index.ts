@@ -16,6 +16,7 @@ export * from "./eval-dataset.ts";
 export * from "./eval-score.ts";
 export * from "./eval-judge.ts";
 export * from "./eval-edge-judge.ts";
+export * from "./eval-pairwise.ts";
 export * from "./eval-fixes.ts";
 export * from "./verify.ts";
 export * from "./format.ts";

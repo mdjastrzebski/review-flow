@@ -32,6 +32,7 @@ import {
   resolveModels,
   resolveRepoRoot,
   resolveRun,
+  pairwiseEvals,
   rescoreEval,
   runEval,
   runReview,
@@ -53,7 +54,13 @@ import { launcher } from "./launcher.ts";
 import { postRun } from "./post.ts";
 import { createProgress, type Progress } from "./progress.ts";
 import { ask, choose, confirm, interactive, note } from "./prompt.ts";
-import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
+import {
+  formatCompare,
+  formatEval,
+  formatEvalCompare,
+  formatPairwise,
+  formatRuns,
+} from "./runs.ts";
 
 // pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
 const userCwd = process.env.INIT_CWD ?? process.cwd();
@@ -499,13 +506,60 @@ async function runs(options: { repo: string; limit: string }): Promise<void> {
   console.log(formatRuns(entries.slice(-limit), colorOptions()));
 }
 
-async function compare(a: string, b: string, options: { repo: string }): Promise<void> {
+interface CompareOptions {
+  repo: string;
+  judgeRoughEdges: boolean;
+  edgeJudgeHarness?: Harness;
+  edgeJudgeModel?: string;
+  edgeJudgeEffort?: Effort;
+  claudeBin: string;
+  cursorBin: string;
+  dataset: string;
+  checkouts: string;
+}
+
+async function compare(a: string, b: string, options: CompareOptions): Promise<void> {
   const repo = await resolveRepoRoot(options.repo);
-  const [runA, runB] = await Promise.all(
-    [a, b].map(async (ref) => loadRun((await resolveRun(repo, ref, userCwd)).root)),
+  const [rootA, rootB] = await Promise.all(
+    [a, b].map(async (ref) => (await resolveRun(repo, ref, userCwd)).root),
   );
+  const [runA, runB] = await Promise.all([rootA, rootB].map((root) => loadRun(root!)));
   if (runA?.kind === "eval" && runB?.kind === "eval") {
     console.log(formatEvalCompare(runA, runB, colorOptions()));
+    if (!options.judgeRoughEdges) return;
+    // Blind to both evals' reviewers; on A's harness unless told otherwise.
+    const harness = options.edgeJudgeHarness ?? runA.run.harness;
+    const model = resolveEdgeJudge(harness, {
+      model: options.edgeJudgeModel ?? null,
+      effort: options.edgeJudgeEffort ?? null,
+    });
+    const progress = createProgress({ quiet: false, verbose: false, cwd: userCwd });
+    for (const run of [runA.run, runB.run]) {
+      if (run.harness === harness && run.models.reviewer.model === model.model) {
+        progress.warn(
+          `The pairwise judge uses a reviewer's model (${model.model ?? "harness default"}); it may prefer that eval's rough edges.`,
+        );
+        break;
+      }
+    }
+    let record;
+    try {
+      record = await pairwiseEvals({
+        a: { root: rootA!, cases: runA.cases },
+        b: { root: rootB!, cases: runB.cases },
+        dataset: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
+        checkoutsDir: path.resolve(userCwd, options.checkouts),
+        model,
+        runAgent: getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
+        log: progress.log,
+        warn: progress.warn,
+      });
+    } finally {
+      progress.end();
+    }
+    console.log(`\n${formatPairwise(record, colorOptions())}`);
+  } else if (options.judgeRoughEdges) {
+    throw new Error("--judge-rough-edges compares two eval runs.");
   } else if (runA?.kind === "review" && runB?.kind === "review") {
     console.log(formatCompare(runA, runB, colorOptions()));
   } else {
@@ -672,6 +726,25 @@ program
   .argument("<a>", "run id, a unique part of one (such as the short SHA), or a run dir path")
   .argument("<b>", "the run to compare against A")
   .option("--repo <path>", "repository", userCwd)
+  .option(
+    "--judge-rough-edges",
+    "for two evals: ask a judge, blind, which eval's rough edges it would rather post, per case",
+    false,
+  )
+  .addOption(
+    new Option("--edge-judge-harness <name>", "harness of the judge; default: eval A's").choices(
+      HARNESSES,
+    ),
+  )
+  .option(
+    "--edge-judge-model <id>",
+    "model of the judge; default: claude-opus-5-5 (claude), claude-sonnet-5-5-high (cursor)",
+  )
+  .addOption(new Option("--edge-judge-effort <level>", "effort for the judge").choices(EFFORTS))
+  .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
+  .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent")
+  .option("--dataset <dir>", "dir of case files", DEFAULT_DATASET_DIR)
+  .option("--checkouts <dir>", "where case repos are cloned and kept", defaultCheckoutsDir())
   .action(compare);
 
 try {

@@ -12,7 +12,8 @@ export type PromptName =
   | "judge"
   | "rough-edges"
   | "rough-edge-checker"
-  | "rough-edge-judge";
+  | "rough-edge-judge"
+  | "rough-edge-pairwise";
 
 export async function loadPrompt(name: PromptName): Promise<string> {
   return readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");
