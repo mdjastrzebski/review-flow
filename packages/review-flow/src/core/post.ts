@@ -43,7 +43,7 @@ export function postableItems(
     const verdict = verdicts[finding.id];
     return verdict === undefined || verdict.verdict === "refuted" ? [] : [{ finding, verdict }];
   });
-  return rankFindings(items).map((item) => ({ kind: "finding", ...item }));
+  return rankFindings(items).map(({ finding, verdict }) => ({ kind: "finding", finding, verdict }));
 }
 
 /** File → lines of the new version that appear in the diff (added or context), which GitHub can comment on. */
