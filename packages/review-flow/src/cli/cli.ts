@@ -80,7 +80,9 @@ const progressHooks = (progress: Progress) => ({
   ...(progress.onActivity === undefined ? {} : { onActivity: progress.onActivity }),
   ...(progress.onSummary === undefined ? {} : { onSummary: progress.onSummary }),
   // Questions go to another terminal; this one keeps showing the review.
-  askCommand: (runId: string) => `${launcher()} ask ${runId}`,
+  askCommand: (runId: string, answerer: { harness: Harness; model: string | null }) =>
+    `${launcher()} ask ${runId} --harness ${answerer.harness}` +
+    (answerer.model === null ? "" : ` --model ${answerer.model}`),
 });
 
 /** --harness, else the saved one, else asked in a TTY and saved for next time. */

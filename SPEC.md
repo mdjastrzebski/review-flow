@@ -198,7 +198,7 @@ After reading the summary or findings, the developer may have follow-up question
 
 **During the review.** Find and Verify take much longer than Summarize, so the developer can ask questions from a second terminal while they run:
 
-- The review setup box has a command to copy into another terminal, naming the run and using the same launcher as the review, for example `npx review-flow ask 20261102-1432-4f9633c`.
+- The review setup box has a command to copy into another terminal, naming the run and using the same launcher as the review, with `--harness` and `--model` set to the review's harness and verifier model so they can be edited before running, for example `npx review-flow ask 20261102-1432-4f9633c --harness claude --model claude-sonnet-5-5`.
 - `summary.json` and `diff.patch` are written as soon as they are ready, and `run.json` has status `running` until the review ends. So `ask` works on a running run, and the answerer is told findings are still pending.
 - `ask` reads `findings.json` again before each question, so answers include the findings once they exist. When they land, the next answer starts with a line giving their counts.
 - Ask calls don't count toward the review's budget, and stopping the review doesn't stop `ask`.

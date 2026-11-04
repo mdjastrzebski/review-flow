@@ -74,7 +74,7 @@ export interface ReviewRunOptions {
    * The command that asks about this run from another terminal, shown in the review box.
    * Without it, no such row.
    */
-  askCommand?: (runId: string) => string;
+  askCommand?: (runId: string, answerer: { harness: Harness; model: string | null }) => string;
   /** Labelled facts about the run (models, run dir), shown together. Default: one `log` each. */
   logTable?: (title: string, rows: readonly (readonly [string, string])[]) => void;
   /**
@@ -426,7 +426,13 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   } satisfies RunRecord);
   setup.push(["Checkout", repo], ["Run dir", runDir.root]);
   if (options.askCommand !== undefined) {
-    setup.push(["Ask", options.askCommand(path.basename(runDir.root))]);
+    setup.push([
+      "Ask",
+      options.askCommand(path.basename(runDir.root), {
+        harness,
+        model: models.verifier.model,
+      }),
+    ]);
   }
   const logTable =
     options.logTable ??

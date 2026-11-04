@@ -181,12 +181,12 @@ describe("runReview", () => {
       ...baseOptions,
       cwd: repo,
       runAgent,
-      askCommand: (id) => `review-flow ask ${id}`,
+      askCommand: (id, a) => `review-flow ask ${id} --harness ${a.harness}`,
       logTable: (title, rows) => tables.push([title, [...rows]]),
     });
     const rows = new Map(tables.find(([title]) => title === "Review")![1]);
     expect(rows.get("Checkout")).toBe(await realpath(repo));
-    expect(rows.get("Ask")).toBe(`review-flow ask ${path.basename(runDir.root)}`);
+    expect(rows.get("Ask")).toBe(`review-flow ask ${path.basename(runDir.root)} --harness claude`);
   });
 
   it("writes the prompt, raw output, findings and run.json", async () => {
