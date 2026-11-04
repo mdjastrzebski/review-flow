@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { EvalBug } from "./eval-dataset.ts";
+import type { EdgeGrade } from "./eval-edge-judge.ts";
 import {
   hitsLocation,
   judgeBugs,
   scoreBugs,
   summarizeCases,
+  tallyEdgeJudge,
   type CaseResult,
+  type EdgeJudgeTally,
 } from "./eval-score.ts";
-import type { NormalizedFinding, Verdict } from "./schemas.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
 function finding(
   id: string,
@@ -265,5 +268,135 @@ describe("summarizeCases with rough edges", () => {
 
   it("has no rough-edge scores when no case ran with them", () => {
     expect(summarizeCases([base])).not.toHaveProperty("roughEdges");
+  });
+});
+
+describe("tallyEdgeJudge", () => {
+  const edge = (id: string, status: CheckedRoughEdge["check"]["status"]): CheckedRoughEdge => ({
+    id,
+    localId: id,
+    title: id,
+    file: "a.ts",
+    lineStart: 1,
+    lineEnd: 2,
+    lens: "design",
+    observation: "o",
+    suggestion: "s",
+    check: { status, note: "n" },
+  });
+  const grade = (overrides: Partial<EdgeGrade> = {}): EdgeGrade => ({
+    reason: "r",
+    accurate: true,
+    notLocal: true,
+    concrete: true,
+    worthPosting: true,
+    ...overrides,
+  });
+  const edges = [
+    edge("R-001", "accurate"),
+    edge("R-002", "unclear"),
+    edge("R-003", "inaccurate"),
+    edge("R-004", "accurate"),
+  ];
+
+  it("counts postable ones by the checker's verdict, and the no answers", () => {
+    const grades = new Map([
+      ["R-001", grade()],
+      ["R-002", grade({ notLocal: false, worthPosting: false })],
+      ["R-003", grade()],
+      // R-004 ungraded: not counted.
+    ]);
+    const tally = tallyEdgeJudge(edges, { status: "ok", grades, costUsd: 0.3, durationMs: 1 });
+    expect(tally).toEqual({
+      status: "ok",
+      error: null,
+      costUsd: 0.3,
+      durationMs: 1,
+      kept: 2,
+      keptPostable: 1,
+      dropped: 1,
+      droppedPostable: 1,
+      no: { accurate: 0, notLocal: 1, concrete: 0, worthPosting: 1 },
+    });
+  });
+
+  it("counts nothing for a failed call", () => {
+    const tally = tallyEdgeJudge(edges, {
+      status: "failed",
+      error: "boom",
+      costUsd: null,
+      durationMs: 0,
+    });
+    expect(tally).toMatchObject({ status: "failed", error: "boom", kept: 0, dropped: 0 });
+  });
+});
+
+describe("summarizeCases with a rough-edge judge", () => {
+  const base: CaseResult = {
+    id: "x",
+    kind: "bug",
+    preset: "full",
+    status: "ok",
+    error: null,
+    findings: 0,
+    reported: 0,
+    bugs: [],
+    costUsd: 1,
+    unknownCostCalls: 0,
+    durationMs: 1,
+  };
+  const tally = (overrides: Partial<EdgeJudgeTally>): EdgeJudgeTally => ({
+    status: "ok",
+    error: null,
+    costUsd: 0.2,
+    durationMs: 1,
+    kept: 0,
+    keptPostable: 0,
+    dropped: 0,
+    droppedPostable: 0,
+    no: { accurate: 0, notLocal: 0, concrete: 0, worthPosting: 0 },
+    ...overrides,
+  });
+  const counts = { accurate: 2, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 };
+
+  it("gives the postable rate and the checker's disagreements with the judge", () => {
+    const scores = summarizeCases([
+      {
+        ...base,
+        roughEdges: {
+          ...counts,
+          judge: tally({
+            kept: 3,
+            keptPostable: 1,
+            dropped: 1,
+            droppedPostable: 1,
+            no: { accurate: 1, notLocal: 1, concrete: 0, worthPosting: 2 },
+          }),
+        },
+      },
+      { ...base, roughEdges: { ...counts, judge: tally({ status: "failed", error: "e" }) } },
+      // Not judged: no part of the judge scores.
+      { ...base, roughEdges: counts },
+    ]);
+    expect(scores.roughEdges?.judge).toEqual({
+      cases: 1,
+      failed: 1,
+      graded: 4,
+      postable: 2,
+      postableRate: 0.5,
+      kept: 3,
+      keptRejected: 2,
+      keptRejectedRate: 2 / 3,
+      dropped: 1,
+      droppedAccepted: 1,
+      droppedAcceptedRate: 1,
+      no: { accurate: 1, notLocal: 1, concrete: 0, worthPosting: 2 },
+      costUsd: 0.4,
+    });
+  });
+
+  it("has no judge scores when no case was judged", () => {
+    const scores = summarizeCases([{ ...base, roughEdges: counts }]);
+    expect(scores.roughEdges).not.toHaveProperty("judge");
   });
 });

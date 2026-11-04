@@ -261,6 +261,100 @@ describe("runEval", () => {
     expect(loaded.run.steps.check).toMatchObject({ calls: 2, costUsd: 0.5 });
   });
 
+  it("grades rough edges with the rubric judge, in the checkout, apart from the run's cost", async () => {
+    const edge: ReviewOutput["roughEdges"][number] = {
+      localId: "1",
+      title: "edge",
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      observation: "o",
+      suggestion: "s",
+    };
+    const reviewer: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? { ...review, roughEdges: [edge] }
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? { checks: [{ localId: "R-001", status: "inaccurate", note: "n" }] }
+            : confirmed;
+      return {
+        status: "ok",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.25,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const judged: AgentTask<unknown>[] = [];
+    const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      judged.push(task as AgentTask<unknown>);
+      const grade = {
+        reason: "r",
+        accurate: true,
+        notLocal: true,
+        concrete: true,
+        worthPosting: true,
+      };
+      return {
+        status: "ok",
+        output: task.schema.parse({ edges: [{ id: "R-001", ...grade }] }),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.4,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([evalCase("clean")], reviewer),
+      roughEdges: true,
+      edgeJudge: {
+        harness: "cursor",
+        model: { model: "judge-model", effort: null },
+        runAgent: judge,
+      },
+    });
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.cwd).toContain(checkouts);
+    expect(result.cases[0]?.roughEdges?.judge).toMatchObject({
+      status: "ok",
+      kept: 0,
+      dropped: 1,
+      droppedPostable: 1,
+    });
+    expect(result.scores.roughEdges?.judge).toMatchObject({
+      droppedAcceptedRate: 1,
+      postableRate: 1,
+      costUsd: 0.4,
+    });
+    // The judge's cost isn't the run's: reviewer, verifier, and checker at $0.25 each.
+    expect(result.scores.costUsd).toBe(0.75);
+    const saved = JSON.parse(
+      await readFile(path.join(result.root, "cases", "clean", "rough-edge-judge.json"), "utf8"),
+    );
+    expect(saved).toEqual([
+      {
+        id: "R-001",
+        title: "edge",
+        check: "inaccurate",
+        grade: expect.objectContaining({ worthPosting: true }),
+      },
+    ]);
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.run.edgeJudge).toEqual({
+      harness: "cursor",
+      model: { model: "judge-model", effort: null },
+    });
+  });
+
   it("leaves rough edges out of the results by default", async () => {
     const result = await runEval(options([evalCase("clean")]));
     expect(result.cases[0]).not.toHaveProperty("roughEdges");

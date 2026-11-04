@@ -332,6 +332,41 @@ describe("formatEval with rough edges", () => {
   });
 });
 
+describe("formatEval with a rough-edge judge", () => {
+  it("shows the postable rate, the checker's disagreements, and the judge's cost", () => {
+    const cases = [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: {
+          accurate: 2,
+          unclear: 0,
+          inaccurate: 1,
+          checkCostUsd: 0.1,
+          judge: {
+            status: "ok" as const,
+            error: null,
+            costUsd: 0.3,
+            durationMs: 1,
+            kept: 2,
+            keptPostable: 1,
+            dropped: 1,
+            droppedPostable: 0,
+            no: { accurate: 1, notLocal: 0, concrete: 0, worthPosting: 2 },
+          },
+        },
+      },
+    ];
+    const text = formatEval({ root: "/r", cases, scores: summarizeCases(cases) }, plain);
+    expect(text).toMatch(/Rough edges postable \(judge\)\s+33% \(1 of 3\)/);
+    expect(text).toMatch(/Checker kept, judge rejects\s+50% \(1 of 2 kept\)/);
+    expect(text).toMatch(/Checker dropped, judge accepts\s+0% \(0 of 1 dropped\)/);
+    expect(text).toMatch(
+      /Rubric no answers\s+accurate 1, not local 0, concrete 0, worth posting 2/,
+    );
+    expect(text).toMatch(/Rough-edge judge cost \(not in cost above\)\s+\$0.30/);
+  });
+});
+
 describe("formatEvalCompare", () => {
   const a = loadedEval("eval-a", [
     caseResult("a-1", "bug", "found"),

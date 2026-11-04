@@ -27,6 +27,7 @@ import {
   loadRun,
   readIndex,
   readUserConfig,
+  resolveEdgeJudge,
   resolveJudge,
   resolveModels,
   resolveRepoRoot,
@@ -36,6 +37,7 @@ import {
   runReview,
   saveUserHarness,
   userConfigPath,
+  type EdgeJudge,
   type Effort,
   type EvalSubset,
   type Harness,
@@ -376,12 +378,41 @@ function judgeOf(agent: Awaited<ReturnType<typeof resolveAgent>>, options: Agent
   });
 }
 
+/** The rough-edge judge: on the eval's harness unless --edge-judge-harness says otherwise. */
+function edgeJudgeOf(
+  agent: Awaited<ReturnType<typeof resolveAgent>>,
+  options: EvalOptions,
+  progress: Progress,
+): EdgeJudge {
+  const harness = options.edgeJudgeHarness ?? agent.harness;
+  const model = resolveEdgeJudge(harness, {
+    model: options.edgeJudgeModel ?? null,
+    effort: options.edgeJudgeEffort ?? null,
+  });
+  if (harness === agent.harness && model.model === agent.models.reviewer.model) {
+    progress.warn(
+      `The rough-edge judge uses the reviewer's model (${model.model ?? "harness default"}); it may prefer its own output.`,
+    );
+  }
+  return {
+    harness,
+    model,
+    runAgent:
+      harness === agent.harness
+        ? agent.runAgent
+        : getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
+  };
+}
+
 interface EvalOptions extends AgentOptions {
   /** false with --no-fix-diff. */
   fixDiff: boolean;
   /** false with --no-judge. */
   judge: boolean;
   roughEdges: boolean;
+  edgeJudgeHarness?: Harness;
+  edgeJudgeModel?: string;
+  edgeJudgeEffort?: Effort;
   smoke: boolean;
   full: boolean;
   summary: boolean;
@@ -409,6 +440,8 @@ async function evaluate(options: EvalOptions): Promise<void> {
     result = await runEval({
       ...agent,
       judge: options.judge ? judgeOf(agent, options) : undefined,
+      edgeJudge:
+        options.judge && options.roughEdges ? edgeJudgeOf(agent, options, progress) : undefined,
       fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
       cwd: options.repo,
       cases: await loadDataset(dataset, { subset, ids: options.case ?? [] }),
@@ -540,11 +573,29 @@ addJudgeOptions(
       .option("--smoke", "only the smoke set (5 cases, a quick end-to-end check)", false)
       .option("--full", "all cases, not only the baseline set (12 cases)", false)
       .option("--no-summary", "skip the summary of each case")
-      .option("--no-judge", "match findings to known bugs by location only")
+      .option(
+        "--no-judge",
+        "match findings to known bugs by location only, and don't grade rough edges",
+      )
       .option(
         "--rough-edges",
         "also ask for rough edges, and score them apart from findings",
         false,
+      )
+      .addOption(
+        new Option(
+          "--edge-judge-harness <name>",
+          "harness of the judge that grades rough edges; default: the eval's",
+        ).choices(HARNESSES),
+      )
+      .option(
+        "--edge-judge-model <id>",
+        "model of the rough-edge judge; default: claude-opus-5-5 (claude), claude-sonnet-5-5-high (cursor)",
+      )
+      .addOption(
+        new Option("--edge-judge-effort <level>", "effort for the rough-edge judge").choices(
+          EFFORTS,
+        ),
       )
       .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
   ),

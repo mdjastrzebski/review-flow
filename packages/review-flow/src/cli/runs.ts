@@ -8,6 +8,7 @@ import {
   compareSteps,
   caseOutcome,
   type CaseResult,
+  type RoughEdgeJudgeScores,
   type RoughEdgeScores,
   type EvalRunResult,
   type EvalScores,
@@ -323,14 +324,14 @@ const METRICS: Metric[] = [
 ];
 
 function roughEdgeMetric(
-  label: string,
+  name: string,
   value: (r: RoughEdgeScores) => number | null,
   cell: (r: RoughEdgeScores, v: number) => string,
   delta: (v: number) => string,
 ): Metric {
   const of = (s: EvalScores) => (s.roughEdges === undefined ? null : value(s.roughEdges));
   return {
-    label,
+    label: name,
     cell: (s) => {
       if (s.roughEdges === undefined) return "off";
       const v = value(s.roughEdges);
@@ -341,6 +342,25 @@ function roughEdgeMetric(
       return va === null || vb === null ? "-" : signed(vb - va, delta);
     },
   };
+}
+
+const pts = (v: number) => `${Math.round(v * 100)} pts`;
+
+/** A rate of the rubric judge's scores, such as `40% (4 of 10 kept)`; `-` when not judged. */
+function judgeRateMetric(
+  name: string,
+  rate: (j: RoughEdgeJudgeScores) => [number | null, number, number],
+  of: string,
+): Metric {
+  return roughEdgeMetric(
+    name,
+    (r) => (r.judge === undefined ? null : rate(r.judge)[0]),
+    (r, v) => {
+      const [, n, d] = rate(r.judge!);
+      return `${percent(v)} (${n} of ${d}${of})`;
+    },
+    pts,
+  );
 }
 
 /** Shown when either eval ran with rough edges. */
@@ -363,6 +383,21 @@ const ROUGH_EDGE_METRICS: Metric[] = [
     (r) => (r.checkCostUsd === null || r.cases === 0 ? null : r.checkCostUsd / r.cases),
     (r, v) => `${r.unknownCheckCost > 0 ? "≥" : ""}${formatCost(v)}`,
     formatCost,
+  ),
+  judgeRateMetric(
+    "Rough edges postable (judge)",
+    (j) => [j.postableRate, j.postable, j.graded],
+    "",
+  ),
+  judgeRateMetric(
+    "Checker kept, judge rejects",
+    (j) => [j.keptRejectedRate, j.keptRejected, j.kept],
+    " kept",
+  ),
+  judgeRateMetric(
+    "Checker dropped, judge accepts",
+    (j) => [j.droppedAcceptedRate, j.droppedAccepted, j.dropped],
+    " dropped",
   ),
 ];
 
@@ -402,6 +437,18 @@ export function formatEval(result: EvalRunResult, options: TableOptions): string
   }
   if (judgeCostUsd !== undefined && judgeCostUsd !== null) {
     rows.push(["Judge cost (not in cost above)", formatCost(judgeCostUsd)]);
+  }
+  const edgeJudge = result.scores.roughEdges?.judge;
+  if (edgeJudge !== undefined) {
+    const { accurate, notLocal, concrete, worthPosting } = edgeJudge.no;
+    rows.push([
+      "Rubric no answers",
+      `accurate ${accurate}, not local ${notLocal}, concrete ${concrete}, worth posting ${worthPosting}`,
+    ]);
+    if (edgeJudge.failed > 0) rows.push(["Rough-edge judge failed", `${edgeJudge.failed} case(s)`]);
+    if (edgeJudge.costUsd !== null) {
+      rows.push(["Rough-edge judge cost (not in cost above)", formatCost(edgeJudge.costUsd)]);
+    }
   }
   out.push(...table(rows));
   out.push("", `Eval run: ${result.root}`);
