@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvalBug } from "./eval-dataset.ts";
+import type { EdgeJudgeTally } from "./eval-rough-edge-score.ts";
 import {
   hitsLocation,
   judgeBugs,
@@ -222,5 +223,118 @@ describe("summarizeCases", () => {
       findingsPerCleanCase: null,
       costUsd: null,
     });
+  });
+});
+
+describe("summarizeCases with rough edges", () => {
+  const base: CaseResult = {
+    id: "x",
+    kind: "bug",
+    preset: "full",
+    status: "ok",
+    error: null,
+    findings: 0,
+    reported: 0,
+    bugs: [],
+    costUsd: 1,
+    unknownCostCalls: 0,
+    durationMs: 1,
+  };
+
+  it("sums verdicts, kept per case and per clean case, and check cost", () => {
+    const scores = summarizeCases([
+      { ...base, roughEdges: { accurate: 2, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 } },
+      {
+        ...base,
+        kind: "clean",
+        roughEdges: { accurate: 0, unclear: 1, inaccurate: 0, checkCostUsd: null },
+      },
+      // A failed case isn't scored.
+      { ...base, status: "failed", roughEdges: null },
+    ]);
+    expect(scores.roughEdges).toEqual({
+      cases: 2,
+      accurate: 2,
+      unclear: 2,
+      inaccurate: 1,
+      keptPerCase: 2,
+      keptPerCleanCase: 1,
+      checkCostUsd: 0.1,
+      unknownCheckCost: 1,
+    });
+  });
+
+  it("has no rough-edge scores when no case ran with them", () => {
+    expect(summarizeCases([base])).not.toHaveProperty("roughEdges");
+  });
+});
+
+describe("summarizeCases with a rough-edge judge", () => {
+  const base: CaseResult = {
+    id: "x",
+    kind: "bug",
+    preset: "full",
+    status: "ok",
+    error: null,
+    findings: 0,
+    reported: 0,
+    bugs: [],
+    costUsd: 1,
+    unknownCostCalls: 0,
+    durationMs: 1,
+  };
+  const tally = (overrides: Partial<EdgeJudgeTally>): EdgeJudgeTally => ({
+    status: "ok",
+    error: null,
+    costUsd: 0.2,
+    durationMs: 1,
+    kept: 0,
+    keptPostable: 0,
+    dropped: 0,
+    droppedPostable: 0,
+    no: { accurate: 0, notLocal: 0, concrete: 0, worthPosting: 0 },
+    ...overrides,
+  });
+  const counts = { accurate: 2, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 };
+
+  it("gives the postable rate and the checker's disagreements with the judge", () => {
+    const scores = summarizeCases([
+      {
+        ...base,
+        roughEdges: {
+          ...counts,
+          judge: tally({
+            kept: 3,
+            keptPostable: 1,
+            dropped: 1,
+            droppedPostable: 1,
+            no: { accurate: 1, notLocal: 1, concrete: 0, worthPosting: 2 },
+          }),
+        },
+      },
+      { ...base, roughEdges: { ...counts, judge: tally({ status: "failed", error: "e" }) } },
+      // Not judged: no part of the judge scores.
+      { ...base, roughEdges: counts },
+    ]);
+    expect(scores.roughEdges?.judge).toEqual({
+      cases: 1,
+      failed: 1,
+      graded: 4,
+      postable: 2,
+      postableRate: 0.5,
+      kept: 3,
+      keptRejected: 2,
+      keptRejectedRate: 2 / 3,
+      dropped: 1,
+      droppedAccepted: 1,
+      droppedAcceptedRate: 1,
+      no: { accurate: 1, notLocal: 1, concrete: 0, worthPosting: 2 },
+      costUsd: 0.4,
+    });
+  });
+
+  it("has no judge scores when no case was judged", () => {
+    const scores = summarizeCases([{ ...base, roughEdges: counts }]);
+    expect(scores.roughEdges).not.toHaveProperty("judge");
   });
 });

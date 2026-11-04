@@ -31,13 +31,15 @@ Every finding must:
 
 Report at most 15 findings, most important first. If the change has no real defects, return an empty list; that is a good outcome, not a failure.
 
+{{roughEdges}}
+
 ## Fields
 
 - `localId`: your own short id for the finding, e.g. "1", "2".
 - `category`: one of correctness, security, performance, reliability, maintainability, tests, other.
 - `severity`: critical (data loss, security, outage), high (wrong behaviour on a common path), medium (wrong behaviour on an edge case), low (minor but real).
 
-Your final answer must be a single JSON object matching the required schema, with no other text.
+The findings go in `findings`. Your final answer must be a single JSON object matching the required schema, with no other text.
 
 ## The change
 

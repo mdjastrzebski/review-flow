@@ -9,7 +9,13 @@ import {
   type Verdict,
 } from "../core/index.ts";
 import { describe, expect, it } from "vitest";
-import { formatCompare, formatEval, formatEvalCompare, formatRuns } from "./runs.ts";
+import {
+  formatCompare,
+  formatEval,
+  formatEvalCompare,
+  formatPairwise,
+  formatRuns,
+} from "./runs.ts";
 
 const plain = { color: false };
 
@@ -292,6 +298,122 @@ describe("formatEval", () => {
     expect(text).toMatch(/Failed cases\s+1\/4/);
     expect(text).toMatch(/Cost per case\s+\$0.40/);
     expect(text).toContain("Eval run: /r/.review-flow/runs/x-eval");
+  });
+});
+
+describe("formatEval with rough edges", () => {
+  it("adds a rough-edge column and scores", () => {
+    const cases = [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: { accurate: 1, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 },
+      },
+      {
+        ...caseResult("d-4", "clean", 0),
+        roughEdges: { accurate: 0, unclear: 0, inaccurate: 0, checkCostUsd: 0 },
+      },
+    ];
+    const text = formatEval({ root: "/r", cases, scores: summarizeCases(cases) }, plain);
+    expect(text).toMatch(/Case\s+Kind\s+Result\s+Rough edges\s+Cost/);
+    expect(text).toMatch(/a-1\s+bug\s+found\s+2\/3\s+\$0.50/);
+    expect(text).toMatch(/Rough edges kept per case\s+1.00 \(1 accurate, 1 unclear; 1 dropped\)/);
+    expect(text).toMatch(/Rough edges kept per clean case\s+0.00/);
+    expect(text).toMatch(/Rough edge check cost per case\s+\$0.05/);
+  });
+
+  it("shows off for an eval without them in compare", () => {
+    const on = loadedEval("eval-on", [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: { accurate: 1, unclear: 0, inaccurate: 0, checkCostUsd: 0.1 },
+      },
+    ]);
+    const off = loadedEval("eval-off", [caseResult("a-1", "bug", "found")]);
+    expect(formatEvalCompare(off, on, plain)).toMatch(
+      /Rough edges kept per case\s+off\s+1.00 .*\s+-\n/,
+    );
+    expect(
+      formatEval({ root: "/r", cases: off.cases, scores: off.run.scores }, plain),
+    ).not.toContain("Rough edge");
+  });
+});
+
+describe("formatEval with a rough-edge judge", () => {
+  it("shows the postable rate, the checker's disagreements, and the judge's cost", () => {
+    const cases = [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: {
+          accurate: 2,
+          unclear: 0,
+          inaccurate: 1,
+          checkCostUsd: 0.1,
+          judge: {
+            status: "ok" as const,
+            error: null,
+            costUsd: 0.3,
+            durationMs: 1,
+            kept: 2,
+            keptPostable: 1,
+            dropped: 1,
+            droppedPostable: 0,
+            no: { accurate: 1, notLocal: 0, concrete: 0, worthPosting: 2 },
+          },
+        },
+      },
+    ];
+    const text = formatEval({ root: "/r", cases, scores: summarizeCases(cases) }, plain);
+    expect(text).toMatch(/Rough edges postable \(judge\)\s+33% \(1 of 3\)/);
+    expect(text).toMatch(/Checker kept, judge rejects\s+50% \(1 of 2 kept\)/);
+    expect(text).toMatch(/Checker dropped, judge accepts\s+0% \(0 of 1 dropped\)/);
+    expect(text).toMatch(
+      /Rubric no answers\s+accurate 1, not local 0, concrete 0, worth posting 2/,
+    );
+    expect(text).toMatch(/Rough-edge judge cost \(not in cost above\)\s+\$0.30/);
+  });
+});
+
+describe("formatPairwise", () => {
+  it("shows the preferred eval per case and the tally", () => {
+    const text = formatPairwise(
+      {
+        judgedAt: "",
+        a: "/runs/eval-a",
+        b: "/runs/eval-b",
+        judge: { model: "claude-opus-5-5", effort: "high" },
+        cases: [
+          {
+            id: "c-1",
+            winner: "b",
+            aFirst: true,
+            reason: "x".repeat(300),
+            error: null,
+            kept: { a: 3, b: 1 },
+            costUsd: 0.2,
+            durationMs: 1,
+          },
+          {
+            id: "c-2",
+            winner: null,
+            aFirst: false,
+            reason: null,
+            error: "timed out",
+            kept: { a: 0, b: 2 },
+            costUsd: null,
+            durationMs: 1,
+          },
+        ],
+        scores: { cases: 1, failed: 1, aWins: 0, bWins: 1, ties: 0, bWinRate: 1, costUsd: 0.2 },
+      },
+      plain,
+    );
+    expect(text).toMatch(/c-1\s+B\s+3\s+1\s+x+…/);
+    expect(text).not.toContain("x".repeat(101));
+    expect(text).toMatch(/c-2\s+failed\s+0\s+2\s+timed out/);
+    expect(text).toMatch(/Preferred\s+A 0, B 1, tie 0 \(of 1\)/);
+    expect(text).toMatch(/B win rate \(ties count half\)\s+100%/);
+    expect(text).toMatch(/Failed\s+1 case/);
+    expect(text).toContain("/runs/eval-a/pairwise-eval-b.json");
   });
 });
 

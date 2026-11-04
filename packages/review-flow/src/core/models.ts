@@ -91,3 +91,26 @@ export function resolveAnswerer(
 
 /** The eval judge's model: chosen like the answerer's, from the run's verifier model. */
 export const resolveJudge = resolveAnswerer;
+
+/**
+ * The rough-edge judge grades the reviewer's own output, so it runs on another model to avoid
+ * self-preference: Opus on Claude (another model, same family); on Cursor, a Claude model, another
+ * family than the default Grok.
+ */
+export const DEFAULT_EDGE_JUDGE: Record<Harness, ModelChoice> = {
+  claude: { model: "claude-opus-5-5", effort: "high" },
+  cursor: { model: "claude-sonnet-5-5-high", effort: null },
+};
+
+/** The rough-edge judge's model on `harness`; overrides apply as in `resolveModels`. */
+export function resolveEdgeJudge(
+  harness: Harness,
+  overrides: { model: string | null; effort: Effort | null },
+): ModelChoice {
+  const base = DEFAULT_EDGE_JUDGE[harness];
+  const { model, effort } = overrides;
+  return {
+    model: model ?? base.model,
+    effort: effort ?? (model !== null && harness === "cursor" ? null : base.effort),
+  };
+}

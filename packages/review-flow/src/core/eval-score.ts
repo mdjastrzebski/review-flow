@@ -1,5 +1,10 @@
 import { MATCH_TOLERANCE_LINES } from "./compare.ts";
 import type { BugLocation, EvalBug, EvalCase } from "./eval-dataset.ts";
+import {
+  summarizeRoughEdges,
+  type RoughEdgeResult,
+  type RoughEdgeScores,
+} from "./eval-rough-edge-score.ts";
 import type { NormalizedFinding, Verdict } from "./schemas.ts";
 
 export interface BugResult {
@@ -34,6 +39,8 @@ export interface CaseResult {
   durationMs: number;
   /** The judge call: null or absent when the case wasn't judged. Its cost isn't in `costUsd`. */
   judge?: JudgeCall | null;
+  /** Absent when the eval ran without rough edges; null when the case failed before review. */
+  roughEdges?: RoughEdgeResult | null;
 }
 
 export interface JudgeCall {
@@ -68,6 +75,8 @@ export interface EvalScores {
   locationRecall?: number | null;
   /** Sum of the judge calls' cost; only when some case was judged. */
   judgeCostUsd?: number | null;
+  /** Only when the eval ran with rough edges. */
+  roughEdges?: RoughEdgeScores;
 }
 
 /** Same file, and the line ranges overlap or are at most MATCH_TOLERANCE_LINES apart. */
@@ -134,6 +143,7 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
   const judged = bugs.filter((b) => b.judged === true);
   const judgeCosts = ok.flatMap((c) => (c.judge?.costUsd == null ? [] : [c.judge.costUsd]));
   const costs = cases.flatMap((c) => (c.costUsd === null ? [] : [c.costUsd]));
+  const roughEdges = summarizeRoughEdges(ok);
   return {
     cases: cases.length,
     failed: cases.length - ok.length,
@@ -157,5 +167,6 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
               : bugs.filter((b) => (b.byLocation?.found ?? b.found) === true).length / bugs.length,
           judgeCostUsd: judgeCosts.length === 0 ? null : judgeCosts.reduce((a, b) => a + b, 0),
         }),
+    ...(roughEdges === undefined ? {} : { roughEdges }),
   };
 }

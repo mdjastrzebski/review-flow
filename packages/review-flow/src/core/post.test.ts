@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { anchorFinding, buildReview, diffLines, postableItems } from "./post.ts";
-import type { NormalizedFinding, Verdict } from "./schemas.ts";
+import {
+  anchorFinding,
+  buildReview,
+  diffLines,
+  isPreselected,
+  itemSubject,
+  postableItems,
+  postableRoughEdges,
+  roughEdgeBody,
+} from "./post.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
 const diff = `diff --git a/a.ts b/a.ts
 index 1..2 100644
@@ -69,11 +78,17 @@ describe("anchorFinding", () => {
   const lines = diffLines(diff);
 
   it("anchors a range fully in the diff as a multi-line comment", () => {
-    expect(anchorFinding(finding("1", "a.ts", 2, 3), lines)).toEqual({ line: 3, startLine: 2 });
+    expect(anchorFinding(finding("1", "a.ts", 2, 3), lines)).toEqual({
+      line: 3,
+      startLine: 2,
+    });
   });
 
   it("anchors a single line", () => {
-    expect(anchorFinding(finding("1", "a.ts", 22), lines)).toEqual({ line: 22, startLine: null });
+    expect(anchorFinding(finding("1", "a.ts", 22), lines)).toEqual({
+      line: 22,
+      startLine: null,
+    });
   });
 
   it("uses the first diff line of a range that is only partly in the diff", () => {
@@ -98,7 +113,7 @@ describe("postableItems", () => {
       "3": verdict({ verdict: "refuted" }),
       "4": verdict(),
     });
-    expect(items.map((i) => [i.finding.id, i.preselected])).toEqual([
+    expect(items.map((i) => [itemSubject(i).id, isPreselected(i)])).toEqual([
       ["4", true],
       ["2", false],
       ["1", false],
@@ -106,16 +121,29 @@ describe("postableItems", () => {
   });
 });
 
+/** Postable items for findings that all carry the same verdict, in order. */
+function postable(
+  entries: { finding: NormalizedFinding; verdict: Verdict }[],
+): ReturnType<typeof postableItems> {
+  return postableItems(
+    entries.map((e) => e.finding),
+    Object.fromEntries(entries.map((e) => [e.finding.id, e.verdict])),
+  );
+}
+
 describe("buildReview", () => {
   it("puts diff findings inline and the rest in the body, as a COMMENT review", () => {
     const plan = buildReview(
-      [
+      postable([
         { finding: finding("1", "a.ts", 2, 3), verdict: verdict() },
         {
           finding: finding("2", "b.ts", 5),
-          verdict: verdict({ fix: { assessment: "flawed", detail: "d", betterFix: "Better." } }),
+          verdict: verdict({
+            severity: "medium",
+            fix: { assessment: "flawed", detail: "d", betterFix: "Better." },
+          }),
         },
-      ],
+      ]),
       diff,
       "abc",
     );
@@ -140,18 +168,62 @@ describe("buildReview", () => {
 
   it("opens the body with the run's summary", () => {
     const plan = buildReview(
-      [{ finding: finding("1", "a.ts", 2), verdict: verdict() }],
+      postable([{ finding: finding("1", "a.ts", 2), verdict: verdict() }]),
       diff,
       "abc",
       {
-        goal: { text: "Add b.", source: "stated" },
-        changes: ["Adds b."],
-        achieved: { verdict: "yes", gaps: [], extras: [] },
-        lookAt: [],
+        summary: {
+          goal: { text: "Add b.", source: "stated" },
+          changes: ["Adds b."],
+          achieved: { verdict: "yes", gaps: [], extras: [] },
+          lookAt: [],
+        },
       },
     );
     expect(plan.payload.body).toMatch(
       /^\*\*Goal:\*\* Add b\.\n\n- Adds b\.\n\n\*\*Goal met:\*\* yes\n\n---\n\n1 finding/,
     );
+  });
+});
+
+describe("buildReview with rough edges", () => {
+  const edge = (id: string, file: string, lineStart: number): CheckedRoughEdge => ({
+    id,
+    localId: id,
+    title: `Edge ${id}`,
+    file,
+    lineStart,
+    lineEnd: lineStart,
+    lens: "structure",
+    priority: "low",
+    observation: "Obs.",
+    suggestion: "Do this.",
+    check: { status: "accurate", note: "n", priority: "high" },
+  });
+
+  it("anchors a rough edge like a finding and labels it as one", () => {
+    const plan = buildReview(
+      postableRoughEdges([edge("R-001", "a.ts", 2), edge("R-002", "other.ts", 5)]),
+      diff,
+      "sha",
+    );
+    expect(plan.inline).toEqual(["R-001"]);
+    expect(plan.inBody).toEqual(["R-002"]);
+    expect(plan.payload.comments[0]!.body).toContain(
+      "**Rough edge (structure, high priority): Edge R-001**",
+    );
+    expect(plan.payload.comments[0]!.body).toContain("**Suggestion:** Do this.");
+    expect(plan.payload.body).toContain("0 findings · 2 rough edges · 1 inline");
+  });
+
+  it("never pre-selects rough edges, whatever their priority", () => {
+    const items = postableRoughEdges([edge("R-001", "a.ts", 2)]);
+    expect(items.map((item) => isPreselected(item))).toEqual([false]);
+  });
+
+  it("labels a rough edge from a run saved before priority existed without one", () => {
+    const { priority: _drop, ...oldCheck } = edge("R-001", "a.ts", 2).check;
+    const old = { ...edge("R-001", "a.ts", 2), check: oldCheck } as unknown as CheckedRoughEdge;
+    expect(roughEdgeBody(old)).toContain("**Rough edge (structure): Edge R-001**");
   });
 });

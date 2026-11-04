@@ -5,13 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
 import { loadRun } from "./compare.ts";
-import { runEval, type EvalRunOptions } from "./eval.ts";
+import { evalRunPaths, runEval, type EvalRunOptions } from "./eval.ts";
+import { pairwiseEvals } from "./eval-pairwise.ts";
 import type { EvalCase } from "./eval-dataset.ts";
 import type { CaseResult } from "./eval-score.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
+import { runDirPaths } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
-import type { ReviewOutput, Verdict } from "./schemas.ts";
+import { ROUGH_EDGE_CHECKER_TASK_ID } from "./rough-edges.ts";
+import type { FindingsOutput, ReviewOutput, RoughEdgeChecks, Verdict } from "./schemas.ts";
 
 let tmp: string;
 let remote: string;
@@ -73,7 +76,7 @@ const bugCase = (id: string, line: number) =>
     bugs: [{ description: "d", fix: "f", locations: [{ file: "a.txt", start: line, end: line }] }],
   });
 
-const review: ReviewOutput = {
+const review: FindingsOutput = {
   findings: [
     {
       localId: "1",
@@ -196,6 +199,295 @@ describe("runEval", () => {
         costUsd: 1.5,
       }),
     ]);
+  });
+
+  it("scores rough edges apart from findings when asked for", async () => {
+    const edge = (localId: string): ReviewOutput["roughEdges"][number] => ({
+      localId,
+      title: `edge ${localId}`,
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      priority: "medium",
+      observation: "o",
+      suggestion: "s",
+    });
+    const withEdges: ReviewOutput = { ...review, roughEdges: ["1", "2", "3"].map(edge) };
+    const checks: RoughEdgeChecks = {
+      checks: [
+        { localId: "R-001", status: "accurate", note: "n", priority: "medium" },
+        { localId: "R-002", status: "unclear", note: "n", priority: "medium" },
+        { localId: "R-003", status: "inaccurate", note: "n", priority: "medium" },
+      ],
+    };
+    const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? withEdges
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? checks
+            : confirmed;
+      return {
+        status: "ok",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.25,
+        usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([bugCase("hit", 2), evalCase("clean")], runAgent),
+      roughEdges: true,
+    });
+
+    const counts = { accurate: 1, unclear: 1, inaccurate: 1, checkCostUsd: 0.25 };
+    expect(result.cases.map((c) => c.roughEdges)).toEqual([counts, counts]);
+    // Findings are scored as without rough edges.
+    expect(result.scores).toMatchObject({ found: 1, cleanFindings: 1, costUsd: 1.5 });
+    expect(result.scores.roughEdges).toEqual({
+      cases: 2,
+      accurate: 2,
+      unclear: 2,
+      inaccurate: 2,
+      keptPerCase: 2,
+      keptPerCleanCase: 2,
+      checkCostUsd: 0.5,
+      unknownCheckCost: 0,
+    });
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.run.roughEdges).toBe(true);
+    expect(loaded.run.steps.check).toMatchObject({ calls: 2, costUsd: 0.5 });
+  });
+
+  it("grades rough edges with the rubric judge, in the checkout, apart from the run's cost", async () => {
+    const edge: ReviewOutput["roughEdges"][number] = {
+      localId: "1",
+      title: "edge",
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      priority: "medium",
+      observation: "o",
+      suggestion: "s",
+    };
+    const reviewer: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? { ...review, roughEdges: [edge] }
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? {
+                checks: [{ localId: "R-001", status: "inaccurate", note: "n", priority: "medium" }],
+              }
+            : confirmed;
+      return {
+        status: "ok",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.25,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const judged: AgentTask<unknown>[] = [];
+    const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      judged.push(task as AgentTask<unknown>);
+      const grade = {
+        reason: "r",
+        accurate: true,
+        notLocal: true,
+        concrete: true,
+        worthPosting: true,
+      };
+      return {
+        status: "ok",
+        output: task.schema.parse({ edges: [{ id: "R-001", ...grade }] }),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.4,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([evalCase("clean")], reviewer),
+      roughEdges: true,
+      edgeJudge: {
+        harness: "cursor",
+        model: { model: "judge-model", effort: null },
+        runAgent: judge,
+      },
+    });
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.cwd).toContain(checkouts);
+    expect(result.cases[0]?.roughEdges?.judge).toMatchObject({
+      status: "ok",
+      kept: 0,
+      dropped: 1,
+      droppedPostable: 1,
+    });
+    expect(result.scores.roughEdges?.judge).toMatchObject({
+      droppedAcceptedRate: 1,
+      postableRate: 1,
+      costUsd: 0.4,
+    });
+    // The judge's cost isn't the run's: reviewer, verifier, and checker at $0.25 each.
+    expect(result.scores.costUsd).toBe(0.75);
+    const saved = JSON.parse(
+      await readFile(path.join(result.root, "cases", "clean", "rough-edge-judge.json"), "utf8"),
+    );
+    expect(saved).toEqual([
+      {
+        id: "R-001",
+        title: "edge",
+        check: "inaccurate",
+        grade: expect.objectContaining({ worthPosting: true }),
+      },
+    ]);
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.run.edgeJudge).toEqual({
+      harness: "cursor",
+      model: { model: "judge-model", effort: null },
+    });
+  });
+
+  it("leaves rough edges out of the results by default", async () => {
+    const result = await runEval(options([evalCase("clean")]));
+    expect(result.cases[0]).not.toHaveProperty("roughEdges");
+    expect(result.scores).not.toHaveProperty("roughEdges");
+  });
+
+  it("judges two evals' kept rough edges pairwise, in the checkout", async () => {
+    const withEdge =
+      (title: string, status: "accurate" | "inaccurate"): RunAgent =>
+      async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+        const answer =
+          task.role === "reviewer"
+            ? {
+                ...review,
+                roughEdges: [
+                  {
+                    localId: "1",
+                    title,
+                    file: "a.txt",
+                    lineStart: 1,
+                    lineEnd: 2,
+                    lens: "design",
+                    priority: "medium",
+                    observation: "o",
+                    suggestion: "s",
+                  },
+                ],
+              }
+            : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+              ? { checks: [{ localId: "R-001", status, note: "n", priority: "medium" }] }
+              : confirmed;
+        return {
+          status: "ok",
+          output: task.schema.parse(answer),
+          rawText: "",
+          raw: {},
+          error: null,
+          costUsd: 0.25,
+          usage: null,
+          durationMs: 10,
+        };
+      };
+    const cases = [evalCase("clean")];
+    const a = await runEval({
+      ...options(cases, withEdge("edge A", "accurate")),
+      roughEdges: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const b = await runEval({
+      ...options(cases, withEdge("edge B", "inaccurate")),
+      roughEdges: true,
+    });
+
+    const judged: AgentTask<unknown>[] = [];
+    const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      judged.push(task as AgentTask<unknown>);
+      return {
+        status: "ok",
+        output: task.schema.parse({ reason: "r", preferred: "1" }),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.3,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const record = await pairwiseEvals({
+      a: { root: a.root, cases: a.cases },
+      b: { root: b.root, cases: b.cases },
+      dataset: cases,
+      checkoutsDir: checkouts,
+      model: { model: "judge-model", effort: null },
+      runAgent: judge,
+      log: () => {},
+      random: () => 0.1,
+    });
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.cwd).toBe(path.join(checkouts, "upstream__lib"));
+    // B's only rough edge was dropped by its checker, so the judge sees an empty set.
+    expect(judged[0]?.prompt).toContain("edge A");
+    expect(judged[0]?.prompt).not.toContain("edge B");
+    expect(record.cases).toEqual([
+      expect.objectContaining({ id: "clean", winner: "a", kept: { a: 1, b: 0 } }),
+    ]);
+    expect(record.scores).toMatchObject({ aWins: 1, bWinRate: 0, costUsd: 0.3 });
+    const saved = JSON.parse(
+      await readFile(path.join(a.root, `pairwise-${path.basename(b.root)}.json`), "utf8"),
+    );
+    expect(saved.scores).toEqual(record.scores);
+
+    // A case that fails before the judge is recorded as failed; the record is still saved.
+    await rm(runDirPaths(evalRunPaths(a.root).caseRoot("clean")).diffPath);
+    const failed = await pairwiseEvals({
+      a: { root: a.root, cases: a.cases },
+      b: { root: b.root, cases: b.cases },
+      dataset: cases,
+      checkoutsDir: checkouts,
+      model: { model: "judge-model", effort: null },
+      runAgent: judge,
+      log: () => {},
+    });
+    expect(judged).toHaveLength(1);
+    expect(failed.cases).toEqual([
+      expect.objectContaining({
+        id: "clean",
+        winner: null,
+        error: expect.stringContaining("ENOENT"),
+      }),
+    ]);
+    expect(failed.scores).toMatchObject({ cases: 0, failed: 1 });
+  });
+
+  it("refuses a pairwise judge when no case ran with rough edges in both evals", async () => {
+    const a = await runEval(options([evalCase("clean")]));
+    await expect(
+      pairwiseEvals({
+        a: { root: a.root, cases: a.cases },
+        b: { root: a.root, cases: a.cases },
+        dataset: [evalCase("clean")],
+        checkoutsDir: checkouts,
+        model: { model: null, effort: null },
+        runAgent: stubAgent(),
+        log: () => {},
+      }),
+    ).rejects.toThrow("No case ran with rough edges in both evals.");
   });
 
   it("reuses the clone on the next eval", async () => {

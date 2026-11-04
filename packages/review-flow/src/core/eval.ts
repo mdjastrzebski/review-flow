@@ -4,7 +4,9 @@ import type { RunAgent } from "./agent.ts";
 import { addTotals, EMPTY_TOTALS, type Step, type TimedTotals } from "./calls.ts";
 import { checkoutName, type EvalCase, type EvalSubset } from "./eval-dataset.ts";
 import { fetchFixDiffs } from "./eval-fixes.ts";
+import { scoreRoughEdges, type EdgeJudge } from "./eval-edge-judge.ts";
 import { judgeCase, type JudgeResult } from "./eval-judge.ts";
+import { roughEdgeOutcome } from "./eval-rough-edge-score.ts";
 import {
   countReported,
   judgeBugs,
@@ -40,12 +42,16 @@ export interface EvalRunOptions {
   subset?: EvalSubset | undefined;
   /** Run Summarize on each case (default: true). */
   summarize?: boolean;
+  /** Ask for rough edges and score them apart from findings (default: false). */
+  roughEdges?: boolean;
   /** One clone per case repo, reused across evals. */
   checkoutsDir: string;
   /** Model of the judge that matches findings to known bugs; absent: match by location alone. */
   judge?: ModelChoice | undefined;
   /** Where fix diffs are cached; the judge reads each bug's fix diff. Absent: description only. */
   fixesDir?: string | undefined;
+  /** Grades rough edges with the rubric, with `roughEdges` on; absent: not graded. */
+  edgeJudge?: EdgeJudge | undefined;
   harness: Harness;
   models: RoleModels;
   runAgent: RunAgent;
@@ -61,6 +67,10 @@ export interface EvalRunRecord {
   kind: "eval";
   harness: Harness;
   models: RoleModels;
+  /** Absent in evals from before rough edges could be on. */
+  roughEdges?: boolean;
+  /** The rough-edge judge, when rough edges were judged. */
+  edgeJudge?: { harness: Harness; model: ModelChoice };
   dataset: { dir: string; subset: EvalSubset | null; cases: string[] };
   startedAt: string;
   finishedAt: string;
@@ -99,9 +109,11 @@ export function caseOutcome(result: CaseResult): string {
   return result.bugs.some((b) => b.foundByReviewer) ? "refuted" : "missed";
 }
 
-/** Outcome, cost, and time; plus the error of a failed case. */
+/** Outcome, rough edges when on, cost, and time; plus the error of a failed case. */
 export function describeCase(result: CaseResult): string {
   const parts = [caseOutcome(result)];
+  const edges = roughEdgeOutcome(result);
+  if (edges !== null) parts.push(`rough edges ${edges}`);
   if (result.costUsd !== null) {
     parts.push(`${result.unknownCostCalls > 0 ? "≥" : ""}${formatCost(result.costUsd)}`);
   }
@@ -174,6 +186,8 @@ async function runCase(
       ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
+      // Off by default so finding scores stay comparable; scored apart when on (spec 11).
+      roughEdges: options.roughEdges ?? false,
       ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
@@ -210,6 +224,16 @@ async function runCase(
       );
     }
   }
+  const roughEdges = options.roughEdges
+    ? await scoreRoughEdges({
+        evalCase,
+        review,
+        run,
+        caseRoot,
+        judge: options.edgeJudge,
+        warn: options.warn,
+      })
+    : undefined;
   const result: CaseResult = {
     id: evalCase.id,
     kind: evalCase.kind,
@@ -223,6 +247,7 @@ async function runCase(
     unknownCostCalls: run?.totals.unknownCostCalls ?? 0,
     durationMs: run?.totals.durationMs ?? 0,
     ...(judge === null ? {} : { judge }),
+    ...(roughEdges === undefined ? {} : { roughEdges }),
   };
   return { result, run };
 }
@@ -259,6 +284,15 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
   setup.push(
     ["Reviewer", describeModel(models.reviewer)],
     ["Verifier", describeModel(models.verifier)],
+    ["Rough edges", options.roughEdges ? "on" : "off"],
+    ...(options.roughEdges && options.edgeJudge !== undefined
+      ? [
+          [
+            "Rough-edge judge",
+            `${describeModel(options.edgeJudge.model)} (${options.edgeJudge.harness})`,
+          ] as [string, string],
+        ]
+      : []),
     ["Cases", `${options.cases.length}${options.subset ? ` (${options.subset} set)` : ""}`],
     ["Dataset", options.dataset],
     ["Run dir", root],
@@ -296,6 +330,10 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
       kind: "eval",
       harness,
       models,
+      roughEdges: options.roughEdges ?? false,
+      ...(options.roughEdges && options.edgeJudge !== undefined
+        ? { edgeJudge: { harness: options.edgeJudge.harness, model: options.edgeJudge.model } }
+        : {}),
       dataset: {
         dir: options.dataset,
         subset: options.subset ?? null,

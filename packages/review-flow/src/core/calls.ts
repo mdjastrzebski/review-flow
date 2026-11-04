@@ -2,10 +2,10 @@ import type { AgentStatus, TokenUsage } from "./agent.ts";
 import type { Effort, Harness, Role } from "./models.ts";
 
 /**
- * Pipeline steps that are timed. Ranking runs inside verify (rules) and report (sort). `ask` calls
+ * Pipeline steps that are timed. `check` (the rough-edge checker) runs only when the reviewer returned rough edges. Ranking runs inside verify (rules) and report (sort). `ask` calls
  * go to calls.jsonl only, never into a run's totals.
  */
-export type Step = "collect" | "summarize" | "review" | "verify" | "report" | "ask";
+export type Step = "collect" | "summarize" | "review" | "verify" | "check" | "report" | "ask";
 
 /**
  * `reported`: the harness reported the cost. `computed`: tokens × the price table (prices.ts).
@@ -49,7 +49,12 @@ export interface TimedTotals extends CallTotals {
 }
 
 export function sumCalls(calls: readonly CallRecord[]): CallTotals {
-  const usage: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  const usage: TokenUsage = {
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+  };
   let costUsd: number | null = null;
   let unknownCostCalls = 0;
   for (const call of calls) {
@@ -72,7 +77,10 @@ export function rollUp(
 ): { steps: Partial<Record<Step, TimedTotals>>; totals: TimedTotals } {
   const steps: Partial<Record<Step, TimedTotals>> = {};
   for (const [step, stepMs] of stepDurations) {
-    steps[step] = { ...sumCalls(calls.filter((c) => c.step === step)), durationMs: stepMs };
+    steps[step] = {
+      ...sumCalls(calls.filter((c) => c.step === step)),
+      durationMs: stepMs,
+    };
   }
   return { steps, totals: { ...sumCalls(calls), durationMs } };
 }

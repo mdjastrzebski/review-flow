@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { Finding, ReviewOutput, Verdict } from "./schemas.ts";
+import { z } from "zod";
+import {
+  Finding,
+  FindingsOutput,
+  lenientReviewOutput,
+  ReviewOutput,
+  RoughEdgeChecks,
+  Verdict,
+} from "./schemas.ts";
 
 const finding = {
   localId: "1",
@@ -54,12 +62,93 @@ describe("Finding", () => {
 });
 
 describe("ReviewOutput", () => {
-  it("accepts an empty findings list", () => {
-    expect(ReviewOutput.safeParse({ findings: [] }).success).toBe(true);
+  it("accepts empty findings and rough edges", () => {
+    expect(ReviewOutput.safeParse({ findings: [], roughEdges: [] }).success).toBe(true);
+  });
+
+  it("requires roughEdges, since absent values are not allowed", () => {
+    expect(ReviewOutput.safeParse({ findings: [] }).success).toBe(false);
   });
 
   it("rejects a bare array", () => {
     expect(ReviewOutput.safeParse([finding]).success).toBe(false);
+  });
+});
+
+describe("rough edge priority", () => {
+  const edge = {
+    localId: "1",
+    title: "t",
+    file: "src/a.ts",
+    lineStart: 1,
+    lineEnd: 2,
+    lens: "design",
+    priority: "high",
+    observation: "o",
+    suggestion: "s",
+  };
+  const parse = (e: object) => ReviewOutput.safeParse({ findings: [], roughEdges: [e] }).success;
+
+  it("is required on a reviewer's rough edge and limited to high, medium, low", () => {
+    expect(parse(edge)).toBe(true);
+    const { priority: _drop, ...without } = edge;
+    expect(parse(without)).toBe(false);
+    expect(parse({ ...edge, priority: "critical" })).toBe(false);
+  });
+
+  it("is required on each check", () => {
+    const check = { localId: "R-001", status: "accurate", note: "n" };
+    expect(RoughEdgeChecks.safeParse({ checks: [check] }).success).toBe(false);
+    expect(RoughEdgeChecks.safeParse({ checks: [{ ...check, priority: "low" }] }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("lenientReviewOutput", () => {
+  const edge = {
+    localId: "1",
+    title: "t",
+    file: "src/a.ts",
+    lineStart: 1,
+    lineEnd: 2,
+    lens: "design",
+    priority: "high",
+    observation: "o",
+    suggestion: "s",
+  };
+
+  it("sends the model the same JSON Schema as ReviewOutput", () => {
+    expect(z.toJSONSchema(lenientReviewOutput().schema)).toEqual(z.toJSONSchema(ReviewOutput));
+  });
+
+  it("drops invalid rough edges but keeps the findings and valid edges", () => {
+    const { schema, notes } = lenientReviewOutput();
+    const parsed = schema.parse({
+      findings: [finding],
+      roughEdges: [edge, { ...edge, priority: "critical" }, { ...edge, lineStart: 0 }],
+    });
+    expect(parsed).toEqual({ findings: [finding], roughEdges: [edge] });
+    expect(notes()).toEqual(["Dropped 2 invalid rough edge(s) from the reviewer."]);
+  });
+
+  it("treats a missing rough edge list as empty", () => {
+    const { schema, notes } = lenientReviewOutput();
+    expect(schema.parse({ findings: [finding] })).toEqual({ findings: [finding], roughEdges: [] });
+    expect(notes()).toHaveLength(1);
+  });
+
+  it("still validates findings strictly", () => {
+    const { schema } = lenientReviewOutput();
+    const bad = { ...finding, severity: "urgent" };
+    expect(schema.safeParse({ findings: [bad], roughEdges: [] }).success).toBe(false);
+  });
+});
+
+describe("FindingsOutput", () => {
+  it("rejects rough edges, which were not asked for", () => {
+    expect(FindingsOutput.safeParse({ findings: [] }).success).toBe(true);
+    expect(FindingsOutput.safeParse({ findings: [], roughEdges: [] }).success).toBe(false);
   });
 });
 

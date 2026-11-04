@@ -5,9 +5,13 @@ import {
   formatDuration,
   formatLocation,
   goalNote,
+  finalPriority,
+  keptRoughEdges,
   rankFindings,
+  type CheckedRoughEdge,
   type FixAssessment,
   type NormalizedFinding,
+  type Priority,
   type Severity,
   type Summary,
   type SummaryOutcome,
@@ -26,6 +30,7 @@ export interface FormatOptions {
 export interface FindingsSummary {
   findings: NormalizedFinding[];
   verdicts: Record<string, Verdict>;
+  roughEdges: CheckedRoughEdge[];
   base: string;
   reportPath: string;
   costUsd: number | null;
@@ -37,6 +42,13 @@ const SEVERITY_STYLE: Record<Severity, Style> = {
   high: ["bold", "red"],
   medium: ["bold", "yellow"],
   low: ["bold", "blue"],
+};
+
+// Not the severity colors: a priority is not a defect level.
+const PRIORITY_STYLE: Record<Priority, Style> = {
+  high: ["bold"],
+  medium: [],
+  low: ["dim"],
 };
 
 const VERDICT_STYLE: Record<Verdict["verdict"], Style> = {
@@ -222,6 +234,27 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
       );
       out.push(`${INDENT}${paint("dim", `${formatLocation(finding)} ${finding.category}`)}`);
       field("Why", verdict.summary);
+      out.push("");
+    }
+  }
+
+  // Not defects, so apart from the findings and out of their count.
+  const edges = keptRoughEdges(summary.roughEdges);
+  if (edges.length > 0) {
+    out.push(
+      `${paint("bold", `Rough edges (${edges.length})`)}  ${paint("dim", "not defects: harder to follow or change than needed")}`,
+      "",
+    );
+    for (const edge of edges) {
+      const priority = finalPriority(edge);
+      const badge = priority === null ? "" : `${paint(PRIORITY_STYLE[priority], priority)} `;
+      out.push(
+        `${paint("bold", edge.id)} ${badge}${paint("magenta", edge.lens)}  ${paint("bold", edge.title)}`,
+      );
+      out.push(`${INDENT}${paint("cyan", formatLocation(edge))}`);
+      field("Seen", edge.observation);
+      field("Try", edge.suggestion);
+      field("Check", `${edge.check.status}: ${edge.check.note}`);
       out.push("");
     }
   }

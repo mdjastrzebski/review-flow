@@ -102,9 +102,9 @@ Each step records its own cost and time and can be skipped in config. Values mar
    The review setup box shows the checkout's path and the `ask` command for this run (see 7), and `run.json` records the path.
 
 2. **Summarize.** One agent call, run in parallel with Find. It gets the same diff as shared context as the verifiers, plus the PR description or commit messages. It writes `summary.json` (see 7). It runs in every preset; skip it with `--no-summary`. A failed call doesn't fail the run: the report says the summary is missing.
-3. **Find.** Finder agents read the diff and the surrounding code and return candidate findings as structured JSON. Large diffs are split into file groups, one finder each _(eval: group size)_. The `deep` preset adds finders with a narrow focus, such as security or concurrency. Finders report only concrete defects with a failure scenario.
+3. **Find.** Finder agents read the diff and the surrounding code and return candidate findings as structured JSON. Large diffs are split into file groups, one finder each _(eval: group size)_. The `deep` preset adds finders with a narrow focus, such as security or concurrency. Finders report only concrete defects with a failure scenario. They also return up to 5 _rough edges_ (see 5): structural observations about the new code that are not defects.
 4. **Dedupe.** Merge findings with the same root cause, so the same bug isn't verified twice. Similar findings across files become one finding for the whole bug class.
-5. **Verify.** Verifiers try to refute each finding by reading the code. Findings are batched by file group _(eval: batch size)_ and processed highest finder severity first, so a budget cut loses the least important work. Verifiers don't see the finder's rationale or severity, to avoid anchoring. The `deep` preset uses several verifiers per finding and takes a vote. The verifier sets severity, origin, and verification (see 5).
+5. **Verify.** Verifiers try to refute each finding by reading the code. Findings are batched by file group _(eval: batch size)_ and processed highest finder severity first, so a budget cut loses the least important work. Verifiers don't see the finder's rationale or severity, to avoid anchoring. The `deep` preset uses several verifiers per finding and takes a vote. The verifier sets severity, origin, and verification (see 5). Rough edges get one cheap check instead: a single batched verifier session confirms that each one is accurate (the code is as described, nothing in the repo makes it moot) and drops those that are not.
 6. **Filter.** Drop refuted findings and noise: style, cleanup-only, and diagnostic findings _(eval: filter list)_. This applies even when `REVIEW.md` asks for those, unless the filter is disabled in config.
 7. **Rank.** Rules enforced in code: `confirmed` without a code reference becomes `inconclusive`, and a failed verifier counts as `inconclusive`. Sort as in 7.
 8. **Report.** Write the report and the terminal output from `summary.json` and `findings.json`.
@@ -127,6 +127,18 @@ A finding also has: an id, file and line range, the claim as a failure scenario,
 Pre-existing findings are a separate category. They are written to `pre-existing.json`, shown in their own report section, and never offered for posting, because they belong in a separate branch or PR. When a pre-existing bug is the reason a new finding matters, the new finding links to it.
 
 `findings.json` is the stable contract read by the report, `post`, `compare`, and `eval`. It has a published schema.
+
+### Rough edges
+
+Rough edges are improvements, not defects: the code works, but its design makes the codebase harder to understand or evolve. The finder judges the change as a whole against the modules around it and asks what the next change would cost and whether a simpler design exists (a reframing that deletes complexity instead of rearranging it), along three lenses:
+
+- `structure`: does each responsibility live in the right module or layer? Misplaced logic, a concept bolted onto one not built for it, a decision made in several places, abstractions that duplicate or bypass existing ones, helpers that reimplement canonical utilities, feature logic leaking into shared modules, files that outgrow one responsibility (about 1000 lines), and dependencies that point the wrong way.
+- `design`: is the shape of the solution right? Interfaces that leak internals, models that can't express the next obvious case, special cases that will multiply, modes that fork one flow into near-copies, parallel paths instead of extending the shared one, one-off conditionals in unrelated flows, thin pass-through wrappers, types that allow impossible states, independent work done serially, and half-applied state updates.
+- `testability`: can the behavior be verified and changed safely? Logic reachable only through the whole pipeline, missing seams, and contracts that live only in comments.
+
+Local issues (names, parameter counts, closures, long functions, style) are out of scope. At most 5 are reported, few and high-conviction, ranked by cost to the next editor. A suggestion may propose a design the repo does not use yet; the check judges whether it preserves behavior and is simpler, not whether there is precedent.
+
+A rough edge has an id (`R-001`…), file and line range, lens, a priority, a title, the observation (what is in the code and why it is hard to follow or change), and a concrete suggestion. It names a unit and its files, with the clearest evidence as the line range; general advice is dropped. Its `priority` (`high`: will make the next likely change clearly harder, fix with or right after this change; `medium`: real cost, worth a follow-up; `low`: nice to have) is triage, not severity. The finder proposes it and the check returns the final one, which is the only one shown (terminal, report, posted comment); when the check fails or skips an edge, the finder's stands. A rough edge is never a finding: it is not counted in the finding totals, `failOn`, exit codes, or the finding scores of `eval`, which scores rough edges apart (see 11). The check gives it `accurate` or `unclear` with a one-line note; `inaccurate` ones are dropped from the report and from posting. They are written to `rough-edges.json`.
 
 ## 6. Incremental reviews
 
@@ -151,6 +163,7 @@ A review is incremental by default when an earlier run exists for the same targe
 4. Unverified findings.
 5. Since last review (incremental runs only).
 6. Pre-existing findings.
+7. Rough edges (see 5), after all findings, highest priority first.
 
 Refuted findings are kept in the run data and listed last, in their own section, so they are not mistaken for real ones. A footer shows cost, time, preset, and the run directory. A run cut by a budget says so, for example "budget hit at $1.50, 4 of 9 findings verified".
 
@@ -173,11 +186,11 @@ A short, human-readable account of the change, so the human can judge it at a hi
 
 Posting is never automatic. It is offered after a PR review in a TTY, or run later with `review-flow post [run]`.
 
-1. **Select.** A checkbox list: arrow keys move, Space marks, Enter accepts. The summary comes first, then introduced findings. The summary and confirmed findings of `medium` severity or higher are pre-selected.
+1. **Select.** A checkbox list: arrow keys move, Space marks, Enter accepts. The summary comes first, then introduced findings, then rough edges. The summary and confirmed findings of `medium` severity or higher are pre-selected; rough edges never are.
 2. **Edit.** The user can edit the selected findings' text in `$EDITOR`, since they post under their own name.
 3. **Check.** If the PR head moved since the run, warn. The user can post anchored to the reviewed commit (GitHub shows those comments as outdated) or re-run first.
 4. **Preview and confirm.** Show exactly what will be posted.
-5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings on diff lines become inline comments. Findings on other lines go in the review body, together with the summary (when selected) and a "reviewed with review-flow" footer.
+5. **Send.** One GitHub PR review through `gh`, with event `COMMENT`. It never approves or requests changes. Findings and rough edges on diff lines become inline comments (labelled as a rough edge). Those on other lines go in the review body, together with the summary (when selected) and a "reviewed with review-flow" footer.
 
 Posted findings and their comment ids are saved in the run directory, for repeat suppression and response tracking.
 
@@ -351,6 +364,7 @@ Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 | `summary.json`      | Summary (see 7)                                                                                                                      |
 | `findings.json`     | Findings (see 5)                                                                                                                     |
 | `pre-existing.json` | Pre-existing findings                                                                                                                |
+| `rough-edges.json`  | Rough edges with their check (see 5)                                                                                                 |
 | `report.md`         | Report                                                                                                                               |
 | `posted.json`       | What was posted, with comment ids                                                                                                    |
 | `intent.json`       | PR title and description, or commit messages, for `ask`                                                                              |
@@ -367,6 +381,10 @@ Each run also appends one summary line to `.review-flow/index.jsonl`: preset, co
 - **Clean cases.** Changes with no real defects, to measure false positives.
 - **Checkouts.** One clone per case repo, kept in `~/.cache/review-flow/eval/` and reused across evals. It is outside any project, so agents don't pick up the rules or `AGENTS.md` of the repo running the eval. Each case checks out its head and is reviewed against its base. Cases run one at a time.
 - **Scores.** Recall (known bugs found by a finding that wasn't refuted), reviewer recall (refuted findings count too, to show verifiers refuting real bugs), findings per clean case (not refuted), and cost and time per case. Failed cases are counted but not scored. A **judge** agent decides which findings describe each known bug, from the fix's title, the bug's location, the fix's diff, and the diff under review, so a correct finding at another line counts and a wide finding that only covers the bug's lines does not. Recall by location alone (same file, lines overlapping or at most 3 apart) is kept for comparison, and the judge's cost is reported apart from the run's. A failed judge falls back to location.
+- **Rough edges.** Off by default, so finding scores stay comparable; `--rough-edges` turns them on. They have no known answers like bugs do, and the checker grades a reviewer of its own model family, so its verdicts alone don't measure quality. Scores, cheapest first:
+  - **Counts and cost.** Rough edges per case, the checker's verdicts (accurate, unclear, inaccurate), and the `check` step's cost. Recall and findings per clean case, compared with an eval with rough edges off, show whether they distract the reviewer.
+  - **Rubric judge.** A judge on a different model from the reviewer, ideally another model family, answers yes or no for each rough edge: the code is as described, the fix is more than a small edit in one file, the suggestion says what moves where, and a maintainer of the repo would act on it. It reads the case's checkout and doesn't see the checker's verdicts. Gives the share that passes all four (postable) and the checker's calibration: how often it kept edges the judge rejects, and dropped edges the judge accepts. Its cost is reported apart. A **pairwise judge** (`compare --judge-rough-edges`) is for prompt changes: per case, it sees the two evals' kept rough edges, blind and in random order, in the case's checkout, and says which set it would rather post, or a tie. An empty set may win over weak ones. Gives each eval's wins and B's win rate, ties counting half.
+  - **Known rough edges.** Mined like bug cases: a later refactor of lines the case wrote, or a maintainer's design comment on the case's PR that led to a change (then the case's head is the commented commit). The bug judge matches rough edges to them, with the refactor diff in place of the fix diff. This gives recall only: no later refactor doesn't mean no rough edge.
 - **Eval run.** A run dir with `run.json` (config, per-step totals summed over cases, scores), `cases.json` (result per case), and `cases/<id>/`, a full run dir per case.
 - **Size.** About 35 cases, with a baseline set of 12 (7 bug, 5 clean, the default) for measuring changes, and a smoke set of 5 for a quick end-to-end check. The dataset, its sources, and its format are in [eval/](eval/README.md).
 

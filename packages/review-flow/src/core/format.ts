@@ -2,7 +2,11 @@ import type { ModelChoice } from "./models.ts";
 import type { NormalizedFinding } from "./schemas.ts";
 
 /** `file:line` or `file:start-end`. */
-export function formatLocation({ file, lineStart, lineEnd }: NormalizedFinding): string {
+export function formatLocation({
+  file,
+  lineStart,
+  lineEnd,
+}: Pick<NormalizedFinding, "file" | "lineStart" | "lineEnd">): string {
   return lineStart === lineEnd ? `${file}:${lineStart}` : `${file}:${lineStart}-${lineEnd}`;
 }
 

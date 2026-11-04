@@ -1,3 +1,4 @@
+import path from "node:path";
 import { styleText } from "node:util";
 import {
   formatCost,
@@ -7,7 +8,10 @@ import {
   rankFindings,
   compareSteps,
   caseOutcome,
+  describeModel,
   type CaseResult,
+  type RoughEdgeJudgeScores,
+  type RoughEdgeScores,
   type EvalRunResult,
   type EvalScores,
   type IndexEntry,
@@ -15,6 +19,7 @@ import {
   type LoadedRun,
   type ModelChoice,
   type NormalizedFinding,
+  type PairwiseRecord,
   type TimedTotals,
   type Verdict,
 } from "../core/index.ts";
@@ -321,21 +326,107 @@ const METRICS: Metric[] = [
   },
 ];
 
+function roughEdgeMetric(
+  name: string,
+  value: (r: RoughEdgeScores) => number | null,
+  cell: (r: RoughEdgeScores, v: number) => string,
+  delta: (v: number) => string,
+): Metric {
+  const of = (s: EvalScores) => (s.roughEdges === undefined ? null : value(s.roughEdges));
+  return {
+    label: name,
+    cell: (s) => {
+      if (s.roughEdges === undefined) return "off";
+      const v = value(s.roughEdges);
+      return v === null ? "-" : cell(s.roughEdges, v);
+    },
+    delta: (a, b) => {
+      const [va, vb] = [of(a), of(b)];
+      return va === null || vb === null ? "-" : signed(vb - va, delta);
+    },
+  };
+}
+
+const pts = (v: number) => `${Math.round(v * 100)} pts`;
+
+/** A rate of the rubric judge's scores, such as `40% (4 of 10 kept)`; `-` when not judged. */
+function judgeRateMetric(
+  name: string,
+  rate: (j: RoughEdgeJudgeScores) => [number | null, number, number],
+  of: string,
+): Metric {
+  return roughEdgeMetric(
+    name,
+    (r) => (r.judge === undefined ? null : rate(r.judge)[0]),
+    (r, v) => {
+      const [, n, d] = rate(r.judge!);
+      return `${percent(v)} (${n} of ${d}${of})`;
+    },
+    pts,
+  );
+}
+
+/** Shown when either eval ran with rough edges. */
+const ROUGH_EDGE_METRICS: Metric[] = [
+  roughEdgeMetric(
+    "Rough edges kept per case",
+    (r) => r.keptPerCase,
+    (r, v) =>
+      `${v.toFixed(2)} (${r.accurate} accurate, ${r.unclear} unclear; ${r.inaccurate} dropped)`,
+    (v) => v.toFixed(2),
+  ),
+  roughEdgeMetric(
+    "Rough edges kept per clean case",
+    (r) => r.keptPerCleanCase,
+    (_, v) => v.toFixed(2),
+    (v) => v.toFixed(2),
+  ),
+  roughEdgeMetric(
+    "Rough edge check cost per case",
+    (r) => (r.checkCostUsd === null || r.cases === 0 ? null : r.checkCostUsd / r.cases),
+    (r, v) => `${r.unknownCheckCost > 0 ? "≥" : ""}${formatCost(v)}`,
+    formatCost,
+  ),
+  judgeRateMetric(
+    "Rough edges postable (judge)",
+    (j) => [j.postableRate, j.postable, j.graded],
+    "",
+  ),
+  judgeRateMetric(
+    "Checker kept, judge rejects",
+    (j) => [j.keptRejectedRate, j.keptRejected, j.kept],
+    " kept",
+  ),
+  judgeRateMetric(
+    "Checker dropped, judge accepts",
+    (j) => [j.droppedAcceptedRate, j.droppedAccepted, j.dropped],
+    " dropped",
+  ),
+];
+
+function metricsFor(...scores: EvalScores[]): Metric[] {
+  return scores.some((s) => s.roughEdges !== undefined)
+    ? [...METRICS, ...ROUGH_EDGE_METRICS]
+    : METRICS;
+}
+
 /** The eval command's summary: the result per case, the scores, and the run dir. */
 export function formatEval(result: EvalRunResult, options: TableOptions): string {
   const paint = painter(options);
+  const edges = result.cases.some((c) => c.roughEdges !== undefined);
   const [caseHeader = "", ...caseLines] = table(
     [
-      ["Case", "Kind", "Result", "Cost", "Time"],
+      ["Case", "Kind", "Result", ...(edges ? ["Rough edges"] : []), "Cost", "Time"],
       ...result.cases.map((c) => [
         c.id,
         c.kind,
         caseOutcome(c),
+        ...(edges ? [roughEdgeCell(c)] : []),
         costCell(c.costUsd, c.unknownCostCalls),
         formatDuration(c.durationMs),
       ]),
     ],
-    new Set([3, 4]),
+    edges ? new Set([4, 5]) : new Set([3, 4]),
   );
   const out = [paint("dim", caseHeader), ...caseLines, ""];
   for (const { id, error } of result.cases) {
@@ -343,16 +434,35 @@ export function formatEval(result: EvalRunResult, options: TableOptions): string
   }
   if (out.at(-1) !== "") out.push("");
   const { locationRecall, judgeCostUsd } = result.scores;
-  const rows = METRICS.map((m) => [m.label, m.cell(result.scores)]);
+  const rows = metricsFor(result.scores).map((m) => [m.label, m.cell(result.scores)]);
   if (locationRecall !== undefined && locationRecall !== null) {
     rows.splice(1, 0, ["Recall by location only", percent(locationRecall)]);
   }
   if (judgeCostUsd !== undefined && judgeCostUsd !== null) {
     rows.push(["Judge cost (not in cost above)", formatCost(judgeCostUsd)]);
   }
+  const edgeJudge = result.scores.roughEdges?.judge;
+  if (edgeJudge !== undefined) {
+    const { accurate, notLocal, concrete, worthPosting } = edgeJudge.no;
+    rows.push([
+      "Rubric no answers",
+      `accurate ${accurate}, not local ${notLocal}, concrete ${concrete}, worth posting ${worthPosting}`,
+    ]);
+    if (edgeJudge.failed > 0) rows.push(["Rough-edge judge failed", `${edgeJudge.failed} case(s)`]);
+    if (edgeJudge.costUsd !== null) {
+      rows.push(["Rough-edge judge cost (not in cost above)", formatCost(edgeJudge.costUsd)]);
+    }
+  }
   out.push(...table(rows));
   out.push("", `Eval run: ${result.root}`);
   return out.join("\n");
+}
+
+/** Kept of all, such as `2/3`; `-` for a failed case. */
+function roughEdgeCell(c: CaseResult): string {
+  const r = c.roughEdges;
+  if (r == null) return "-";
+  return `${r.accurate + r.unclear}/${r.accurate + r.unclear + r.inaccurate}`;
 }
 
 const byId = (cases: readonly CaseResult[]) => new Map(cases.map((c) => [c.id, c]));
@@ -382,7 +492,7 @@ export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOp
   const [scoreHeader = "", ...scoreLines] = table(
     [
       ["Score", "A", "B", "Δ"],
-      ...METRICS.map((m) => [
+      ...metricsFor(a.run.scores, b.run.scores).map((m) => [
         m.label,
         m.cell(a.run.scores),
         m.cell(b.run.scores),
@@ -422,4 +532,53 @@ export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOp
     }
   }
   return out.join("\n");
+}
+
+const MAX_REASON_CHARS = 100;
+
+/** A judge's reason, cut to one table cell. */
+const reason = (text: string | null) =>
+  text === null
+    ? ""
+    : text.length > MAX_REASON_CHARS
+      ? `${text.slice(0, MAX_REASON_CHARS - 1)}…`
+      : text;
+
+/** The pairwise judge's verdict per case, and the tally: which eval's rough edges it prefers. */
+export function formatPairwise(record: PairwiseRecord, options: TableOptions): string {
+  const paint = painter(options);
+  const [a, b] = [path.basename(record.a), path.basename(record.b)];
+  const [header = "", ...lines] = table(
+    [
+      ["Case", "Preferred", "Kept A", "Kept B", "Reason"],
+      ...record.cases.map((c) => [
+        c.id,
+        c.winner === null ? "failed" : c.winner === "tie" ? "tie" : c.winner.toUpperCase(),
+        String(c.kept.a),
+        String(c.kept.b),
+        reason(c.winner === null ? c.error : c.reason),
+      ]),
+    ],
+    new Set([2, 3]),
+  );
+  const { scores } = record;
+  const rows = [
+    ["A", a],
+    ["B", b],
+    ["Judge", describeModel(record.judge)],
+    ["Preferred", `A ${scores.aWins}, B ${scores.bWins}, tie ${scores.ties} (of ${scores.cases})`],
+    ["B win rate (ties count half)", scores.bWinRate === null ? "-" : percent(scores.bWinRate)],
+  ];
+  if (scores.failed > 0) rows.push(["Failed", `${scores.failed} case(s)`]);
+  if (scores.costUsd !== null) rows.push(["Judge cost", formatCost(scores.costUsd)]);
+  return [
+    "Rough edges, judged pairwise and blind",
+    "",
+    paint("dim", header),
+    ...lines,
+    "",
+    ...table(rows),
+    "",
+    `Saved: ${path.join(record.a, `pairwise-${b}.json`)}`,
+  ].join("\n");
 }

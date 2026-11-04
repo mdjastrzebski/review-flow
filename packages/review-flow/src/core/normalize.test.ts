@@ -46,7 +46,9 @@ describe("normalizeFindings", () => {
 
   it("makes paths repo-relative", () => {
     const { findings } = normalizeFindings(
-      { findings: [makeFinding({ file: "/repo/src/a.ts" }), makeFinding({ file: "./src/b.ts" })] },
+      {
+        findings: [makeFinding({ file: "/repo/src/a.ts" }), makeFinding({ file: "./src/b.ts" })],
+      },
       repo,
     );
     expect(findings.map((f) => f.file)).toEqual(["src/a.ts", "src/b.ts"]);

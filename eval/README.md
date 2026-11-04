@@ -6,6 +6,9 @@
 pnpm review-flow eval --harness claude           # the baseline set, 12 cases
 pnpm review-flow eval --harness claude --full    # all 35
 pnpm review-flow eval --harness claude --smoke   # 5 cases, a quick end-to-end check
+pnpm review-flow eval --harness claude --rough-edges  # also score rough edges, apart from findings, with a rubric judge
+pnpm review-flow eval --harness claude --rough-edges --edge-judge-harness cursor  # judge them with another model family
+pnpm review-flow compare <eval a> <eval b> --judge-rough-edges  # which eval's rough edges a judge would rather post, blind
 ```
 
 For a quick check that the eval runs end to end (too few cases to judge quality), pick a few small cases and a cheap model:

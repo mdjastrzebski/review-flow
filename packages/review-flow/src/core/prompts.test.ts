@@ -35,8 +35,10 @@ describe("reviewer prompt", () => {
       base: "main",
       head: "`HEAD`",
       diffBlock: codeFence("DIFF", "diff"),
+      roughEdges: await loadPrompt("rough-edges"),
     });
     expect(prompt).toContain("`main`");
+    expect(prompt).toContain("## Rough edges");
     expect(prompt).toContain("DIFF");
   });
 });

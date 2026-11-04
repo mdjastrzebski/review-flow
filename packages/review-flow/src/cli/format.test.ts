@@ -1,4 +1,4 @@
-import type { NormalizedFinding, Verdict } from "../core/index.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "../core/index.ts";
 import { describe, expect, it } from "vitest";
 import { formatFindings, formatSummary, wrap } from "./format.ts";
 
@@ -37,6 +37,7 @@ const summary = {
   reportPath: "/repo/.review-flow/runs/x/report.md",
   costUsd: 0.183,
   durationMs: 62_000,
+  roughEdges: [],
 };
 const plain = { color: false, width: 80 };
 
@@ -138,6 +139,38 @@ describe("formatFindings", () => {
     expect(formatFindings({ ...summary, findings: [], verdicts: {} }, plain)).toContain(
       "No findings",
     );
+  });
+
+  it("shows each kept rough edge's final priority, highest first", () => {
+    const edge = (
+      id: string,
+      reviewer: "high" | "low",
+      final: "high" | "low",
+    ): CheckedRoughEdge => ({
+      id,
+      localId: id,
+      title: `Edge ${id}`,
+      file: "src/a.ts",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      priority: reviewer,
+      observation: "o",
+      suggestion: "s",
+      check: { status: "accurate", note: "n", priority: final },
+    });
+    const text = formatFindings(
+      {
+        ...summary,
+        findings: [],
+        verdicts: {},
+        roughEdges: [edge("R-001", "high", "low"), edge("R-002", "low", "high")],
+      },
+      plain,
+    );
+    expect(text).toContain("R-001 low design");
+    expect(text).toContain("R-002 high design");
+    expect(text.indexOf("R-002")).toBeLessThan(text.indexOf("R-001"));
   });
 
   it("emits no ANSI codes without color", () => {

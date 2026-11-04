@@ -11,7 +11,16 @@ import { DEFAULT_MODELS } from "./models.ts";
 import { DeclinedError, NoChangesError, runReview, type Preflight } from "./pipeline.ts";
 import { ensureStateDir } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
-import type { Finding, ReviewOutput, Summary, Verdict } from "./schemas.ts";
+import {
+  FindingsOutput,
+  type CheckedRoughEdge,
+  type Finding,
+  type ReviewOutput,
+  type RoughEdge,
+  type RoughEdgeChecks,
+  type Summary,
+  type Verdict,
+} from "./schemas.ts";
 import { OWN_CHECKOUT, type Trust } from "./trust.ts";
 import { createReviewWorktree } from "./worktree.ts";
 
@@ -53,7 +62,7 @@ function makeFinding(localId: string): Finding {
   };
 }
 
-const output: ReviewOutput = { findings: [makeFinding("1")] };
+const output: ReviewOutput = { findings: [makeFinding("1")], roughEdges: [] };
 
 const confirmed: Verdict = {
   verdict: "confirmed",
@@ -73,7 +82,7 @@ const summary: Summary = {
 };
 
 interface StubOptions {
-  review?: ReviewOutput;
+  review?: ReviewOutput | FindingsOutput;
   /** Summarizer answer; null makes the summarizer fail with invalid_output. */
   summary?: Summary | null;
   /** Verifier answer; null makes the verifier fail with invalid_output. */
@@ -153,7 +162,11 @@ describe("runReview", () => {
         during = JSON.parse(await readFile(path.join(runRoot, "run.json"), "utf8"));
       },
     });
-    const { runDir, checkout } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+    const { runDir, checkout } = await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+    });
 
     expect(during).toMatchObject({
       status: "running",
@@ -191,7 +204,11 @@ describe("runReview", () => {
 
   it("writes the prompt, raw output, findings and run.json", async () => {
     const { runAgent, tasks } = stubAgent();
-    const { runDir, findings } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+    const { runDir, findings } = await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+    });
 
     expect(findings.map((f) => f.id)).toEqual(["F-001"]);
     expect(tasks[0]?.model).toBe("claude-sonnet-5-5");
@@ -217,7 +234,11 @@ describe("runReview", () => {
         costSource: "reported",
         durationMs: 10,
       }),
-      expect.objectContaining({ taskId: "verifier-F-001", step: "verify", effort: "high" }),
+      expect.objectContaining({
+        taskId: "verifier-F-001",
+        step: "verify",
+        effort: "high",
+      }),
     ]);
 
     const run = JSON.parse(await readFile(runDir.runJsonPath, "utf8"));
@@ -268,7 +289,10 @@ describe("runReview", () => {
       host: "github.com",
       repo: "acme/app",
       baseBranch: "main",
-      headSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
+      headSha: execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repo,
+        encoding: "utf8",
+      }).trim(),
       isCrossRepository: false,
     };
     await ensureStateDir(repo);
@@ -295,7 +319,10 @@ describe("runReview", () => {
 
   it("computes the cost from tokens when a task reports none", async () => {
     const { runAgent: base } = stubAgent();
-    const runAgent: RunAgent = async (task) => ({ ...(await base(task)), costUsd: null });
+    const runAgent: RunAgent = async (task) => ({
+      ...(await base(task)),
+      costUsd: null,
+    });
     const result = await runReview({ ...baseOptions, cwd: repo, runAgent });
 
     expect(result.costUsd).toBeGreaterThan(0);
@@ -321,7 +348,10 @@ describe("runReview", () => {
   });
 
   it("verifies every finding in a fresh task and writes verdicts.json", async () => {
-    const review = { findings: ["1", "2", "3", "4", "5"].map(makeFinding) };
+    const review = {
+      findings: ["1", "2", "3", "4", "5"].map(makeFinding),
+      roughEdges: [],
+    };
     let active = 0;
     let maxActive = 0;
     const { runAgent, tasks } = stubAgent({
@@ -336,7 +366,10 @@ describe("runReview", () => {
     });
     const { runDir, verdicts } = await runReview({
       ...baseOptions,
-      models: { ...DEFAULT_MODELS.claude, verifier: { model: "other-model", effort: "low" } },
+      models: {
+        ...DEFAULT_MODELS.claude,
+        verifier: { model: "other-model", effort: "low" },
+      },
       cwd: repo,
       runAgent,
     });
@@ -401,7 +434,10 @@ describe("runReview", () => {
   });
 
   it("starts other verifiers only once the first one shows activity", async () => {
-    const review = { findings: ["1", "2", "3"].map(makeFinding) };
+    const review = {
+      findings: ["1", "2", "3"].map(makeFinding),
+      roughEdges: [],
+    };
     const events: string[] = [];
     const { runAgent } = stubAgent({
       review,
@@ -422,12 +458,16 @@ describe("runReview", () => {
   });
 
   it("applies the verdict rules and marks failed verifiers inconclusive", async () => {
-    const review = { findings: ["1", "2"].map(makeFinding) };
+    const review = { findings: ["1", "2"].map(makeFinding), roughEdges: [] };
     const { runAgent } = stubAgent({
       review,
       verdict: (task) => (task.taskId === "verifier-F-001" ? { ...confirmed, evidence: [] } : null),
     });
-    const { runDir, verdicts } = await runReview({ ...baseOptions, cwd: repo, runAgent });
+    const { runDir, verdicts } = await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+    });
 
     expect(verdicts["F-001"]?.verdict).toBe("inconclusive");
     expect(verdicts["F-002"]).toMatchObject({
@@ -446,7 +486,10 @@ describe("runReview", () => {
   });
 
   it("aborts when a verifier changes the working tree, without starting queued ones", async () => {
-    const review = { findings: ["1", "2", "3", "4", "5", "6"].map(makeFinding) };
+    const review = {
+      findings: ["1", "2", "3", "4", "5", "6"].map(makeFinding),
+      roughEdges: [],
+    };
     const { runAgent, tasks } = stubAgent({
       review,
       effect: async (task) => {
@@ -462,7 +505,10 @@ describe("runReview", () => {
   });
 
   it("signals in-flight verifiers to stop when the working tree changes", async () => {
-    const review = { findings: ["1", "2", "3"].map(makeFinding) };
+    const review = {
+      findings: ["1", "2", "3"].map(makeFinding),
+      roughEdges: [],
+    };
     const { runAgent, tasks } = stubAgent({
       review,
       effect: async (task) => {
@@ -475,7 +521,9 @@ describe("runReview", () => {
         task.onProgress({ tool: "Read", detail: null });
         // Stands in for a long session: only ends once the pipeline aborts it.
         await new Promise<void>((resolve) => {
-          task.signal?.addEventListener("abort", () => resolve(), { once: true });
+          task.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
         });
       },
     });
@@ -506,7 +554,12 @@ describe("runReview", () => {
     expect(run.totals).toMatchObject({ calls: 1, costUsd: 0.5 });
     expect(await readCalls(path.join(root, "calls.jsonl"))).toHaveLength(1);
     expect(await readIndex(repo)).toEqual([
-      expect.objectContaining({ id: runName, status: "failed", findings: null, verdicts: null }),
+      expect.objectContaining({
+        id: runName,
+        status: "failed",
+        findings: null,
+        verdicts: null,
+      }),
     ]);
   });
 
@@ -524,9 +577,11 @@ describe("runReview", () => {
     expect(run.head.snapshotSha).toMatch(/^[0-9a-f]{40}$/);
     expect(run.head.snapshotSha).not.toBe(run.head.sha);
     // The developer's index still has nothing staged.
-    expect(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: repo }).toString()).toBe(
-      "",
-    );
+    expect(
+      execFileSync("git", ["diff", "--cached", "--name-only"], {
+        cwd: repo,
+      }).toString(),
+    ).toBe("");
   });
 
   it("reviews HEAD only with committedOnly", async () => {
@@ -572,7 +627,10 @@ describe("runReview summary", () => {
     const result = await runReview({ ...withSummary, cwd: repo, runAgent });
 
     const summarizer = tasks.find((t) => t.role === "summarizer");
-    expect(summarizer).toMatchObject({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(summarizer).toMatchObject({
+      model: "claude-sonnet-5-5",
+      effort: "medium",
+    });
     expect(summarizer?.sharedContext).toContain("+b");
     expect(summarizer?.sharedContext).toBe(tasks.find((t) => t.role === "verifier")?.sharedContext);
     expect(summarizer?.prompt).toContain("Commit messages, oldest first:");
@@ -600,7 +658,13 @@ describe("runReview summary", () => {
       headSha: "x",
       isCrossRepository: false,
     };
-    await runReview({ ...withSummary, cwd: repo, runAgent, pr, prBody: "Fixes ``` #3" });
+    await runReview({
+      ...withSummary,
+      cwd: repo,
+      runAgent,
+      pr,
+      prBody: "Fixes ``` #3",
+    });
     const prompt = tasks.find((t) => t.role === "summarizer")?.prompt;
     expect(prompt).toContain(
       "Title and description of PR #7:\n\n````\nAdd b\n\nFixes ``` #3\n````",
@@ -611,7 +675,10 @@ describe("runReview summary", () => {
     const { runAgent } = stubAgent({ summary: null });
     const result = await runReview({ ...withSummary, cwd: repo, runAgent });
 
-    expect(result.summary).toEqual({ status: "failed", error: "invalid_output: bad json" });
+    expect(result.summary).toEqual({
+      status: "failed",
+      error: "invalid_output: bad json",
+    });
     expect(result.findings).toHaveLength(1);
     await expect(readFile(result.runDir.summaryPath)).rejects.toThrow();
     expect(await readFile(result.runDir.reportPath, "utf8")).toContain("Summary missing");
@@ -619,7 +686,12 @@ describe("runReview summary", () => {
 
   it("summarizes only, without Find, when find is off", async () => {
     const { runAgent, tasks } = stubAgent();
-    const result = await runReview({ ...withSummary, find: false, cwd: repo, runAgent });
+    const result = await runReview({
+      ...withSummary,
+      find: false,
+      cwd: repo,
+      runAgent,
+    });
 
     expect(tasks.map((t) => t.role)).toEqual(["summarizer"]);
     expect(result.summary?.status).toBe("ok");
@@ -628,7 +700,10 @@ describe("runReview summary", () => {
     const report = await readFile(result.runDir.reportPath, "utf8");
     expect(report).toContain("## Summary");
     expect(report).not.toContain("finding");
-    expect((await readIndex(repo)).at(-1)).toMatchObject({ findings: null, verdicts: null });
+    expect((await readIndex(repo)).at(-1)).toMatchObject({
+      findings: null,
+      verdicts: null,
+    });
   });
 
   it("fails a summary-only run when the summarizer fails", async () => {
@@ -647,7 +722,9 @@ describe("runReview summary", () => {
         }
         if (task.role !== "reviewer") return;
         await new Promise<void>((resolve) => {
-          task.signal?.addEventListener("abort", () => resolve(), { once: true });
+          task.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
         });
       },
     });
@@ -684,7 +761,11 @@ describe("runReview trust", () => {
       }),
     ).rejects.toBeInstanceOf(DeclinedError);
     expect(asked).toEqual([
-      { trust: fork, diff: { files: 1, additions: 1, deletions: 0 }, estimate: null },
+      {
+        trust: fork,
+        diff: { files: 1, additions: 1, deletions: 0 },
+        estimate: null,
+      },
     ]);
     expect(tasks).toEqual([]);
     await expect(readdir(path.join(repo, ".review-flow", "runs"))).rejects.toThrow();
@@ -693,7 +774,12 @@ describe("runReview trust", () => {
   it("doesn't ask for targets that aren't external", async () => {
     const { runAgent } = stubAgent();
     let asked = 0;
-    await runReview({ ...baseOptions, cwd: repo, runAgent, confirmSpend: async () => !!++asked });
+    await runReview({
+      ...baseOptions,
+      cwd: repo,
+      runAgent,
+      confirmSpend: async () => !!++asked,
+    });
     expect(asked).toBe(0);
   });
 
@@ -708,5 +794,103 @@ describe("runReview trust", () => {
     });
     expect(tasks.length).toBeGreaterThan(0);
     expect(JSON.parse(await readFile(runDir.runJsonPath, "utf8")).status).toBe("ok");
+  });
+  describe("rough edges", () => {
+    const edge = (localId: string): RoughEdge => ({
+      localId,
+      title: `Edge ${localId}`,
+      file: "a.txt",
+      lineStart: 2,
+      lineEnd: 2,
+      lens: "design",
+      priority: "medium",
+      observation: "o",
+      suggestion: "s",
+    });
+    const withEdges: ReviewOutput = {
+      findings: [],
+      roughEdges: ["1", "2", "3"].map(edge),
+    };
+    const checks = (answer: RoughEdgeChecks) => () => answer as unknown as Verdict;
+    const check = (localId: string, status: RoughEdgeChecks["checks"][number]["status"]) => ({
+      localId,
+      status,
+      note: `n${localId}`,
+      priority: "low" as const,
+    });
+
+    it("checks all edges in one verifier session and saves them with their checks", async () => {
+      const { runAgent, tasks } = stubAgent({
+        review: withEdges,
+        verdict: checks({
+          checks: [
+            check("R-001", "accurate"),
+            check("R-002", "inaccurate"),
+            check("R-003", "unclear"),
+          ],
+        }),
+      });
+      const result = await runReview({ ...baseOptions, cwd: repo, runAgent });
+
+      expect(tasks.map((t) => t.taskId)).toEqual(["reviewer", "verifier-rough-edges"]);
+      expect(tasks[1]!.sharedContext).toContain("diff");
+      expect(result.roughEdges.map((e) => [e.id, e.check.status])).toEqual([
+        ["R-001", "accurate"],
+        ["R-002", "inaccurate"],
+        ["R-003", "unclear"],
+      ]);
+      const saved = JSON.parse(
+        await readFile(result.runDir.roughEdgesPath, "utf8"),
+      ) as CheckedRoughEdge[];
+      expect(saved).toHaveLength(3);
+      const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
+      expect(Object.keys(run.steps)).toEqual(["collect", "review", "verify", "check", "report"]);
+      expect(run.steps.check).toMatchObject({ calls: 1 });
+      expect(run.steps.verify).toMatchObject({ calls: 0 });
+      const report = await readFile(result.runDir.reportPath, "utf8");
+      expect(report).toContain("## Rough edges (2)");
+      expect(report).not.toContain("R-002");
+    });
+
+    it("marks every edge unclear when the checker fails, without failing the run", async () => {
+      const warnings: string[] = [];
+      const { runAgent } = stubAgent({
+        review: withEdges,
+        verdict: () => null,
+      });
+      const result = await runReview({
+        ...baseOptions,
+        cwd: repo,
+        runAgent,
+        warn: (m) => warnings.push(m),
+      });
+      expect(result.roughEdges.map((e) => e.check.status)).toEqual([
+        "unclear",
+        "unclear",
+        "unclear",
+      ]);
+      expect(warnings.join("\n")).toContain("Rough edge check failed");
+    });
+
+    it("runs no checker without rough edges", async () => {
+      const { runAgent, tasks } = stubAgent({ review: { findings: [], roughEdges: [] } });
+      await runReview({ ...baseOptions, cwd: repo, runAgent });
+      expect(tasks.map((t) => t.taskId)).toEqual(["reviewer"]);
+      expect(tasks[0]!.prompt).toContain("## Rough edges");
+    });
+
+    it("asks the reviewer for no rough edges when off", async () => {
+      const off = stubAgent({ review: { findings: [] } });
+      const result = await runReview({
+        ...baseOptions,
+        cwd: repo,
+        runAgent: off.runAgent,
+        roughEdges: false,
+      });
+      expect(off.tasks[0]!.prompt).not.toContain("## Rough edges");
+      expect(off.tasks[0]!.schema).toBe(FindingsOutput);
+      expect(off.tasks.map((t) => t.taskId)).toEqual(["reviewer"]);
+      expect(result.roughEdges).toEqual([]);
+    });
   });
 });
