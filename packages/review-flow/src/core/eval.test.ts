@@ -11,7 +11,8 @@ import type { CaseResult } from "./eval-score.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
 import { readIndex } from "./run-index.ts";
-import type { FindingsOutput, Verdict } from "./schemas.ts";
+import { ROUGH_EDGE_CHECKER_TASK_ID } from "./rough-edges.ts";
+import type { FindingsOutput, ReviewOutput, RoughEdgeChecks, Verdict } from "./schemas.ts";
 
 let tmp: string;
 let remote: string;
@@ -196,6 +197,74 @@ describe("runEval", () => {
         costUsd: 1.5,
       }),
     ]);
+  });
+
+  it("scores rough edges apart from findings when asked for", async () => {
+    const edge = (localId: string): ReviewOutput["roughEdges"][number] => ({
+      localId,
+      title: `edge ${localId}`,
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      observation: "o",
+      suggestion: "s",
+    });
+    const withEdges: ReviewOutput = { ...review, roughEdges: ["1", "2", "3"].map(edge) };
+    const checks: RoughEdgeChecks = {
+      checks: [
+        { localId: "R-001", status: "accurate", note: "n" },
+        { localId: "R-002", status: "unclear", note: "n" },
+        { localId: "R-003", status: "inaccurate", note: "n" },
+      ],
+    };
+    const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? withEdges
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? checks
+            : confirmed;
+      return {
+        status: "ok",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        error: null,
+        costUsd: 0.25,
+        usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([bugCase("hit", 2), evalCase("clean")], runAgent),
+      roughEdges: true,
+    });
+
+    const counts = { accurate: 1, unclear: 1, inaccurate: 1, checkCostUsd: 0.25 };
+    expect(result.cases.map((c) => c.roughEdges)).toEqual([counts, counts]);
+    // Findings are scored as without rough edges.
+    expect(result.scores).toMatchObject({ found: 1, cleanFindings: 1, costUsd: 1.5 });
+    expect(result.scores.roughEdges).toEqual({
+      cases: 2,
+      accurate: 2,
+      unclear: 2,
+      inaccurate: 2,
+      keptPerCase: 2,
+      keptPerCleanCase: 2,
+      checkCostUsd: 0.5,
+      unknownCheckCost: 0,
+    });
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.run.roughEdges).toBe(true);
+    expect(loaded.run.steps.check).toMatchObject({ calls: 2, costUsd: 0.5 });
+  });
+
+  it("leaves rough edges out of the results by default", async () => {
+    const result = await runEval(options([evalCase("clean")]));
+    expect(result.cases[0]).not.toHaveProperty("roughEdges");
+    expect(result.scores).not.toHaveProperty("roughEdges");
   });
 
   it("reuses the clone on the next eval", async () => {

@@ -295,6 +295,43 @@ describe("formatEval", () => {
   });
 });
 
+describe("formatEval with rough edges", () => {
+  it("adds a rough-edge column and scores", () => {
+    const cases = [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: { accurate: 1, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 },
+      },
+      {
+        ...caseResult("d-4", "clean", 0),
+        roughEdges: { accurate: 0, unclear: 0, inaccurate: 0, checkCostUsd: 0 },
+      },
+    ];
+    const text = formatEval({ root: "/r", cases, scores: summarizeCases(cases) }, plain);
+    expect(text).toMatch(/Case\s+Kind\s+Result\s+Rough edges\s+Cost/);
+    expect(text).toMatch(/a-1\s+bug\s+found\s+2\/3\s+\$0.50/);
+    expect(text).toMatch(/Rough edges kept per case\s+1.00 \(1 accurate, 1 unclear; 1 dropped\)/);
+    expect(text).toMatch(/Rough edges kept per clean case\s+0.00/);
+    expect(text).toMatch(/Rough edge check cost per case\s+\$0.05/);
+  });
+
+  it("shows off for an eval without them in compare", () => {
+    const on = loadedEval("eval-on", [
+      {
+        ...caseResult("a-1", "bug", "found"),
+        roughEdges: { accurate: 1, unclear: 0, inaccurate: 0, checkCostUsd: 0.1 },
+      },
+    ]);
+    const off = loadedEval("eval-off", [caseResult("a-1", "bug", "found")]);
+    expect(formatEvalCompare(off, on, plain)).toMatch(
+      /Rough edges kept per case\s+off\s+1.00 .*\s+-\n/,
+    );
+    expect(
+      formatEval({ root: "/r", cases: off.cases, scores: off.run.scores }, plain),
+    ).not.toContain("Rough edge");
+  });
+});
+
 describe("formatEvalCompare", () => {
   const a = loadedEval("eval-a", [
     caseResult("a-1", "bug", "found"),

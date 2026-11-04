@@ -1,6 +1,6 @@
 import { MATCH_TOLERANCE_LINES } from "./compare.ts";
 import type { BugLocation, EvalBug, EvalCase } from "./eval-dataset.ts";
-import type { NormalizedFinding, Verdict } from "./schemas.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
 export interface BugResult {
   description: string;
@@ -14,6 +14,15 @@ export interface BugResult {
   judged?: true;
   /** What matching by location alone gave, kept for comparison; only with `judged`. */
   byLocation?: { found: boolean; foundByReviewer: boolean };
+}
+
+/** A case's rough edges by the checker's status, and what the check cost. */
+export interface RoughEdgeResult {
+  accurate: number;
+  unclear: number;
+  inaccurate: number;
+  /** The `check` step; 0 when there was nothing to check, null when its cost is unknown. */
+  checkCostUsd: number | null;
 }
 
 /** One line of cases.json. */
@@ -34,6 +43,8 @@ export interface CaseResult {
   durationMs: number;
   /** The judge call: null or absent when the case wasn't judged. Its cost isn't in `costUsd`. */
   judge?: JudgeCall | null;
+  /** Absent when the eval ran without rough edges; null when the case failed before review. */
+  roughEdges?: RoughEdgeResult | null;
 }
 
 export interface JudgeCall {
@@ -68,6 +79,24 @@ export interface EvalScores {
   locationRecall?: number | null;
   /** Sum of the judge calls' cost; only when some case was judged. */
   judgeCostUsd?: number | null;
+  /** Only when the eval ran with rough edges. */
+  roughEdges?: RoughEdgeScores;
+}
+
+export interface RoughEdgeScores {
+  /** Cases that finished with rough edges on. */
+  cases: number;
+  accurate: number;
+  unclear: number;
+  inaccurate: number;
+  /** Rough edges the checker kept (not inaccurate), per case; null when no case finished. */
+  keptPerCase: number | null;
+  /** Kept ones on clean cases, per clean case; null when no clean case finished. */
+  keptPerCleanCase: number | null;
+  /** Sum of the check steps; null when none has a cost. Included in `costUsd`. */
+  checkCostUsd: number | null;
+  /** Cases whose check cost is unknown; when above 0, `checkCostUsd` is a lower bound. */
+  unknownCheckCost: number;
 }
 
 /** Same file, and the line ranges overlap or are at most MATCH_TOLERANCE_LINES apart. */
@@ -120,6 +149,42 @@ export function judgeBugs(
   });
 }
 
+export function countRoughEdges(
+  edges: readonly CheckedRoughEdge[],
+  checkCostUsd: number | null,
+): RoughEdgeResult {
+  const count = (status: CheckedRoughEdge["check"]["status"]) =>
+    edges.filter((e) => e.check.status === status).length;
+  return {
+    accurate: count("accurate"),
+    unclear: count("unclear"),
+    inaccurate: count("inaccurate"),
+    checkCostUsd,
+  };
+}
+
+const kept = (r: RoughEdgeResult) => r.accurate + r.unclear;
+
+function summarizeRoughEdges(ok: readonly CaseResult[]): RoughEdgeScores | undefined {
+  const scored = ok.flatMap((c) =>
+    c.roughEdges == null ? [] : [{ kind: c.kind, ...c.roughEdges }],
+  );
+  if (scored.length === 0) return undefined;
+  const sum = (values: readonly number[]) => values.reduce((a, b) => a + b, 0);
+  const clean = scored.filter((r) => r.kind === "clean");
+  const costs = scored.flatMap((r) => (r.checkCostUsd === null ? [] : [r.checkCostUsd]));
+  return {
+    cases: scored.length,
+    accurate: sum(scored.map((r) => r.accurate)),
+    unclear: sum(scored.map((r) => r.unclear)),
+    inaccurate: sum(scored.map((r) => r.inaccurate)),
+    keptPerCase: sum(scored.map(kept)) / scored.length,
+    keptPerCleanCase: clean.length === 0 ? null : sum(clean.map(kept)) / clean.length,
+    checkCostUsd: costs.length === 0 ? null : sum(costs),
+    unknownCheckCost: scored.length - costs.length,
+  };
+}
+
 export function countReported(verdicts: Readonly<Record<string, Verdict>>): number {
   return Object.values(verdicts).filter((v) => v.verdict !== "refuted").length;
 }
@@ -134,6 +199,7 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
   const judged = bugs.filter((b) => b.judged === true);
   const judgeCosts = ok.flatMap((c) => (c.judge?.costUsd == null ? [] : [c.judge.costUsd]));
   const costs = cases.flatMap((c) => (c.costUsd === null ? [] : [c.costUsd]));
+  const roughEdges = summarizeRoughEdges(ok);
   return {
     cases: cases.length,
     failed: cases.length - ok.length,
@@ -157,5 +223,6 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
               : bugs.filter((b) => (b.byLocation?.found ?? b.found) === true).length / bugs.length,
           judgeCostUsd: judgeCosts.length === 0 ? null : judgeCosts.reduce((a, b) => a + b, 0),
         }),
+    ...(roughEdges === undefined ? {} : { roughEdges }),
   };
 }

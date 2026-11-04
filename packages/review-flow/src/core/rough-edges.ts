@@ -19,7 +19,12 @@ export function buildRoughEdgeCheckerPrompt(
   edges: readonly NormalizedRoughEdge[],
   change: ChangeRange,
 ): string {
-  const items = edges
+  return renderPrompt(template, { ...change, items: describeRoughEdges(edges) });
+}
+
+/** Each rough edge as the reviewer wrote it, for a prompt; shared by the checker and eval judge. */
+export function describeRoughEdges(edges: readonly NormalizedRoughEdge[]): string {
+  return edges
     .map((edge) =>
       [
         `### ${edge.id}: ${edge.title}`,
@@ -29,7 +34,6 @@ export function buildRoughEdgeCheckerPrompt(
       ].join("\n\n"),
     )
     .join("\n\n");
-  return renderPrompt(template, { ...change, items });
 }
 
 /**

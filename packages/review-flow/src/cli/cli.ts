@@ -381,6 +381,7 @@ interface EvalOptions extends AgentOptions {
   fixDiff: boolean;
   /** false with --no-judge. */
   judge: boolean;
+  roughEdges: boolean;
   smoke: boolean;
   full: boolean;
   summary: boolean;
@@ -414,6 +415,7 @@ async function evaluate(options: EvalOptions): Promise<void> {
       dataset,
       subset,
       summarize: options.summary,
+      roughEdges: options.roughEdges,
       checkoutsDir: path.resolve(userCwd, options.checkouts),
       ...progressHooks(progress),
       verbose: options.verbose,
@@ -539,6 +541,11 @@ addJudgeOptions(
       .option("--full", "all cases, not only the baseline set (12 cases)", false)
       .option("--no-summary", "skip the summary of each case")
       .option("--no-judge", "match findings to known bugs by location only")
+      .option(
+        "--rough-edges",
+        "also ask for rough edges, and score them apart from findings",
+        false,
+      )
       .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
   ),
 )

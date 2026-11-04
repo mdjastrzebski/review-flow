@@ -7,6 +7,7 @@ import { fetchFixDiffs } from "./eval-fixes.ts";
 import { judgeCase, type JudgeResult } from "./eval-judge.ts";
 import {
   countReported,
+  countRoughEdges,
   judgeBugs,
   scoreBugs,
   summarizeCases,
@@ -14,6 +15,7 @@ import {
   type CaseResult,
   type EvalScores,
   type JudgeCall,
+  type RoughEdgeResult,
 } from "./eval-score.ts";
 import { describeModel, formatCost, formatDuration } from "./format.ts";
 import { checkoutDetached, ensureClone, resolveRepoRoot, WorkingTreeChangedError } from "./git.ts";
@@ -40,6 +42,8 @@ export interface EvalRunOptions {
   subset?: EvalSubset | undefined;
   /** Run Summarize on each case (default: true). */
   summarize?: boolean;
+  /** Ask for rough edges and score them apart from findings (default: false). */
+  roughEdges?: boolean;
   /** One clone per case repo, reused across evals. */
   checkoutsDir: string;
   /** Model of the judge that matches findings to known bugs; absent: match by location alone. */
@@ -61,6 +65,8 @@ export interface EvalRunRecord {
   kind: "eval";
   harness: Harness;
   models: RoleModels;
+  /** Absent in evals from before rough edges could be on. */
+  roughEdges?: boolean;
   dataset: { dir: string; subset: EvalSubset | null; cases: string[] };
   startedAt: string;
   finishedAt: string;
@@ -99,9 +105,18 @@ export function caseOutcome(result: CaseResult): string {
   return result.bugs.some((b) => b.foundByReviewer) ? "refuted" : "missed";
 }
 
-/** Outcome, cost, and time; plus the error of a failed case. */
+/** `N kept (A accurate, U unclear, I inaccurate)`; null when the case has no rough-edge result. */
+export function roughEdgeOutcome(result: CaseResult): string | null {
+  const r = result.roughEdges;
+  if (r == null) return null;
+  return `${r.accurate + r.unclear} kept (${r.accurate} accurate, ${r.unclear} unclear, ${r.inaccurate} inaccurate)`;
+}
+
+/** Outcome, rough edges when on, cost, and time; plus the error of a failed case. */
 export function describeCase(result: CaseResult): string {
   const parts = [caseOutcome(result)];
+  const edges = roughEdgeOutcome(result);
+  if (edges !== null) parts.push(`rough edges ${edges}`);
   if (result.costUsd !== null) {
     parts.push(`${result.unknownCostCalls > 0 ? "≥" : ""}${formatCost(result.costUsd)}`);
   }
@@ -174,8 +189,8 @@ async function runCase(
       ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       runRoot: caseRoot,
-      // Evals score findings only; rough edges are measured apart (PLAN).
-      roughEdges: false,
+      // Off by default so finding scores stay comparable; scored apart when on (spec 11).
+      roughEdges: options.roughEdges ?? false,
       ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
@@ -212,6 +227,13 @@ async function runCase(
       );
     }
   }
+  let roughEdges: RoughEdgeResult | null | undefined;
+  if (options.roughEdges) {
+    const check = run?.steps.check;
+    // No check step: the reviewer returned none, so nothing was spent.
+    const checkCost = check === undefined ? 0 : check.unknownCostCalls > 0 ? null : check.costUsd;
+    roughEdges = review === null ? null : countRoughEdges(review.roughEdges, checkCost);
+  }
   const result: CaseResult = {
     id: evalCase.id,
     kind: evalCase.kind,
@@ -225,6 +247,7 @@ async function runCase(
     unknownCostCalls: run?.totals.unknownCostCalls ?? 0,
     durationMs: run?.totals.durationMs ?? 0,
     ...(judge === null ? {} : { judge }),
+    ...(roughEdges === undefined ? {} : { roughEdges }),
   };
   return { result, run };
 }
@@ -261,6 +284,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
   setup.push(
     ["Reviewer", describeModel(models.reviewer)],
     ["Verifier", describeModel(models.verifier)],
+    ["Rough edges", options.roughEdges ? "on" : "off"],
     ["Cases", `${options.cases.length}${options.subset ? ` (${options.subset} set)` : ""}`],
     ["Dataset", options.dataset],
     ["Run dir", root],
@@ -298,6 +322,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
       kind: "eval",
       harness,
       models,
+      roughEdges: options.roughEdges ?? false,
       dataset: {
         dir: options.dataset,
         subset: options.subset ?? null,

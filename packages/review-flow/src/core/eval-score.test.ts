@@ -224,3 +224,46 @@ describe("summarizeCases", () => {
     });
   });
 });
+
+describe("summarizeCases with rough edges", () => {
+  const base: CaseResult = {
+    id: "x",
+    kind: "bug",
+    preset: "full",
+    status: "ok",
+    error: null,
+    findings: 0,
+    reported: 0,
+    bugs: [],
+    costUsd: 1,
+    unknownCostCalls: 0,
+    durationMs: 1,
+  };
+
+  it("sums verdicts, kept per case and per clean case, and check cost", () => {
+    const scores = summarizeCases([
+      { ...base, roughEdges: { accurate: 2, unclear: 1, inaccurate: 1, checkCostUsd: 0.1 } },
+      {
+        ...base,
+        kind: "clean",
+        roughEdges: { accurate: 0, unclear: 1, inaccurate: 0, checkCostUsd: null },
+      },
+      // A failed case isn't scored.
+      { ...base, status: "failed", roughEdges: null },
+    ]);
+    expect(scores.roughEdges).toEqual({
+      cases: 2,
+      accurate: 2,
+      unclear: 2,
+      inaccurate: 1,
+      keptPerCase: 2,
+      keptPerCleanCase: 1,
+      checkCostUsd: 0.1,
+      unknownCheckCost: 1,
+    });
+  });
+
+  it("has no rough-edge scores when no case ran with them", () => {
+    expect(summarizeCases([base])).not.toHaveProperty("roughEdges");
+  });
+});
