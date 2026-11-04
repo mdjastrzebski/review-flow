@@ -17,6 +17,8 @@ For each observation, return its id (such as `R-001`) as `localId`, a `status`, 
 - `inaccurate`: the code is not as described, a reason in the repo (a convention, a constraint, a caller) makes it the right way, or the suggestion would make things worse or is not applicable, or the problem is local to one function or call site and the fix is a small edit (a rename, an argument change, a closure variable).
 - `unclear`: the code is as described, but whether it is worth changing is a matter of taste or depends on things outside the repo.
 
+A suggestion does not need precedent in the repo: it may propose a simpler design the repo does not use yet. Judge such a suggestion on whether it preserves the behavior callers and tests rely on, whether the code it would remove or replace is really as described, and whether it is simpler overall, not just different. Do not mark it `inaccurate` only because the repo does it the current way.
+
 Judge only what is in the observation; do not add your own. Return one check per observation.
 
 Your final answer must be a single JSON object matching the required schema, with no other text.

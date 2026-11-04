@@ -46,3 +46,16 @@ Takeaways:
 - **LLM judges vs line matching.** Martian and Tenki match findings to bugs with LLM judges (Tenki: 2 of 3 must agree). We match by file and line, which is free and repeatable, but needs exact locations.
 - **Qodo** injects defects into 100 real PRs (MIT). Injected bugs are less realistic than real ones.
 - **Vendor bias.** Each vendor's own tool wins its benchmark.
+
+## Cursor: thermo-nuclear code quality review
+
+<https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md>
+
+A manual, very strict maintainability review skill. Checked on 2026-11-04 when making rough edges more ambitious.
+
+Takeaways:
+
+- **Look for the simpler design.** "Code judo": reframe the problem so complexity is deleted, not rearranged. We added this as a second question in the rough-edges prompt.
+- **Name the smells.** Spaghetti growth (conditionals in unrelated flows, "temporary" branches), thin wrappers, loose types and casts, logic outside its canonical layer, serial independent work, half-applied state, files past about 1000 lines.
+- **Few, high-conviction comments**, ranked: structural regressions, missed simplifications, branching growth, boundary and type problems, size.
+- **Don't soften major issues.** We took the tone; not the "presumptive blocker" approval bar, since we never approve or reject.
