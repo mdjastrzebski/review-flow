@@ -4,6 +4,8 @@ import {
   buildReview,
   currentPrHead,
   formatLocation,
+  isPreselected,
+  itemSubject,
   postableItems,
   postableRoughEdges,
   postReview,
@@ -13,6 +15,7 @@ import {
   writeJson,
   type CheckedRoughEdge,
   type NormalizedFinding,
+  type PostableItem,
   type PostedRecord,
   type RunRecord,
   type Summary,
@@ -21,6 +24,13 @@ import {
 import { confirm, interactive, note, pick, type Choice } from "./prompt.ts";
 
 type Paint = (style: Parameters<typeof styleText>[0], text: string) => string;
+
+/** Short classification after the id, such as `high confirmed`, and an optional note. */
+function itemLabel(item: PostableItem): { tag: string; hint: string | null } {
+  return item.kind === "finding"
+    ? { tag: `${item.verdict.severity} ${item.verdict.verdict}`, hint: null }
+    : { tag: `${item.edge.lens} rough edge`, hint: "not a defect" };
+}
 
 /** The picker entry for the run's summary; finding ids look like `F-001`. */
 const SUMMARY = "summary";
@@ -59,13 +69,17 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
     if (!(await confirm("Post again?"))) return;
   }
 
-  const choices: Choice<string>[] = items.map((item) => ({
-    value: item.id,
-    label:
-      `${paint("bold", item.id)} ${item.tag}  ` +
-      `${paint("cyan", formatLocation(item.location))}  ${item.title}`,
-    ...(item.hint === null ? {} : { hint: item.hint }),
-  }));
+  const choices: Choice<string>[] = items.map((item) => {
+    const subject = itemSubject(item);
+    const { tag, hint } = itemLabel(item);
+    return {
+      value: subject.id,
+      label:
+        `${paint("bold", subject.id)} ${tag}  ` +
+        `${paint("cyan", formatLocation(subject))}  ${subject.title}`,
+      ...(hint === null ? {} : { hint }),
+    };
+  });
   if (summary !== null) {
     choices.unshift({
       value: SUMMARY,
@@ -75,11 +89,11 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   }
   const initial = [
     ...(summary === null ? [] : [SUMMARY]),
-    ...items.flatMap((item) => (item.preselected ? [item.id] : [])),
+    ...items.flatMap((item) => (isPreselected(item) ? [itemSubject(item).id] : [])),
   ];
   const picked = await pick(`Post to PR #${pr.number}: ${pr.title}`, choices, initial);
   if (picked === null) return;
-  const selected = items.filter((item) => picked.includes(item.id));
+  const selected = items.filter((item) => picked.includes(itemSubject(item).id));
   if (selected.length === 0 && !picked.includes(SUMMARY)) {
     note.info("Nothing selected.");
     return;

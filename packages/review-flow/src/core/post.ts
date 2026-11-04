@@ -8,24 +8,31 @@ import type { TrustLevel } from "./trust.ts";
 
 export const REVIEW_FLOW_URL = "https://github.com/mdjastrzebski/review-flow";
 
-/** Anything the user can pick to post: a finding or a rough edge, ready to place and render. */
-export interface PostableItem {
-  /** Finding id (`F-001`) or rough edge id (`R-001`). */
-  id: string;
-  kind: "finding" | "rough-edge";
-  location: Pick<NormalizedFinding, "file" | "lineStart" | "lineEnd">;
-  title: string;
-  /** Short classification shown after the id in the selection list, such as `high confirmed`. */
-  tag: string;
-  /** Extra note for the selection list. */
-  hint: string | null;
-  /** Markdown of the comment as posted. */
-  body: string;
-  /** Confirmed findings of medium severity or higher start selected; rough edges never do. */
-  preselected: boolean;
+/** Anything the user can pick to post: a finding with its verdict, or a rough edge. */
+export type PostableItem =
+  | { kind: "finding"; finding: NormalizedFinding; verdict: Verdict }
+  | { kind: "rough-edge"; edge: CheckedRoughEdge };
+
+/** The record behind an item: its id (`F-001`, `R-001`), title and location. */
+export function itemSubject(item: PostableItem): NormalizedFinding | CheckedRoughEdge {
+  return item.kind === "finding" ? item.finding : item.edge;
+}
+
+/** Markdown of the item's comment as posted. */
+export function itemBody(item: PostableItem): string {
+  return item.kind === "finding" ? commentBody(item) : roughEdgeBody(item.edge);
 }
 
 const PRESELECTED_SEVERITIES: ReadonlySet<Severity> = new Set(["critical", "high", "medium"]);
+
+/** Confirmed findings of medium severity or higher start selected; rough edges never do. */
+export function isPreselected(item: PostableItem): boolean {
+  return (
+    item.kind === "finding" &&
+    item.verdict.verdict === "confirmed" &&
+    PRESELECTED_SEVERITIES.has(item.verdict.severity)
+  );
+}
 
 /** Findings that may be posted (all but refuted), ranked. */
 export function postableItems(
@@ -36,17 +43,7 @@ export function postableItems(
     const verdict = verdicts[finding.id];
     return verdict === undefined || verdict.verdict === "refuted" ? [] : [{ finding, verdict }];
   });
-  return rankFindings(items).map((item) => ({
-    id: item.finding.id,
-    kind: "finding",
-    location: item.finding,
-    title: item.finding.title,
-    tag: `${item.verdict.severity} ${item.verdict.verdict}`,
-    hint: null,
-    body: commentBody(item),
-    preselected:
-      item.verdict.verdict === "confirmed" && PRESELECTED_SEVERITIES.has(item.verdict.severity),
-  }));
+  return rankFindings(items).map((item) => ({ kind: "finding", ...item }));
 }
 
 /** File → lines of the new version that appear in the diff (added or context), which GitHub can comment on. */
@@ -128,18 +125,9 @@ export function commentBody(item: RankedItem): string {
   return parts.join("\n\n");
 }
 
-/** Rough edges that may be posted: all the checker did not rule out. Never pre-selected. */
+/** Rough edges that may be posted: all the checker did not rule out. */
 export function postableRoughEdges(edges: readonly CheckedRoughEdge[]): PostableItem[] {
-  return keptRoughEdges(edges).map((edge) => ({
-    id: edge.id,
-    kind: "rough-edge",
-    location: edge,
-    title: edge.title,
-    tag: `${edge.lens} rough edge`,
-    hint: "not a defect",
-    body: roughEdgeBody(edge),
-    preselected: false,
-  }));
+  return keptRoughEdges(edges).map((edge) => ({ kind: "rough-edge", edge }));
 }
 
 /** Labelled, so a reader can tell it from a finding: it is not a defect. */
@@ -186,19 +174,20 @@ function placeItems(
   const inline: string[] = [];
   const inBody: PostableItem[] = [];
   for (const item of items) {
-    const anchor = anchorFinding(item.location, lines);
+    const subject = itemSubject(item);
+    const anchor = anchorFinding(subject, lines);
     if (anchor === null) {
       inBody.push(item);
       continue;
     }
     comments.push({
-      path: item.location.file,
+      path: subject.file,
       line: anchor.line,
       side: "RIGHT",
       ...(anchor.startLine === null ? {} : { start_line: anchor.startLine, start_side: "RIGHT" }),
-      body: item.body,
+      body: itemBody(item),
     });
-    inline.push(item.id);
+    inline.push(subject.id);
   }
   return { comments, inline, inBody };
 }
@@ -233,7 +222,7 @@ export function buildReview(
   const sections = summary === null ? [] : [renderSummary(summary, trust)];
   sections.push(counts.join(" · "));
   for (const item of inBody) {
-    sections.push(`\`${formatLocation(item.location)}\`\n\n${item.body}`);
+    sections.push(`\`${formatLocation(itemSubject(item))}\`\n\n${itemBody(item)}`);
   }
   sections.push(`<sub>Reviewed with [review-flow](${REVIEW_FLOW_URL}).</sub>`);
 
@@ -245,7 +234,7 @@ export function buildReview(
       comments,
     },
     inline,
-    inBody: inBody.map((item) => item.id),
+    inBody: inBody.map((item) => itemSubject(item).id),
   };
 }
 

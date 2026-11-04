@@ -3,6 +3,8 @@ import {
   anchorFinding,
   buildReview,
   diffLines,
+  isPreselected,
+  itemSubject,
   postableItems,
   postableRoughEdges,
 } from "./post.ts";
@@ -110,7 +112,7 @@ describe("postableItems", () => {
       "3": verdict({ verdict: "refuted" }),
       "4": verdict(),
     });
-    expect(items.map((i) => [i.id, i.preselected])).toEqual([
+    expect(items.map((i) => [itemSubject(i).id, isPreselected(i)])).toEqual([
       ["4", true],
       ["2", false],
       ["1", false],
