@@ -12,7 +12,7 @@ function makeEdge(overrides: Partial<RoughEdge> = {}): RoughEdge {
     file: "src/a.ts",
     lineStart: 3,
     lineEnd: 9,
-    lens: "readability",
+    lens: "design",
     observation: "Reads state set two calls earlier.",
     suggestion: "Pass it as an argument.",
     ...overrides,
@@ -51,7 +51,7 @@ describe("buildRoughEdgeCheckerPrompt", () => {
       { base: "main", head: "`HEAD`" },
     );
     expect(prompt).toContain("R-001: Hidden ordering");
-    expect(prompt).toContain("`src/a.ts:3-9` · lens: readability");
+    expect(prompt).toContain("`src/a.ts:3-9` · lens: design");
     expect(prompt).toContain("Reads state set two calls earlier.");
     expect(prompt).toContain("Pass it as an argument.");
   });

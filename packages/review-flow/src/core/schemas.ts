@@ -36,10 +36,10 @@ export const Finding = z.strictObject({
 });
 export type Finding = z.infer<typeof Finding>;
 
-export const Lens = z.enum(["readability", "structure", "testability"]);
+export const Lens = z.enum(["structure", "design", "testability"]);
 export type Lens = z.infer<typeof Lens>;
 
-/** Not a defect: the code works, but could be easier to follow or change (spec 5). */
+/** Not a defect: the code works, but design makes it harder to understand or evolve (spec 5). */
 export const RoughEdge = z.strictObject({
   localId: z.string(),
   title: z.string(),

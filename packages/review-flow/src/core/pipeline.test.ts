@@ -801,7 +801,7 @@ describe("runReview trust", () => {
       file: "a.txt",
       lineStart: 2,
       lineEnd: 2,
-      lens: "readability",
+      lens: "design",
       observation: "o",
       suggestion: "s",
     });
