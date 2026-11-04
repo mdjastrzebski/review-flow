@@ -3,17 +3,22 @@ import path from "node:path";
 import type { RunAgent } from "./agent.ts";
 import { addTotals, EMPTY_TOTALS, type Step, type TimedTotals } from "./calls.ts";
 import { checkoutName, type EvalCase, type EvalSubset } from "./eval-dataset.ts";
+import { fetchFixDiffs } from "./eval-fixes.ts";
+import { judgeCase, type JudgeResult } from "./eval-judge.ts";
 import {
   countReported,
+  judgeBugs,
   scoreBugs,
   summarizeCases,
+  type BugResult,
   type CaseResult,
   type EvalScores,
+  type JudgeCall,
 } from "./eval-score.ts";
 import { describeModel, formatCost, formatDuration } from "./format.ts";
 import { checkoutDetached, ensureClone, resolveRepoRoot, WorkingTreeChangedError } from "./git.ts";
 import { readJsonOrNull, writeJson } from "./json.ts";
-import type { Harness, RoleModels } from "./models.ts";
+import type { Harness, ModelChoice, RoleModels } from "./models.ts";
 import {
   runReview,
   type ReviewRunOptions,
@@ -23,7 +28,7 @@ import {
 import type { TaskActivity } from "./task.ts";
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
-import type { NormalizedFinding } from "./schemas.ts";
+import type { NormalizedFinding, Verdict } from "./schemas.ts";
 import type { Trust } from "./trust.ts";
 
 export interface EvalRunOptions {
@@ -37,6 +42,10 @@ export interface EvalRunOptions {
   summarize?: boolean;
   /** One clone per case repo, reused across evals. */
   checkoutsDir: string;
+  /** Model of the judge that matches findings to known bugs; absent: match by location alone. */
+  judge?: ModelChoice | undefined;
+  /** Where fix diffs are cached; the judge reads each bug's fix diff. Absent: description only. */
+  fixesDir?: string | undefined;
   harness: Harness;
   models: RoleModels;
   runAgent: RunAgent;
@@ -104,6 +113,35 @@ export function describeCase(result: CaseResult): string {
 /** Cases are merged PRs of public repos: third-party code, but reviewed by its maintainers. */
 const EVAL_CASE_TRUST: Trust = { level: "collaborator", reason: "eval case, a merged PR" };
 
+/** The judge's scoring of a case: the bugs it decided, or none when the judge failed. */
+async function judgeBugsOf(
+  evalCase: EvalCase,
+  findings: readonly NormalizedFinding[],
+  verdicts: Readonly<Record<string, Verdict>>,
+  caseRoot: string,
+  model: ModelChoice,
+  runAgent: RunAgent,
+  fixesDir: string | undefined,
+): Promise<{ bugs: BugResult[] | null; call: JudgeCall }> {
+  let result: JudgeResult;
+  try {
+    const fixDiffs = fixesDir === undefined ? [] : await fetchFixDiffs(evalCase.bugs, fixesDir);
+    result = await judgeCase({ evalCase, findings, fixDiffs, cwd: caseRoot, model, runAgent });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    result = { status: "failed", error: message, costUsd: null, durationMs: 0 };
+  }
+  const call: JudgeCall = {
+    status: result.status,
+    error: result.status === "failed" ? result.error : null,
+    costUsd: result.costUsd,
+    durationMs: result.durationMs,
+  };
+  if (result.status === "failed") return { bugs: null, call };
+  await writeJson(path.join(caseRoot, "judge.json"), result.output);
+  return { bugs: judgeBugs(evalCase.bugs, findings, verdicts, result.matches), call };
+}
+
 /**
  * Clones (or reuses) the case repo, checks out the case head, and reviews it against the base.
  * Failures are recorded on the case; a changed working tree is rethrown to stop the eval.
@@ -151,6 +189,27 @@ async function runCase(
   const run = await readJsonOrNull<RunRecord>(paths.runJsonPath);
   const findings =
     review?.findings ?? (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath));
+  let bugs: BugResult[] | null =
+    review === null ? null : scoreBugs(evalCase.bugs, review.findings, review.verdicts);
+  let judge: JudgeCall | null = null;
+  if (review !== null && options.judge !== undefined && evalCase.bugs.length > 0) {
+    const judged = await judgeBugsOf(
+      evalCase,
+      review.findings,
+      review.verdicts,
+      caseRoot,
+      options.judge,
+      options.runAgent,
+      options.fixesDir,
+    );
+    judge = judged.call;
+    bugs = judged.bugs ?? bugs;
+    if (judged.call.status === "failed") {
+      options.warn?.(
+        `${evalCase.id}: the judge failed (${judged.call.error ?? "no result"}); scored by location.`,
+      );
+    }
+  }
   const result: CaseResult = {
     id: evalCase.id,
     kind: evalCase.kind,
@@ -159,10 +218,11 @@ async function runCase(
     error,
     findings: findings?.length ?? null,
     reported: review === null ? null : countReported(review.verdicts),
-    bugs: review === null ? null : scoreBugs(evalCase.bugs, review.findings, review.verdicts),
+    bugs,
     costUsd: run?.totals.costUsd ?? null,
     unknownCostCalls: run?.totals.unknownCostCalls ?? 0,
     durationMs: run?.totals.durationMs ?? 0,
+    ...(judge === null ? {} : { judge }),
   };
   return { result, run };
 }
@@ -265,4 +325,89 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
       unknownCostCalls: totals.unknownCostCalls,
     });
   }
+}
+
+const RESCORE_CONCURRENCY = 4;
+
+export interface RescoreOptions {
+  /** The eval run dir to score again. */
+  root: string;
+  /** Its cases, from the dataset. */
+  cases: readonly EvalCase[];
+  judge: ModelChoice;
+  /** Where fix diffs are cached; absent: the judge gets the bug's description only. */
+  fixesDir?: string | undefined;
+  runAgent: RunAgent;
+  log: (message: string) => void;
+  warn?: (message: string) => void;
+}
+
+/** rescore.json of an eval run. */
+export interface RescoreRecord {
+  rescoredAt: string;
+  judge: ModelChoice;
+  cases: CaseResult[];
+  scores: EvalScores;
+}
+
+/**
+ * Scores a finished eval again with the judge, from the findings and verdicts its case run dirs
+ * kept; no checkout, reviewer, or verifier runs. The eval's own files stay as they were, and the
+ * result goes in `rescore.json` beside them.
+ */
+export async function rescoreEval(options: RescoreOptions): Promise<EvalRunResult> {
+  const paths = evalRunPaths(options.root);
+  const previous = (await readJsonOrNull<CaseResult[]>(paths.casesPath)) ?? [];
+  const dataset = new Map(options.cases.map((c) => [c.id, c]));
+  const results: CaseResult[] = [...previous];
+
+  const rescoreOne = async (old: CaseResult, index: number): Promise<void> => {
+    const evalCase = dataset.get(old.id);
+    if (old.status !== "ok" || evalCase === undefined || evalCase.bugs.length === 0) return;
+    const caseRoot = paths.caseRoot(old.id);
+    const caseRun = runDirPaths(caseRoot);
+    const findings = await readJsonOrNull<NormalizedFinding[]>(caseRun.findingsPath);
+    const verdicts = await readJsonOrNull<Record<string, Verdict>>(caseRun.verdictsPath);
+    if (findings === null || verdicts === null) {
+      options.warn?.(`${old.id}: no findings or verdicts saved; kept its score.`);
+      return;
+    }
+    const judged = await judgeBugsOf(
+      evalCase,
+      findings,
+      verdicts,
+      caseRoot,
+      options.judge,
+      options.runAgent,
+      options.fixesDir,
+    );
+    if (judged.call.status === "failed") {
+      options.warn?.(
+        `${old.id}: the judge failed (${judged.call.error ?? "no result"}); kept its score.`,
+      );
+    }
+    results[index] = { ...old, bugs: judged.bugs ?? old.bugs, judge: judged.call };
+    options.log(`  ${old.id}: ${caseOutcome(old)} → ${caseOutcome(results[index])}`);
+  };
+
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(RESCORE_CONCURRENCY, previous.length) }, async () => {
+      while (next < previous.length) {
+        const index = next++;
+        const old = previous[index];
+        if (old !== undefined) await rescoreOne(old, index);
+      }
+    }),
+  );
+
+  const scores = summarizeCases(results);
+  const record: RescoreRecord = {
+    rescoredAt: new Date().toISOString(),
+    judge: options.judge,
+    cases: results,
+    scores,
+  };
+  await writeJson(path.join(options.root, "rescore.json"), record);
+  return { root: options.root, cases: results, scores };
 }

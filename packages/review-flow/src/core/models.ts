@@ -3,8 +3,8 @@ export type Harness = (typeof HARNESSES)[number];
 
 /** Roles of the review pipeline, each with its model in `run.json`. */
 export type ReviewRole = "summarizer" | "reviewer" | "verifier";
-/** `answerer` answers `ask` questions after (or during) a review. */
-export type Role = ReviewRole | "answerer";
+/** `answerer` answers `ask` questions after (or during) a review; `judge` scores eval findings. */
+export type Role = ReviewRole | "answerer" | "judge";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -88,3 +88,6 @@ export function resolveAnswerer(
     effort: effort ?? (model !== null && harness === "cursor" ? null : base.effort),
   };
 }
+
+/** The eval judge's model: chosen like the answerer's, from the run's verifier model. */
+export const resolveJudge = resolveAnswerer;

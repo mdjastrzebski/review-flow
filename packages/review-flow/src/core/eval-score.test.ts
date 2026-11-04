@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { EvalBug } from "./eval-dataset.ts";
-import { hitsLocation, scoreBugs, summarizeCases, type CaseResult } from "./eval-score.ts";
+import {
+  hitsLocation,
+  judgeBugs,
+  scoreBugs,
+  summarizeCases,
+  type CaseResult,
+} from "./eval-score.ts";
 import type { NormalizedFinding, Verdict } from "./schemas.ts";
 
 function finding(
@@ -66,6 +72,40 @@ describe("scoreBugs", () => {
     expect(scoreBugs(bugs, findings, { "F-001": verdict("refuted") })).toEqual([
       { description: "d", found: false, foundByReviewer: true, findingIds: ["F-001"] },
     ]);
+  });
+});
+
+describe("judgeBugs", () => {
+  const bugs: EvalBug[] = [{ description: "d", fix: "f", locations: [location] }];
+
+  it("trusts the judge's matches over lines, and keeps the location result", () => {
+    // F-001 is on the bug's lines but the judge says it is another defect; F-002 is far away.
+    const findings = [finding("F-001", "src/a.py", 21), finding("F-002", "src/a.py", 90)];
+    const verdicts = { "F-001": verdict("confirmed"), "F-002": verdict("confirmed") };
+    expect(judgeBugs(bugs, findings, verdicts, new Map([[0, new Set(["F-002"])]]))).toEqual([
+      {
+        description: "d",
+        found: true,
+        foundByReviewer: true,
+        findingIds: ["F-002"],
+        judged: true,
+        byLocation: { found: true, foundByReviewer: true },
+      },
+    ]);
+  });
+
+  it("finds nothing when the judge matches nothing, and counts a refuted match for the reviewer", () => {
+    const findings = [finding("F-001", "src/a.py", 21)];
+    const confirmed = { "F-001": verdict("confirmed") };
+    expect(judgeBugs(bugs, findings, confirmed, new Map())[0]).toMatchObject({
+      found: false,
+      foundByReviewer: false,
+      byLocation: { found: true },
+    });
+    const refuted = { "F-001": verdict("refuted") };
+    expect(judgeBugs(bugs, findings, refuted, new Map([[0, new Set(["F-001"])]]))[0]).toMatchObject(
+      { found: false, foundByReviewer: true },
+    );
   });
 });
 
@@ -145,6 +185,34 @@ describe("summarizeCases", () => {
       costUsd: 2.25,
       unknownCostCalls: 1,
       durationMs: 5000,
+    });
+  });
+
+  it("adds recall by location and the judge's cost when bugs were judged", () => {
+    const judged = (found: boolean, byLocation: boolean): CaseResult => ({
+      ...base,
+      id: "j",
+      kind: "bug",
+      status: "ok",
+      findings: 1,
+      reported: 1,
+      bugs: [
+        {
+          description: "d",
+          found,
+          foundByReviewer: found,
+          findingIds: [],
+          judged: true,
+          byLocation: { found: byLocation, foundByReviewer: byLocation },
+        },
+      ],
+      costUsd: 1,
+      judge: { status: "ok", error: null, costUsd: 0.05, durationMs: 10 },
+    });
+    expect(summarizeCases([judged(false, true), judged(true, true)])).toMatchObject({
+      recall: 0.5,
+      locationRecall: 1,
+      judgeCostUsd: 0.1,
     });
   });
 

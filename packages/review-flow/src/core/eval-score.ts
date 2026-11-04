@@ -10,6 +10,10 @@ export interface BugResult {
   foundByReviewer: boolean;
   /** Findings that hit the bug, refuted ones included. */
   findingIds: string[];
+  /** Set when the judge decided the match; `found` and `foundByReviewer` are then its verdicts. */
+  judged?: true;
+  /** What matching by location alone gave, kept for comparison; only with `judged`. */
+  byLocation?: { found: boolean; foundByReviewer: boolean };
 }
 
 /** One line of cases.json. */
@@ -27,6 +31,15 @@ export interface CaseResult {
   bugs: BugResult[] | null;
   costUsd: number | null;
   unknownCostCalls: number;
+  durationMs: number;
+  /** The judge call: null or absent when the case wasn't judged. Its cost isn't in `costUsd`. */
+  judge?: JudgeCall | null;
+}
+
+export interface JudgeCall {
+  status: "ok" | "failed";
+  error: string | null;
+  costUsd: number | null;
   durationMs: number;
 }
 
@@ -51,6 +64,10 @@ export interface EvalScores {
   unknownCostCalls: number;
   /** Sum of case run times. */
   durationMs: number;
+  /** Recall by location alone, for comparison; only when some bug was judged. */
+  locationRecall?: number | null;
+  /** Sum of the judge calls' cost; only when some case was judged. */
+  judgeCostUsd?: number | null;
 }
 
 /** Same file, and the line ranges overlap or are at most MATCH_TOLERANCE_LINES apart. */
@@ -75,6 +92,34 @@ export function scoreBugs(
   });
 }
 
+/**
+ * Scores bugs from the judge's matches instead of line numbers: a bug is found when the judge
+ * matched a finding that wasn't refuted to it, wherever the finding points.
+ */
+export function judgeBugs(
+  bugs: readonly EvalBug[],
+  findings: readonly NormalizedFinding[],
+  verdicts: Readonly<Record<string, Verdict>>,
+  matches: ReadonlyMap<number, ReadonlySet<string>>,
+): BugResult[] {
+  const byLocation = scoreBugs(bugs, findings, verdicts);
+  return bugs.map((bug, index) => {
+    const ids = findings.map((f) => f.id).filter((id) => matches.get(index)?.has(id));
+    const location = byLocation[index];
+    return {
+      description: bug.description,
+      found: ids.some((id) => verdicts[id]?.verdict !== "refuted"),
+      foundByReviewer: ids.length > 0,
+      findingIds: ids,
+      judged: true,
+      byLocation: {
+        found: location?.found ?? false,
+        foundByReviewer: location?.foundByReviewer ?? false,
+      },
+    };
+  });
+}
+
 export function countReported(verdicts: Readonly<Record<string, Verdict>>): number {
   return Object.values(verdicts).filter((v) => v.verdict !== "refuted").length;
 }
@@ -86,6 +131,8 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
   const found = bugs.filter((b) => b.found).length;
   const foundByReviewer = bugs.filter((b) => b.foundByReviewer).length;
   const cleanFindings = clean.reduce((sum, c) => sum + (c.reported ?? 0), 0);
+  const judged = bugs.filter((b) => b.judged === true);
+  const judgeCosts = ok.flatMap((c) => (c.judge?.costUsd == null ? [] : [c.judge.costUsd]));
   const costs = cases.flatMap((c) => (c.costUsd === null ? [] : [c.costUsd]));
   return {
     cases: cases.length,
@@ -101,5 +148,14 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
     costUsd: costs.length === 0 ? null : costs.reduce((a, b) => a + b, 0),
     unknownCostCalls: cases.reduce((sum, c) => sum + c.unknownCostCalls, 0),
     durationMs: cases.reduce((sum, c) => sum + c.durationMs, 0),
+    ...(judged.length === 0
+      ? {}
+      : {
+          locationRecall:
+            bugs.length === 0
+              ? null
+              : bugs.filter((b) => (b.byLocation?.found ?? b.found) === true).length / bugs.length,
+          judgeCostUsd: judgeCosts.length === 0 ? null : judgeCosts.reduce((a, b) => a + b, 0),
+        }),
   };
 }

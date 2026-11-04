@@ -3,6 +3,7 @@ import { Command, Option } from "commander";
 import { getAgent } from "../agents/index.ts";
 import {
   DEFAULT_DATASET_DIR,
+  defaultFixesDir,
   EFFORTS,
   HARNESSES,
   HARNESS_ENFORCEMENT,
@@ -25,9 +26,11 @@ import {
   loadRun,
   readIndex,
   readUserConfig,
+  resolveJudge,
   resolveModels,
   resolveRepoRoot,
   resolveRun,
+  rescoreEval,
   runEval,
   runReview,
   saveUserHarness,
@@ -61,6 +64,8 @@ interface AgentOptions {
   effort?: Effort;
   verifierEffort?: Effort;
   summarizerEffort?: Effort;
+  judgeModel?: string;
+  judgeEffort?: Effort;
   claudeBin: string;
   cursorBin: string;
 }
@@ -351,7 +356,26 @@ async function post(ref: string | undefined, options: { repo: string }): Promise
   await postRun((await resolveRun(repo, id, userCwd)).root, colorOptions());
 }
 
+/** The judge's model and effort; its default is the verifier's. */
+function addJudgeOptions(command: Command): Command {
+  return command
+    .option("--judge-model <id>", "model for the judge that matches findings to known bugs")
+    .option("--no-fix-diff", "don't show the judge each bug's fix diff, only its description")
+    .addOption(new Option("--judge-effort <level>", "effort for the judge").choices(EFFORTS));
+}
+
+function judgeOf(agent: Awaited<ReturnType<typeof resolveAgent>>, options: AgentOptions) {
+  return resolveJudge(agent.harness, agent, {
+    model: options.judgeModel ?? null,
+    effort: options.judgeEffort ?? null,
+  });
+}
+
 interface EvalOptions extends AgentOptions {
+  /** false with --no-fix-diff. */
+  fixDiff: boolean;
+  /** false with --no-judge. */
+  judge: boolean;
   smoke: boolean;
   full: boolean;
   summary: boolean;
@@ -375,8 +399,11 @@ async function evaluate(options: EvalOptions): Promise<void> {
       : "baseline";
   let result;
   try {
+    const agent = await resolveAgent(options);
     result = await runEval({
-      ...(await resolveAgent(options)),
+      ...agent,
+      judge: options.judge ? judgeOf(agent, options) : undefined,
+      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
       cwd: options.repo,
       cases: await loadDataset(dataset, { subset, ids: options.case ?? [] }),
       dataset,
@@ -390,6 +417,38 @@ async function evaluate(options: EvalOptions): Promise<void> {
     progress.end();
   }
   // Like review: --quiet prints only the run dir.
+  console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
+}
+
+interface RescoreCliOptions extends AgentOptions {
+  /** false with --no-fix-diff. */
+  fixDiff: boolean;
+  dataset: string;
+  repo: string;
+  quiet: boolean;
+  verbose: boolean;
+}
+
+/** Scores a finished eval again with the judge; the eval's own files stay as they were. */
+async function rescore(ref: string, options: RescoreCliOptions): Promise<void> {
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
+  const repo = await resolveRepoRoot(options.repo);
+  const { root } = await resolveRun(repo, ref, userCwd);
+  const agent = await resolveAgent(options);
+  let result;
+  try {
+    result = await rescoreEval({
+      root,
+      cases: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
+      judge: judgeOf(agent, options),
+      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
+      runAgent: agent.runAgent,
+      log: progress.log,
+      warn: progress.warn,
+    });
+  } finally {
+    progress.end();
+  }
   console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
 }
 
@@ -466,14 +525,17 @@ addTargetOptions(
   review(target, { ...options, summary: true, find: false }),
 );
 
-addAgentOptions(
-  program
-    .command("eval")
-    .description("Review every case of the eval dataset and score the findings")
-    .option("--smoke", "only the smoke set (5 cases, a quick end-to-end check)", false)
-    .option("--full", "all cases, not only the baseline set (12 cases)", false)
-    .option("--no-summary", "skip the summary of each case")
-    .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
+addJudgeOptions(
+  addAgentOptions(
+    program
+      .command("eval")
+      .description("Review every case of the eval dataset and score the findings")
+      .option("--smoke", "only the smoke set (5 cases, a quick end-to-end check)", false)
+      .option("--full", "all cases, not only the baseline set (12 cases)", false)
+      .option("--no-summary", "skip the summary of each case")
+      .option("--no-judge", "match findings to known bugs by location only")
+      .option("--case <ids...>", "only these cases (ids, as in eval/cases/<id>.json)"),
+  ),
 )
   .option("--dataset <dir>", "dir of case files", DEFAULT_DATASET_DIR)
   .option("--checkouts <dir>", "where case repos are cloned and kept", defaultCheckoutsDir())
@@ -481,6 +543,20 @@ addAgentOptions(
   .option("-q, --quiet", "no progress or summary output; print only the eval run dir path", false)
   .addOption(verboseOption())
   .action(evaluate);
+
+addJudgeOptions(
+  addAgentOptions(
+    program
+      .command("rescore")
+      .description("Score a finished eval again, with the judge matching findings to known bugs")
+      .argument("<eval>", "eval run id, a unique part of one, or a run dir path"),
+  ),
+)
+  .option("--dataset <dir>", "dir of case files", DEFAULT_DATASET_DIR)
+  .option("--repo <path>", "repository the eval run is saved in", userCwd)
+  .option("-q, --quiet", "no progress output; print only the eval run dir path", false)
+  .addOption(verboseOption())
+  .action(rescore);
 
 program
   .command("post")

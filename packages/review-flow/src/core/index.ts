@@ -14,6 +14,8 @@ export * from "./pipeline.ts";
 export * from "./eval.ts";
 export * from "./eval-dataset.ts";
 export * from "./eval-score.ts";
+export * from "./eval-judge.ts";
+export * from "./eval-fixes.ts";
 export * from "./verify.ts";
 export * from "./format.ts";
 export * from "./report.ts";

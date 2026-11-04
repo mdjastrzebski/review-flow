@@ -74,7 +74,10 @@ export interface DatasetSelection {
 }
 
 /** Every `*.json` in `dir`, sorted by id, narrowed by `selection`. */
-export async function loadDataset(dir: string, selection: DatasetSelection = {}): Promise<EvalCase[]> {
+export async function loadDataset(
+  dir: string,
+  selection: DatasetSelection = {},
+): Promise<EvalCase[]> {
   const entries = await readdir(dir).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error(
@@ -98,7 +101,9 @@ export async function loadDataset(dir: string, selection: DatasetSelection = {})
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length > 0) throw new Error(`No such case in ${dir}: ${unknown.join(", ")}`);
   const selected = cases.filter(
-    (c) => (!selection.subset || presetIn(c.preset, selection.subset)) && (ids.length === 0 || ids.includes(c.id)),
+    (c) =>
+      (!selection.subset || presetIn(c.preset, selection.subset)) &&
+      (ids.length === 0 || ids.includes(c.id)),
   );
   if (selected.length === 0) {
     throw new Error(`No ${selection.subset ? `${selection.subset} ` : ""}cases selected in ${dir}`);

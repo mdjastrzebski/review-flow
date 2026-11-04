@@ -342,7 +342,15 @@ export function formatEval(result: EvalRunResult, options: TableOptions): string
     if (error !== null) out.push(paint("red", `${id}: ${error.split("\n")[0]}`));
   }
   if (out.at(-1) !== "") out.push("");
-  out.push(...table(METRICS.map((m) => [m.label, m.cell(result.scores)])));
+  const { locationRecall, judgeCostUsd } = result.scores;
+  const rows = METRICS.map((m) => [m.label, m.cell(result.scores)]);
+  if (locationRecall !== undefined && locationRecall !== null) {
+    rows.splice(1, 0, ["Recall by location only", percent(locationRecall)]);
+  }
+  if (judgeCostUsd !== undefined && judgeCostUsd !== null) {
+    rows.push(["Judge cost (not in cost above)", formatCost(judgeCostUsd)]);
+  }
+  out.push(...table(rows));
   out.push("", `Eval run: ${result.root}`);
   return out.join("\n");
 }
