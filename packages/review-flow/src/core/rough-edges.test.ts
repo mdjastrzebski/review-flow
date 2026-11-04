@@ -24,10 +24,7 @@ const normalized = (id: string): NormalizedRoughEdge => ({ id, ...makeEdge({ loc
 describe("normalizeRoughEdges", () => {
   it("assigns R-001… ids, makes paths relative, and swaps reversed ranges", () => {
     const { roughEdges, notes } = normalizeRoughEdges(
-      {
-        findings: [],
-        roughEdges: [makeEdge({ file: "/repo/src/a.ts", lineStart: 9, lineEnd: 3 }), makeEdge()],
-      },
+      [makeEdge({ file: "/repo/src/a.ts", lineStart: 9, lineEnd: 3 }), makeEdge()],
       repo,
     );
     expect(roughEdges.map((e) => e.id)).toEqual(["R-001", "R-002"]);
@@ -37,7 +34,7 @@ describe("normalizeRoughEdges", () => {
 
   it("caps the list and notes it", () => {
     const many = Array.from({ length: MAX_ROUGH_EDGES + 2 }, () => makeEdge());
-    const { roughEdges, notes } = normalizeRoughEdges({ findings: [], roughEdges: many }, repo);
+    const { roughEdges, notes } = normalizeRoughEdges(many, repo);
     expect(roughEdges).toHaveLength(MAX_ROUGH_EDGES);
     expect(notes).toHaveLength(1);
   });

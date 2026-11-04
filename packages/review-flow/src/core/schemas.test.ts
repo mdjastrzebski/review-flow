@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Finding, ReviewOutput, Verdict } from "./schemas.ts";
+import { Finding, FindingsOutput, ReviewOutput, Verdict } from "./schemas.ts";
 
 const finding = {
   localId: "1",
@@ -64,6 +64,13 @@ describe("ReviewOutput", () => {
 
   it("rejects a bare array", () => {
     expect(ReviewOutput.safeParse([finding]).success).toBe(false);
+  });
+});
+
+describe("FindingsOutput", () => {
+  it("rejects rough edges, which were not asked for", () => {
+    expect(FindingsOutput.safeParse({ findings: [] }).success).toBe(true);
+    expect(FindingsOutput.safeParse({ findings: [], roughEdges: [] }).success).toBe(false);
   });
 });
 

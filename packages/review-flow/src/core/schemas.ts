@@ -54,9 +54,15 @@ export const RoughEdge = z.strictObject({
 });
 export type RoughEdge = z.infer<typeof RoughEdge>;
 
+/** The reviewer's answer when rough edges are off: findings only. */
+export const FindingsOutput = z.strictObject({
+  findings: z.array(Finding),
+});
+export type FindingsOutput = z.infer<typeof FindingsOutput>;
+
+/** The reviewer's answer when rough edges are on; the list is required, but may be empty. */
 export const ReviewOutput = z.strictObject({
   findings: z.array(Finding),
-  /** Always present; empty when the reviewer was not asked for rough edges. */
   roughEdges: z.array(RoughEdge),
 });
 export type ReviewOutput = z.infer<typeof ReviewOutput>;

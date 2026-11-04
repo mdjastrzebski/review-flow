@@ -11,7 +11,7 @@ import type { CaseResult } from "./eval-score.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
 import { readIndex } from "./run-index.ts";
-import type { ReviewOutput, Verdict } from "./schemas.ts";
+import type { FindingsOutput, Verdict } from "./schemas.ts";
 
 let tmp: string;
 let remote: string;
@@ -73,8 +73,7 @@ const bugCase = (id: string, line: number) =>
     bugs: [{ description: "d", fix: "f", locations: [{ file: "a.txt", start: line, end: line }] }],
   });
 
-const review: ReviewOutput = {
-  roughEdges: [],
+const review: FindingsOutput = {
   findings: [
     {
       localId: "1",

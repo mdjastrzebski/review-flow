@@ -37,6 +37,7 @@ import {
 import { formatElapsed, runTask, type TaskActivity, type TaskContext } from "./task.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "./trust.ts";
 import {
+  FindingsOutput,
   ReviewOutput,
   RoughEdgeChecks,
   Summary,
@@ -604,17 +605,17 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             const prompt = renderPrompt(await loadPrompt("reviewer"), {
               ...change,
               diffBlock: codeFence(diff, "diff"),
-              roughEdges: await loadPrompt(roughEdges ? "rough-edges" : "rough-edges-off"),
+              roughEdges: roughEdges ? await loadPrompt("rough-edges") : "",
             });
             log("Reviewing…");
-            const review = await runTask(
+            const review = await runTask<FindingsOutput | ReviewOutput>(
               {
                 taskId: "reviewer",
                 role: "reviewer",
                 prompt,
                 sharedContext: null,
                 cwd: repo,
-                schema: ReviewOutput,
+                schema: roughEdges ? ReviewOutput : FindingsOutput,
                 model: models.reviewer.model,
                 effort: models.reviewer.effort,
                 timeoutMs: REVIEWER_TIMEOUT_MS,
@@ -631,7 +632,11 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             for (const note of normalized.notes) log(note);
             await writeJson(runDir.findingsPath, normalized.findings);
             log(`Reviewer returned ${normalized.findings.length} finding(s)`);
-            const edges = roughEdges ? normalizeRoughEdges(review.output, repo) : null;
+            // Present exactly when rough edges are on: the schema above asks for them.
+            const edges =
+              "roughEdges" in review.output
+                ? normalizeRoughEdges(review.output.roughEdges, repo)
+                : null;
             for (const note of edges?.notes ?? []) log(note);
             if (edges !== null) log(`Reviewer returned ${edges.roughEdges.length} rough edge(s)`);
             return { findings: normalized.findings, edges: edges?.roughEdges ?? null };

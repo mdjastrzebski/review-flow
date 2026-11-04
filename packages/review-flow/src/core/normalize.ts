@@ -1,5 +1,10 @@
 import path from "node:path";
-import type { NormalizedFinding, NormalizedRoughEdge, ReviewOutput } from "./schemas.ts";
+import type {
+  FindingsOutput,
+  NormalizedFinding,
+  NormalizedRoughEdge,
+  RoughEdge,
+} from "./schemas.ts";
 
 export const MAX_FINDINGS = 15;
 export const MAX_ROUGH_EDGES = 5;
@@ -23,7 +28,7 @@ export function normalizeFile(file: string, repo: string): string {
 }
 
 /** Caps the list, assigns run-wide ids (F-001…) in reviewer order, and tidies locations. */
-export function normalizeFindings(output: ReviewOutput, repo: string): NormalizeResult {
+export function normalizeFindings(output: FindingsOutput, repo: string): NormalizeResult {
   const notes: string[] = [];
   let findings = output.findings;
   if (findings.length > MAX_FINDINGS) {
@@ -55,9 +60,12 @@ export function roughEdgeId(index: number): string {
 }
 
 /** Like normalizeFindings: caps the list, assigns ids (R-001…) in reviewer order, tidies locations. */
-export function normalizeRoughEdges(output: ReviewOutput, repo: string): NormalizeRoughEdgesResult {
+export function normalizeRoughEdges(
+  reviewed: readonly RoughEdge[],
+  repo: string,
+): NormalizeRoughEdgesResult {
   const notes: string[] = [];
-  let edges = output.roughEdges;
+  let edges = reviewed;
   if (edges.length > MAX_ROUGH_EDGES) {
     notes.push(`Reviewer returned ${edges.length} rough edges; kept the first ${MAX_ROUGH_EDGES}.`);
     edges = edges.slice(0, MAX_ROUGH_EDGES);

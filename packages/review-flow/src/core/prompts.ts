@@ -11,7 +11,6 @@ export type PromptName =
   | "change"
   | "judge"
   | "rough-edges"
-  | "rough-edges-off"
   | "rough-edge-checker";
 
 export async function loadPrompt(name: PromptName): Promise<string> {

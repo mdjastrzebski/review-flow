@@ -11,14 +11,15 @@ import { DEFAULT_MODELS } from "./models.ts";
 import { DeclinedError, NoChangesError, runReview, type Preflight } from "./pipeline.ts";
 import { ensureStateDir } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
-import type {
-  CheckedRoughEdge,
-  Finding,
-  ReviewOutput,
-  RoughEdge,
-  RoughEdgeChecks,
-  Summary,
-  Verdict,
+import {
+  FindingsOutput,
+  type CheckedRoughEdge,
+  type Finding,
+  type ReviewOutput,
+  type RoughEdge,
+  type RoughEdgeChecks,
+  type Summary,
+  type Verdict,
 } from "./schemas.ts";
 import { OWN_CHECKOUT, type Trust } from "./trust.ts";
 import { createReviewWorktree } from "./worktree.ts";
@@ -81,7 +82,7 @@ const summary: Summary = {
 };
 
 interface StubOptions {
-  review?: ReviewOutput;
+  review?: ReviewOutput | FindingsOutput;
   /** Summarizer answer; null makes the summarizer fail with invalid_output. */
   summary?: Summary | null;
   /** Verifier answer; null makes the verifier fail with invalid_output. */
@@ -877,7 +878,7 @@ describe("runReview trust", () => {
     });
 
     it("asks the reviewer for no rough edges when off", async () => {
-      const off = stubAgent({ review: withEdges });
+      const off = stubAgent({ review: { findings: [] } });
       const result = await runReview({
         ...baseOptions,
         cwd: repo,
@@ -885,6 +886,7 @@ describe("runReview trust", () => {
         roughEdges: false,
       });
       expect(off.tasks[0]!.prompt).not.toContain("## Rough edges");
+      expect(off.tasks[0]!.schema).toBe(FindingsOutput);
       expect(off.tasks.map((t) => t.taskId)).toEqual(["reviewer"]);
       expect(result.roughEdges).toEqual([]);
     });
