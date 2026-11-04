@@ -12,6 +12,7 @@ Defects often sit outside the changed lines. Before you decide the change is fin
 
 - **Removed or moved code:** for each deleted or relocated import, call, initialisation, or check, search for the code that relied on it, even by side effect, and confirm it still works.
 - **New values:** for each new default, constant, or threshold, compare it with its siblings (other defaults, the same setting elsewhere, docs, tests) and with the edge values it will meet.
+- **Changed contracts:** for each changed signature (a new required parameter, a renamed or removed parameter, sync turned async, a different return value or exception), search for every caller, subclass, override, and re-export, and read the docs and tests that use it. A class, function, or option that users can import or configure is a contract even if this repo never calls it from elsewhere; check what an existing user's code does after the change.
 - **Stored references:** for each buffer or object kept for later use, check whether it is copied, or whether the caller can change it before it is used.
 - **Parallel paths:** when the change fixes or adds behaviour on one path, check the other paths that do the same job (sync and async, other entry points) got it too.
 
