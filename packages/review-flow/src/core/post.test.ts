@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { anchorFinding, buildReview, diffLines, postableItems } from "./post.ts";
+import {
+  anchorFinding,
+  buildReview,
+  diffLines,
+  postableItems,
+  postableRoughEdges,
+} from "./post.ts";
 import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
 const diff = `diff --git a/a.ts b/a.ts
@@ -104,7 +110,7 @@ describe("postableItems", () => {
       "3": verdict({ verdict: "refuted" }),
       "4": verdict(),
     });
-    expect(items.map((i) => [i.finding.id, i.preselected])).toEqual([
+    expect(items.map((i) => [i.id, i.preselected])).toEqual([
       ["4", true],
       ["2", false],
       ["1", false],
@@ -112,18 +118,29 @@ describe("postableItems", () => {
   });
 });
 
+/** Postable items for findings that all carry the same verdict, in order. */
+function postable(
+  entries: { finding: NormalizedFinding; verdict: Verdict }[],
+): ReturnType<typeof postableItems> {
+  return postableItems(
+    entries.map((e) => e.finding),
+    Object.fromEntries(entries.map((e) => [e.finding.id, e.verdict])),
+  );
+}
+
 describe("buildReview", () => {
   it("puts diff findings inline and the rest in the body, as a COMMENT review", () => {
     const plan = buildReview(
-      [
+      postable([
         { finding: finding("1", "a.ts", 2, 3), verdict: verdict() },
         {
           finding: finding("2", "b.ts", 5),
           verdict: verdict({
+            severity: "medium",
             fix: { assessment: "flawed", detail: "d", betterFix: "Better." },
           }),
         },
-      ],
+      ]),
       diff,
       "abc",
     );
@@ -148,7 +165,7 @@ describe("buildReview", () => {
 
   it("opens the body with the run's summary", () => {
     const plan = buildReview(
-      [{ finding: finding("1", "a.ts", 2), verdict: verdict() }],
+      postable([{ finding: finding("1", "a.ts", 2), verdict: verdict() }]),
       diff,
       "abc",
       {
@@ -181,9 +198,11 @@ describe("buildReview with rough edges", () => {
   });
 
   it("anchors a rough edge like a finding and labels it as one", () => {
-    const plan = buildReview([], diff, "sha", {
-      roughEdges: [edge("R-001", "a.ts", 2), edge("R-002", "other.ts", 5)],
-    });
+    const plan = buildReview(
+      postableRoughEdges([edge("R-001", "a.ts", 2), edge("R-002", "other.ts", 5)]),
+      diff,
+      "sha",
+    );
     expect(plan.inline).toEqual(["R-001"]);
     expect(plan.inBody).toEqual(["R-002"]);
     expect(plan.payload.comments[0]!.body).toContain("**Rough edge (structure): Edge R-001**");

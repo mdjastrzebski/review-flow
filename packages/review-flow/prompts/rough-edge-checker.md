@@ -14,7 +14,7 @@ You are checking observations someone made about the structure of a code change.
 For each observation, return its id (such as `R-001`) as `localId`, a `status`, and a one-line `note`:
 
 - `accurate`: the code is as described, the difficulty is real, and the suggestion would help without breaking anything.
-- `inaccurate`: the code is not as described, a reason in the repo (a convention, a constraint, a caller) makes it the right way, or the suggestion would make things worse or is not applicable.
+- `inaccurate`: the code is not as described, a reason in the repo (a convention, a constraint, a caller) makes it the right way, or the suggestion would make things worse or is not applicable, or the problem is local to one function or call site and the fix is a small edit (a rename, an argument change, a closure variable).
 - `unclear`: the code is as described, but whether it is worth changing is a matter of taste or depends on things outside the repo.
 
 Judge only what is in the observation; do not add your own. Return one check per observation.

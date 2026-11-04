@@ -43,12 +43,12 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
 
   const findings = (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath)) ?? [];
   const verdicts = (await readJsonOrNull<Record<string, Verdict>>(paths.verdictsPath)) ?? {};
-  const items = postableItems(findings, verdicts);
-  const edges = postableRoughEdges(
-    (await readJsonOrNull<CheckedRoughEdge[]>(paths.roughEdgesPath)) ?? [],
-  );
+  const items = [
+    ...postableItems(findings, verdicts),
+    ...postableRoughEdges((await readJsonOrNull<CheckedRoughEdge[]>(paths.roughEdgesPath)) ?? []),
+  ];
   const summary = await readJsonOrNull<Summary>(paths.summaryPath);
-  if (items.length === 0 && edges.length === 0 && summary === null) {
+  if (items.length === 0 && summary === null) {
     note.info("Nothing to post: no summary, and no findings or rough edges, or all were refuted.");
     return;
   }
@@ -59,21 +59,13 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
     if (!(await confirm("Post again?"))) return;
   }
 
-  const choices: Choice<string>[] = items.map(({ finding, verdict }) => ({
-    value: finding.id,
+  const choices: Choice<string>[] = items.map((item) => ({
+    value: item.id,
     label:
-      `${paint("bold", finding.id)} ${verdict.severity} ${verdict.verdict}  ` +
-      `${paint("cyan", formatLocation(finding))}  ${finding.title}`,
+      `${paint("bold", item.id)} ${item.tag}  ` +
+      `${paint("cyan", formatLocation(item.location))}  ${item.title}`,
+    ...(item.hint === null ? {} : { hint: item.hint }),
   }));
-  for (const edge of edges) {
-    choices.push({
-      value: edge.id,
-      label:
-        `${paint("bold", edge.id)} ${edge.lens} rough edge  ` +
-        `${paint("cyan", formatLocation(edge))}  ${edge.title}`,
-      hint: "not a defect",
-    });
-  }
   if (summary !== null) {
     choices.unshift({
       value: SUMMARY,
@@ -83,13 +75,12 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   }
   const initial = [
     ...(summary === null ? [] : [SUMMARY]),
-    ...items.flatMap((item) => (item.preselected ? [item.finding.id] : [])),
+    ...items.flatMap((item) => (item.preselected ? [item.id] : [])),
   ];
   const picked = await pick(`Post to PR #${pr.number}: ${pr.title}`, choices, initial);
   if (picked === null) return;
-  const selected = items.filter((item) => picked.includes(item.finding.id));
-  const selectedEdges = edges.filter((edge) => picked.includes(edge.id));
-  if (selected.length === 0 && selectedEdges.length === 0 && !picked.includes(SUMMARY)) {
+  const selected = items.filter((item) => picked.includes(item.id));
+  if (selected.length === 0 && !picked.includes(SUMMARY)) {
     note.info("Nothing selected.");
     return;
   }
@@ -109,7 +100,6 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   const plan = buildReview(selected, diff, reviewed, {
     summary: picked.includes(SUMMARY) ? summary : null,
     trust: (run.trust ?? prTrust(pr)).level,
-    roughEdges: selectedEdges,
   });
   note.box(plan.payload.body, "Review body");
   for (const comment of plan.payload.comments) {
@@ -122,14 +112,14 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
   if (!(await confirm(`Post this review to ${pr.url} as a comment review?`))) return;
 
   const review = await postReview(runRoot, pr, plan.payload);
-  // Comments come back in an unspecified order; match each to its finding by path and body.
+  // Comments come back in an unspecified order; match each to its item by path and body.
   const unclaimed = [...(review.comments ?? [])];
   const record: PostedRecord = {
     postedAt: new Date().toISOString(),
     reviewId: review.id,
     url: review.url,
     commitId: reviewed,
-    findings: [
+    items: [
       ...plan.inline.map((id, index) => {
         const sent = plan.payload.comments[index]!;
         const at = unclaimed.findIndex((c) => c.path === sent.path && c.body === sent.body);
