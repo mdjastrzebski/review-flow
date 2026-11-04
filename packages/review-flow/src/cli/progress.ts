@@ -1,3 +1,4 @@
+import { styleText } from "node:util";
 import * as clack from "@clack/prompts";
 import { formatElapsed, type Summary, type TaskActivity, type TrustLevel } from "../core/index.ts";
 import { formatSummaryFields } from "./format.ts";
@@ -51,12 +52,17 @@ export function createProgress(options: {
   let spinner: ReturnType<typeof clack.spinner> | null = null;
   const startSpinner = () => {
     open();
+    // Draw the guide bar ourselves so it can be erased again when the spinner stops;
+    // otherwise each restart would leave a stray bar behind.
+    output.write(`${styleText("gray", "│")}\n`);
     spinner = clack.spinner({ output, withGuide: false });
     spinner.start(status);
   };
   const stopSpinner = () => {
-    spinner?.clear();
+    if (spinner === null) return;
+    spinner.clear();
     spinner = null;
+    output.write("\x1b[1A\x1b[2K\r");
   };
   /** Prints a line above the spinner. */
   const print = (write: () => void) => {
@@ -70,13 +76,12 @@ export function createProgress(options: {
   const onActivity = (activity: TaskActivity) => {
     if (activity.done) running.delete(activity.taskId);
     else running.set(activity.taskId, activity);
-    if (running.size === 0) {
-      stopSpinner();
-      return;
-    }
-    const latest = activity.done ? [...running.values()].at(-1)! : activity;
-    const others = running.size > 1 ? ` (+${running.size - 1} more)` : "";
-    const line = `${latest.taskId} ${formatElapsed(latest.elapsedMs)}${others}  ${short(latest.text)}`;
+    // Between tasks nothing is running, but the pipeline is: keep the spinner so the
+    // display never looks idle.
+    const latest = activity.done ? [...running.values()].at(-1) : activity;
+    const line = latest
+      ? `${latest.taskId} ${formatElapsed(latest.elapsedMs)}${running.size > 1 ? ` (+${running.size - 1} more)` : ""}  ${short(latest.text)}`
+      : "Working…";
     // Room for the spinner frame, its dots, and the cursor.
     const width = (output.columns ?? 80) - 8;
     status = line.length > width ? `${line.slice(0, width - 1)}…` : line;
