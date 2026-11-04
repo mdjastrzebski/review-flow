@@ -307,7 +307,6 @@ async function checkRoughEdges(
     models: Pick<RoleModels, "verifier">;
   },
   ctx: PipelineContext,
-  signal: AbortSignal,
 ): Promise<CheckedRoughEdge[]> {
   if (edges.length === 0) return [];
   const result = await runTask(
@@ -325,7 +324,7 @@ async function checkRoughEdges(
       model: context.models.verifier.model,
       effort: context.models.verifier.effort,
       timeoutMs: VERIFIER_TIMEOUT_MS,
-      signal,
+      signal: ctx.signal,
     },
     "check",
     ctx,
@@ -336,6 +335,39 @@ async function checkRoughEdges(
     return applyChecks(edges, null, failure);
   }
   return applyChecks(edges, result.output, null);
+}
+
+/**
+ * Verify: the per-finding verifiers, then the batched rough edge check, timed as `check` so its
+ * cost shows apart. `edges` is null when rough edges were not asked for; then no
+ * rough-edges.json is written.
+ */
+async function verifyAll(
+  findings: readonly NormalizedFinding[],
+  edges: readonly NormalizedRoughEdge[] | null,
+  context: { change: ChangeRange; sharedContext: string; models: RoleModels },
+  stepDurations: StepDurations,
+  ctx: PipelineContext,
+): Promise<{ verdicts: Record<string, Verdict>; roughEdges: CheckedRoughEdge[] }> {
+  const verdicts = await timeStep(stepDurations, "verify", async () => {
+    if (findings.length > 0) ctx.log(`Verifying ${findings.length} finding(s)…`);
+    const result = await verifyFindings(findings, context, ctx);
+    await writeJson(ctx.runDir.verdictsPath, result);
+    if (findings.length > 0) {
+      const counts = countVerdicts(result);
+      ctx.log(
+        `Verified: ${counts.confirmed} confirmed, ${counts.inconclusive} inconclusive, ${counts.refuted} refuted`,
+      );
+    }
+    return result;
+  });
+  if (edges === null) return { verdicts, roughEdges: [] };
+  const roughEdges =
+    edges.length === 0
+      ? []
+      : await timeStep(stepDurations, "check", () => checkRoughEdges(edges, context, ctx));
+  await writeJson(ctx.runDir.roughEdgesPath, roughEdges);
+  return { verdicts, roughEdges };
 }
 
 /**
@@ -546,7 +578,6 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   // Outside the try, so a failed run still indexes what it got to.
   let findingCount: number | null = null;
   let verdictCounts: VerdictCounts | null = null;
-  let checkedEdges: CheckedRoughEdge[] = [];
 
   try {
     const sharedContext = buildChangeContext(await loadPrompt("change"), change, diff);
@@ -603,40 +634,22 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
             const edges = roughEdges ? normalizeRoughEdges(review.output, repo) : null;
             for (const note of edges?.notes ?? []) log(note);
             if (edges !== null) log(`Reviewer returned ${edges.roughEdges.length} rough edge(s)`);
-            return {
-              findings: normalized.findings,
-              edges: edges?.roughEdges ?? [],
-            };
+            return { findings: normalized.findings, edges: edges?.roughEdges ?? null };
           });
           const { findings, edges } = reviewed;
 
           findingCount = findings.length;
           abort.signal.throwIfAborted();
 
-          const verdicts = await timeStep(stepDurations, "verify", async () => {
-            if (findings.length > 0) {
-              log(`Verifying ${findings.length} finding(s)…`);
-            }
-            const result = await verifyFindings(findings, { change, sharedContext, models }, ctx);
-            await writeJson(runDir.verdictsPath, result);
-            if (findings.length > 0) {
-              const counts = countVerdicts(result);
-              log(
-                `Verified: ${counts.confirmed} confirmed, ${counts.inconclusive} inconclusive, ${counts.refuted} refuted`,
-              );
-            }
-            return result;
-          });
-
-          if (edges.length > 0) {
-            checkedEdges = await timeStep(stepDurations, "check", () =>
-              checkRoughEdges(edges, { change, sharedContext, models }, ctx, abort.signal),
-            );
-          }
-          if (roughEdges) await writeJson(runDir.roughEdgesPath, checkedEdges);
-
+          const { verdicts, roughEdges: checked } = await verifyAll(
+            findings,
+            edges,
+            { change, sharedContext, models },
+            stepDurations,
+            ctx,
+          );
           verdictCounts = countVerdicts(verdicts);
-          return { findings, verdicts, roughEdges: checkedEdges };
+          return { findings, verdicts, roughEdges: checked };
         })
       : Promise.resolve(null);
 
