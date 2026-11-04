@@ -21,6 +21,7 @@ import {
   fetchPr,
   parsePrTarget,
   postableItems,
+  postableRoughEdges,
   defaultCheckoutsDir,
   loadDataset,
   loadRun,
@@ -336,7 +337,9 @@ async function review(target: string | undefined, options: ReviewOptions): Promi
 
   if (prTarget !== null && interactive()) {
     const postable =
-      result.summary?.status === "ok" || postableItems(result.findings, result.verdicts).length > 0;
+      result.summary?.status === "ok" ||
+      postableItems(result.findings, result.verdicts).length > 0 ||
+      postableRoughEdges(result.roughEdges).length > 0;
     if (postable && (await confirm("Post to the PR?"))) {
       await postRun(result.runDir.root, colorOptions());
     } else if (postable) {
