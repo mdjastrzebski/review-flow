@@ -38,7 +38,8 @@ import { formatElapsed, runTask, type TaskActivity, type TaskContext } from "./t
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "./trust.ts";
 import {
   FindingsOutput,
-  ReviewOutput,
+  lenientReviewOutput,
+  type ReviewOutput,
   RoughEdgeChecks,
   Summary,
   Verdict,
@@ -608,6 +609,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
               roughEdges: roughEdges ? await loadPrompt("rough-edges") : "",
             });
             log("Reviewing…");
+            const lenient = roughEdges ? lenientReviewOutput() : null;
             const review = await runTask<FindingsOutput | ReviewOutput>(
               {
                 taskId: "reviewer",
@@ -615,7 +617,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
                 prompt,
                 sharedContext: null,
                 cwd: repo,
-                schema: roughEdges ? ReviewOutput : FindingsOutput,
+                schema: lenient?.schema ?? FindingsOutput,
                 model: models.reviewer.model,
                 effort: models.reviewer.effort,
                 timeoutMs: REVIEWER_TIMEOUT_MS,
@@ -628,6 +630,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
               throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
             }
 
+            for (const note of lenient?.notes() ?? []) log(note);
             const normalized = normalizeFindings(review.output, repo);
             for (const note of normalized.notes) log(note);
             await writeJson(runDir.findingsPath, normalized.findings);

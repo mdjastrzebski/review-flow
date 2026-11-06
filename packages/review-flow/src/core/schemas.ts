@@ -73,6 +73,30 @@ export const ReviewOutput = z.strictObject({
 });
 export type ReviewOutput = z.infer<typeof ReviewOutput>;
 
+/**
+ * ReviewOutput for parsing the reviewer's answer. It emits the same JSON Schema, but a missing
+ * `roughEdges` list counts as empty and invalid edges are dropped, so a bad edge can't lose the
+ * findings. `notes()` describes what the latest parse dropped.
+ */
+export function lenientReviewOutput(): { schema: z.ZodType<ReviewOutput>; notes: () => string[] } {
+  let notes: string[] = [];
+  const schema = z.preprocess((value) => {
+    notes = [];
+    if (typeof value !== "object" || value === null || !("findings" in value)) return value;
+    const { roughEdges, ...rest } = value as Record<string, unknown>;
+    if (roughEdges === undefined || roughEdges === null) {
+      notes.push("Reviewer returned no rough edge list; treated it as empty.");
+      return { ...rest, roughEdges: [] };
+    }
+    if (!Array.isArray(roughEdges)) return value;
+    const valid = roughEdges.filter((edge) => RoughEdge.safeParse(edge).success);
+    const dropped = roughEdges.length - valid.length;
+    if (dropped > 0) notes.push(`Dropped ${dropped} invalid rough edge(s) from the reviewer.`);
+    return { ...rest, roughEdges: valid };
+  }, ReviewOutput);
+  return { schema, notes: () => notes };
+}
+
 export const Evidence = z.strictObject({
   kind: z.enum(["code_ref", "reasoning"]),
   file: z.string().nullable(),

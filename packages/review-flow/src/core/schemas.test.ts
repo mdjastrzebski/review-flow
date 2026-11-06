@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { Finding, FindingsOutput, ReviewOutput, RoughEdgeChecks, Verdict } from "./schemas.ts";
+import { z } from "zod";
+import {
+  Finding,
+  FindingsOutput,
+  lenientReviewOutput,
+  ReviewOutput,
+  RoughEdgeChecks,
+  Verdict,
+} from "./schemas.ts";
 
 const finding = {
   localId: "1",
@@ -94,6 +102,46 @@ describe("rough edge priority", () => {
     expect(RoughEdgeChecks.safeParse({ checks: [{ ...check, priority: "low" }] }).success).toBe(
       true,
     );
+  });
+});
+
+describe("lenientReviewOutput", () => {
+  const edge = {
+    localId: "1",
+    title: "t",
+    file: "src/a.ts",
+    lineStart: 1,
+    lineEnd: 2,
+    lens: "design",
+    priority: "high",
+    observation: "o",
+    suggestion: "s",
+  };
+
+  it("sends the model the same JSON Schema as ReviewOutput", () => {
+    expect(z.toJSONSchema(lenientReviewOutput().schema)).toEqual(z.toJSONSchema(ReviewOutput));
+  });
+
+  it("drops invalid rough edges but keeps the findings and valid edges", () => {
+    const { schema, notes } = lenientReviewOutput();
+    const parsed = schema.parse({
+      findings: [finding],
+      roughEdges: [edge, { ...edge, priority: "critical" }, { ...edge, lineStart: 0 }],
+    });
+    expect(parsed).toEqual({ findings: [finding], roughEdges: [edge] });
+    expect(notes()).toEqual(["Dropped 2 invalid rough edge(s) from the reviewer."]);
+  });
+
+  it("treats a missing rough edge list as empty", () => {
+    const { schema, notes } = lenientReviewOutput();
+    expect(schema.parse({ findings: [finding] })).toEqual({ findings: [finding], roughEdges: [] });
+    expect(notes()).toHaveLength(1);
+  });
+
+  it("still validates findings strictly", () => {
+    const { schema } = lenientReviewOutput();
+    const bad = { ...finding, severity: "urgent" };
+    expect(schema.safeParse({ findings: [bad], roughEdges: [] }).success).toBe(false);
   });
 });
 
