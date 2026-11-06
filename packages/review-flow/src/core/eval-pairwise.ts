@@ -187,19 +187,35 @@ export async function pairwiseEvals(options: PairwiseOptions): Promise<PairwiseR
       continue;
     }
     const checkout = path.join(options.checkoutsDir, checkoutName(evalCase.repo));
-    await ensureClone(evalCase.repo, checkout, [evalCase.base, evalCase.head]);
-    await checkoutDetached(checkout, evalCase.head);
-    const result = await judgePair({
-      caseId: id,
-      a,
-      b,
-      change: changeRangeOf(evalCase.base, { uncommitted: false }),
-      diff: await readFile(runDirPaths(pathsA.caseRoot(id)).diffPath, "utf8"),
-      cwd: checkout,
-      model: options.model,
-      runAgent: options.runAgent,
-      ...(options.random === undefined ? {} : { random: options.random }),
-    });
+    const startedAt = Date.now();
+    let result: PairwiseCase;
+    try {
+      await ensureClone(evalCase.repo, checkout, [evalCase.base, evalCase.head]);
+      await checkoutDetached(checkout, evalCase.head);
+      result = await judgePair({
+        caseId: id,
+        a,
+        b,
+        change: changeRangeOf(evalCase.base, { uncommitted: false }),
+        diff: await readFile(runDirPaths(pathsA.caseRoot(id)).diffPath, "utf8"),
+        cwd: checkout,
+        model: options.model,
+        runAgent: options.runAgent,
+        ...(options.random === undefined ? {} : { random: options.random }),
+      });
+    } catch (caught) {
+      // A failed setup fails the case, not the cases already judged and paid for.
+      result = {
+        id,
+        winner: null,
+        aFirst: false,
+        reason: null,
+        error: caught instanceof Error ? caught.message : String(caught),
+        kept: { a: a.length, b: b.length },
+        costUsd: null,
+        durationMs: Date.now() - startedAt,
+      };
+    }
     results.push(result);
     if (result.winner === null)
       options.warn?.(`${id}: the pairwise judge failed (${result.error}).`);

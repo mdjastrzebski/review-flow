@@ -5,12 +5,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
 import { loadRun } from "./compare.ts";
-import { runEval, type EvalRunOptions } from "./eval.ts";
+import { evalRunPaths, runEval, type EvalRunOptions } from "./eval.ts";
 import { pairwiseEvals } from "./eval-pairwise.ts";
 import type { EvalCase } from "./eval-dataset.ts";
 import type { CaseResult } from "./eval-score.ts";
 import { WorkingTreeChangedError } from "./git.ts";
 import { DEFAULT_MODELS } from "./models.ts";
+import { runDirPaths } from "./run-dir.ts";
 import { readIndex } from "./run-index.ts";
 import { ROUGH_EDGE_CHECKER_TASK_ID } from "./rough-edges.ts";
 import type { FindingsOutput, ReviewOutput, RoughEdgeChecks, Verdict } from "./schemas.ts";
@@ -451,6 +452,27 @@ describe("runEval", () => {
       await readFile(path.join(a.root, `pairwise-${path.basename(b.root)}.json`), "utf8"),
     );
     expect(saved.scores).toEqual(record.scores);
+
+    // A case that fails before the judge is recorded as failed; the record is still saved.
+    await rm(runDirPaths(evalRunPaths(a.root).caseRoot("clean")).diffPath);
+    const failed = await pairwiseEvals({
+      a: { root: a.root, cases: a.cases },
+      b: { root: b.root, cases: b.cases },
+      dataset: cases,
+      checkoutsDir: checkouts,
+      model: { model: "judge-model", effort: null },
+      runAgent: judge,
+      log: () => {},
+    });
+    expect(judged).toHaveLength(1);
+    expect(failed.cases).toEqual([
+      expect.objectContaining({
+        id: "clean",
+        winner: null,
+        error: expect.stringContaining("ENOENT"),
+      }),
+    ]);
+    expect(failed.scores).toMatchObject({ cases: 0, failed: 1 });
   });
 
   it("refuses a pairwise judge when no case ran with rough edges in both evals", async () => {
