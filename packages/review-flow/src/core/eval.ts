@@ -4,26 +4,22 @@ import type { RunAgent } from "./agent.ts";
 import { addTotals, EMPTY_TOTALS, type Step, type TimedTotals } from "./calls.ts";
 import { checkoutName, type EvalCase, type EvalSubset } from "./eval-dataset.ts";
 import { fetchFixDiffs } from "./eval-fixes.ts";
-import { judgeRoughEdges, type EdgeJudgeResult } from "./eval-edge-judge.ts";
+import { scoreRoughEdges, type EdgeJudge } from "./eval-edge-judge.ts";
 import { judgeCase, type JudgeResult } from "./eval-judge.ts";
+import { roughEdgeOutcome } from "./eval-rough-edge-score.ts";
 import {
   countReported,
-  countRoughEdges,
   judgeBugs,
   scoreBugs,
   summarizeCases,
-  tallyEdgeJudge,
   type BugResult,
   type CaseResult,
-  type EdgeJudgeTally,
   type EvalScores,
   type JudgeCall,
-  type RoughEdgeResult,
 } from "./eval-score.ts";
 import { describeModel, formatCost, formatDuration } from "./format.ts";
 import { checkoutDetached, ensureClone, resolveRepoRoot, WorkingTreeChangedError } from "./git.ts";
 import { readJsonOrNull, writeJson } from "./json.ts";
-import { readFile } from "node:fs/promises";
 import type { Harness, ModelChoice, RoleModels } from "./models.ts";
 import {
   runReview,
@@ -34,9 +30,8 @@ import {
 import type { TaskActivity } from "./task.ts";
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "./run-dir.ts";
 import { appendIndexEntry, runsPath } from "./run-index.ts";
-import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
+import type { NormalizedFinding, Verdict } from "./schemas.ts";
 import type { Trust } from "./trust.ts";
-import { changeRangeOf } from "./verify.ts";
 
 export interface EvalRunOptions {
   /** Any directory inside the repository the eval run is saved in. */
@@ -65,13 +60,6 @@ export interface EvalRunOptions {
   logTable?: ReviewRunOptions["logTable"];
   onActivity?: (activity: TaskActivity) => void;
   verbose?: boolean;
-}
-
-/** The rough-edge judge: another model than the reviewer's, possibly on another harness. */
-export interface EdgeJudge {
-  harness: Harness;
-  model: ModelChoice;
-  runAgent: RunAgent;
 }
 
 /** run.json of an eval run. */
@@ -121,18 +109,6 @@ export function caseOutcome(result: CaseResult): string {
   return result.bugs.some((b) => b.foundByReviewer) ? "refuted" : "missed";
 }
 
-/**
- * `N kept (A accurate, U unclear, I inaccurate)`, plus `, P postable` when judged; null when the
- * case has no rough-edge result.
- */
-export function roughEdgeOutcome(result: CaseResult): string | null {
-  const r = result.roughEdges;
-  if (r == null) return null;
-  const text = `${r.accurate + r.unclear} kept (${r.accurate} accurate, ${r.unclear} unclear, ${r.inaccurate} inaccurate)`;
-  if (r.judge?.status !== "ok") return text;
-  return `${text}, ${r.judge.keptPostable + r.judge.droppedPostable} postable`;
-}
-
 /** Outcome, rough edges when on, cost, and time; plus the error of a failed case. */
 export function describeCase(result: CaseResult): string {
   const parts = [caseOutcome(result)];
@@ -176,47 +152,6 @@ async function judgeBugsOf(
   if (result.status === "failed") return { bugs: null, call };
   await writeJson(path.join(caseRoot, "judge.json"), result.output);
   return { bugs: judgeBugs(evalCase.bugs, findings, verdicts, result.matches), call };
-}
-
-/**
- * Grades a case's rough edges with the rubric judge, in the case's checkout, and saves each grade
- * beside the checker's verdict in `rough-edge-judge.json`.
- */
-async function judgeEdgesOf(
-  evalCase: EvalCase,
-  edges: readonly CheckedRoughEdge[],
-  checkout: string,
-  caseRoot: string,
-  judge: EdgeJudge,
-): Promise<EdgeJudgeTally> {
-  let result: EdgeJudgeResult;
-  try {
-    result = await judgeRoughEdges({
-      caseId: evalCase.id,
-      edges,
-      change: changeRangeOf(evalCase.base, { uncommitted: false }),
-      diff: await readFile(runDirPaths(caseRoot).diffPath, "utf8"),
-      cwd: checkout,
-      model: judge.model,
-      runAgent: judge.runAgent,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    result = { status: "failed", error: message, costUsd: null, durationMs: 0 };
-  }
-  if (result.status === "ok") {
-    const { grades } = result;
-    await writeJson(
-      path.join(caseRoot, "rough-edge-judge.json"),
-      edges.map((e) => ({
-        id: e.id,
-        title: e.title,
-        check: e.check.status,
-        grade: grades.get(e.id) ?? null,
-      })),
-    );
-  }
-  return tallyEdgeJudge(edges, result);
 }
 
 /**
@@ -289,28 +224,16 @@ async function runCase(
       );
     }
   }
-  let roughEdges: RoughEdgeResult | null | undefined;
-  if (options.roughEdges) {
-    const check = run?.steps.check;
-    // No check step: the reviewer returned none, so nothing was spent.
-    const checkCost = check === undefined ? 0 : check.unknownCostCalls > 0 ? null : check.costUsd;
-    roughEdges = review === null ? null : countRoughEdges(review.roughEdges, checkCost);
-    if (review !== null && roughEdges !== null && options.edgeJudge !== undefined) {
-      const judged = await judgeEdgesOf(
+  const roughEdges = options.roughEdges
+    ? await scoreRoughEdges({
         evalCase,
-        review.roughEdges,
-        review.checkout,
+        review,
+        run,
         caseRoot,
-        options.edgeJudge,
-      );
-      roughEdges.judge = judged;
-      if (judged.status === "failed") {
-        options.warn?.(
-          `${evalCase.id}: the rough-edge judge failed (${judged.error ?? "no result"}).`,
-        );
-      }
-    }
-  }
+        judge: options.edgeJudge,
+        warn: options.warn,
+      })
+    : undefined;
   const result: CaseResult = {
     id: evalCase.id,
     kind: evalCase.kind,

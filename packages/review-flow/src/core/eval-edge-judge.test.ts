@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
-import {
-  gradesOf,
-  isPostable,
-  judgeRoughEdges,
-  type EdgeGrade,
-  type EdgeJudgeOutput,
-} from "./eval-edge-judge.ts";
+import { gradesOf, judgeRoughEdges, type EdgeJudgeOutput } from "./eval-edge-judge.ts";
+import type { EdgeGrade } from "./eval-rough-edge-score.ts";
 import type { CheckedRoughEdge } from "./schemas.ts";
 
 function edge(
@@ -35,13 +30,6 @@ const yes: EdgeGrade = {
   concrete: true,
   worthPosting: true,
 };
-
-describe("isPostable", () => {
-  it("needs a yes to every question", () => {
-    expect(isPostable(yes)).toBe(true);
-    expect(isPostable({ ...yes, worthPosting: false })).toBe(false);
-  });
-});
 
 describe("gradesOf", () => {
   it("drops unknown ids and leaves an id answered twice ungraded", () => {

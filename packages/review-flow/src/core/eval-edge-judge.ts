@@ -1,17 +1,27 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import type { RunAgent } from "./agent.ts";
-import type { ModelChoice } from "./models.ts";
+import type { EvalCase } from "./eval-dataset.ts";
+import {
+  countRoughEdges,
+  tallyEdgeJudge,
+  type EdgeGrade,
+  type EdgeJudgeResult,
+  type RoughEdgeResult,
+} from "./eval-rough-edge-score.ts";
+import { writeJson } from "./json.ts";
+import type { Harness, ModelChoice } from "./models.ts";
+import type { ReviewRunResult, RunRecord } from "./pipeline.ts";
 import { loadPrompt, renderPrompt } from "./prompts.ts";
 import { describeRoughEdges } from "./rough-edges.ts";
+import { runDirPaths } from "./run-dir.ts";
 import type { CheckedRoughEdge, NormalizedRoughEdge } from "./schemas.ts";
-import { buildChangeContext, type ChangeRange } from "./verify.ts";
+import { buildChangeContext, changeRangeOf, type ChangeRange } from "./verify.ts";
 
 const EDGE_JUDGE_TIMEOUT_MS = 10 * 60_000;
 
-/** The rubric, in the order the judge answers it; a rough edge is postable when all are yes. */
-export const RUBRIC = ["accurate", "notLocal", "concrete", "worthPosting"] as const;
-export type RubricQuestion = (typeof RUBRIC)[number];
-
+/** The judge's answers, one per rough edge, in RUBRIC order. */
 export const EdgeJudgeOutput = z.strictObject({
   edges: z.array(
     z.strictObject({
@@ -25,19 +35,13 @@ export const EdgeJudgeOutput = z.strictObject({
   ),
 });
 export type EdgeJudgeOutput = z.infer<typeof EdgeJudgeOutput>;
-export type EdgeGrade = Omit<EdgeJudgeOutput["edges"][number], "id">;
 
-export const isPostable = (grade: EdgeGrade): boolean => RUBRIC.every((q) => grade[q]);
-
-export type EdgeJudgeResult =
-  | {
-      status: "ok";
-      /** Rough edge id to its grade; an edge the judge skipped or answered twice has none. */
-      grades: Map<string, EdgeGrade>;
-      costUsd: number | null;
-      durationMs: number;
-    }
-  | { status: "failed"; error: string; costUsd: number | null; durationMs: number };
+/** The rough-edge judge: another model than the reviewer's, possibly on another harness. */
+export interface EdgeJudge {
+  harness: Harness;
+  model: ModelChoice;
+  runAgent: RunAgent;
+}
 
 /** Unknown ids are dropped, and an id answered twice is left ungraded. */
 export function gradesOf(
@@ -102,4 +106,62 @@ export async function judgeRoughEdges(options: {
     costUsd: result.costUsd,
     durationMs: result.durationMs,
   };
+}
+
+/**
+ * Scores a case's rough edges: the checker's verdicts and the check step's cost, then, with a
+ * judge, the rubric grades, saved beside the checker's verdicts in `rough-edge-judge.json`. Null
+ * when the review failed.
+ */
+export async function scoreRoughEdges(options: {
+  evalCase: EvalCase;
+  review: ReviewRunResult | null;
+  run: RunRecord | null;
+  caseRoot: string;
+  judge?: EdgeJudge | undefined;
+  warn?: ((message: string) => void) | undefined;
+}): Promise<RoughEdgeResult | null> {
+  const { evalCase, review, caseRoot, judge } = options;
+  if (review === null) return null;
+  const check = options.run?.steps.check;
+  // No check step: the reviewer returned none, so nothing was spent.
+  const checkCost = check === undefined ? 0 : check.unknownCostCalls > 0 ? null : check.costUsd;
+  const roughEdges = countRoughEdges(review.roughEdges, checkCost);
+  if (judge === undefined) return roughEdges;
+
+  const edges = review.roughEdges;
+  let result: EdgeJudgeResult;
+  try {
+    result = await judgeRoughEdges({
+      caseId: evalCase.id,
+      edges,
+      change: changeRangeOf(evalCase.base, { uncommitted: false }),
+      diff: await readFile(runDirPaths(caseRoot).diffPath, "utf8"),
+      cwd: review.checkout,
+      model: judge.model,
+      runAgent: judge.runAgent,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    result = { status: "failed", error: message, costUsd: null, durationMs: 0 };
+  }
+  if (result.status === "ok") {
+    const { grades } = result;
+    await writeJson(
+      path.join(caseRoot, "rough-edge-judge.json"),
+      edges.map((e) => ({
+        id: e.id,
+        title: e.title,
+        check: e.check.status,
+        grade: grades.get(e.id) ?? null,
+      })),
+    );
+  }
+  roughEdges.judge = tallyEdgeJudge(edges, result);
+  if (roughEdges.judge.status === "failed") {
+    options.warn?.(
+      `${evalCase.id}: the rough-edge judge failed (${roughEdges.judge.error ?? "no result"}).`,
+    );
+  }
+  return roughEdges;
 }
