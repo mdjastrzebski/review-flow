@@ -23,8 +23,9 @@ Each rough edge must:
 
 - name a unit (module, class, function, or a small set of them) and the file paths involved, with a `title` that names the design problem, not the symptom. Set `file` and the line range to the clearest evidence;
 - state in `observation` what the code does, which other code it interacts with, and what becomes harder because of it: name a plausible next change that would hurt. Cite what you read, in at least two places when the problem is about how pieces fit together;
+- have a `priority`, how much it will cost the next editor: `high` will make the next likely change in this area clearly harder, so it is worth fixing with or right after this change; `medium` is a real cost, worth a follow-up; `low` is nice to have;
 - give a concrete `suggestion` in at most 3 sentences: the structure you would move to (what moves where, what the boundary becomes). Describe it; do not write a patch.
 
 Skip anything that is local to one function or one call site. In particular, do not report: variable or function names; parameter counts and argument order; local mutable variables or closures; a long function that could be split; intermediate variables; style, formatting, or comments; or anything whose fix is a small edit in one file. Those are the author's call or a linter's job. Being ambitious means a bolder design, not more nitpicks.
 
-Report at most 5, a few high-conviction ones rather than a long list. Rank by how much they would cost the next editor, highest first: structural regressions, then missed simplifications, then growing branching, then boundary and type problems, then size. If the design is sound and no simpler one exists, return an empty list.
+Report at most 5, a few high-conviction ones rather than a long list. Rank by how much they would cost the next editor, highest first (the priorities agree with this order): structural regressions, then missed simplifications, then growing branching, then boundary and type problems, then size. If the design is sound and no simpler one exists, return an empty list.

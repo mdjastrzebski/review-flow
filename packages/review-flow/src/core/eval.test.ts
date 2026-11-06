@@ -208,15 +208,16 @@ describe("runEval", () => {
       lineStart: 1,
       lineEnd: 2,
       lens: "design",
+      priority: "medium",
       observation: "o",
       suggestion: "s",
     });
     const withEdges: ReviewOutput = { ...review, roughEdges: ["1", "2", "3"].map(edge) };
     const checks: RoughEdgeChecks = {
       checks: [
-        { localId: "R-001", status: "accurate", note: "n" },
-        { localId: "R-002", status: "unclear", note: "n" },
-        { localId: "R-003", status: "inaccurate", note: "n" },
+        { localId: "R-001", status: "accurate", note: "n", priority: "medium" },
+        { localId: "R-002", status: "unclear", note: "n", priority: "medium" },
+        { localId: "R-003", status: "inaccurate", note: "n", priority: "medium" },
       ],
     };
     const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
@@ -270,6 +271,7 @@ describe("runEval", () => {
       lineStart: 1,
       lineEnd: 2,
       lens: "design",
+      priority: "medium",
       observation: "o",
       suggestion: "s",
     };
@@ -278,7 +280,9 @@ describe("runEval", () => {
         task.role === "reviewer"
           ? { ...review, roughEdges: [edge] }
           : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
-            ? { checks: [{ localId: "R-001", status: "inaccurate", note: "n" }] }
+            ? {
+                checks: [{ localId: "R-001", status: "inaccurate", note: "n", priority: "medium" }],
+              }
             : confirmed;
       return {
         status: "ok",
@@ -378,13 +382,14 @@ describe("runEval", () => {
                     lineStart: 1,
                     lineEnd: 2,
                     lens: "design",
+                    priority: "medium",
                     observation: "o",
                     suggestion: "s",
                   },
                 ],
               }
             : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
-              ? { checks: [{ localId: "R-001", status, note: "n" }] }
+              ? { checks: [{ localId: "R-001", status, note: "n", priority: "medium" }] }
               : confirmed;
         return {
           status: "ok",

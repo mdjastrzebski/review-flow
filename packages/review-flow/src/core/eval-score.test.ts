@@ -280,9 +280,10 @@ describe("tallyEdgeJudge", () => {
     lineStart: 1,
     lineEnd: 2,
     lens: "design",
+    priority: "medium",
     observation: "o",
     suggestion: "s",
-    check: { status, note: "n" },
+    check: { status, note: "n", priority: "medium" },
   });
   const grade = (overrides: Partial<EdgeGrade> = {}): EdgeGrade => ({
     reason: "r",

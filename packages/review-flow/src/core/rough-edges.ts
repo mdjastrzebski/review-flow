@@ -3,6 +3,7 @@ import { codeFence, renderPrompt } from "./prompts.ts";
 import type {
   CheckedRoughEdge,
   NormalizedRoughEdge,
+  Priority,
   RoughEdgeCheck,
   RoughEdgeChecks,
 } from "./schemas.ts";
@@ -28,7 +29,7 @@ export function describeRoughEdges(edges: readonly NormalizedRoughEdge[]): strin
     .map((edge) =>
       [
         `### ${edge.id}: ${edge.title}`,
-        `Location: \`${formatLocation(edge)}\` · lens: ${edge.lens}`,
+        `Location: \`${formatLocation(edge)}\` · lens: ${edge.lens} · reviewer priority: ${edge.priority}`,
         `Observation:\n\n${codeFence(edge.observation)}`,
         `Suggestion:\n\n${codeFence(edge.suggestion)}`,
       ].join("\n\n"),
@@ -56,6 +57,7 @@ export function applyChecks(
         ? answered[0]!
         : {
             status: "unclear",
+            priority: edge.priority,
             note:
               failure !== null
                 ? `Check failed (${failure}).`
@@ -67,7 +69,27 @@ export function applyChecks(
   });
 }
 
-/** Rough edges the checker did not rule out, in reviewer order. */
+const PRIORITY_ORDER: readonly Priority[] = ["high", "medium", "low"];
+
+/**
+ * The final (checker's) priority. Runs saved before priority existed have none; they read as
+ * null, since `rough-edges.json` is read back without validation.
+ */
+export function finalPriority(edge: CheckedRoughEdge): Priority | null {
+  return (edge.check as Partial<RoughEdgeCheck>).priority ?? null;
+}
+
+function priorityRank(edge: CheckedRoughEdge): number {
+  const priority = finalPriority(edge);
+  return priority === null ? PRIORITY_ORDER.length : PRIORITY_ORDER.indexOf(priority);
+}
+
+/**
+ * Rough edges the checker did not rule out, highest final priority first; ties and runs without
+ * priority keep reviewer order.
+ */
 export function keptRoughEdges(edges: readonly CheckedRoughEdge[]): CheckedRoughEdge[] {
-  return edges.filter((edge) => edge.check.status !== "inaccurate");
+  return edges
+    .filter((edge) => edge.check.status !== "inaccurate")
+    .sort((a, b) => priorityRank(a) - priorityRank(b));
 }

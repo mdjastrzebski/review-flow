@@ -5,11 +5,13 @@ import {
   formatDuration,
   formatLocation,
   goalNote,
+  finalPriority,
   keptRoughEdges,
   rankFindings,
   type CheckedRoughEdge,
   type FixAssessment,
   type NormalizedFinding,
+  type Priority,
   type Severity,
   type Summary,
   type SummaryOutcome,
@@ -40,6 +42,13 @@ const SEVERITY_STYLE: Record<Severity, Style> = {
   high: ["bold", "red"],
   medium: ["bold", "yellow"],
   low: ["bold", "blue"],
+};
+
+// Not the severity colors: a priority is not a defect level.
+const PRIORITY_STYLE: Record<Priority, Style> = {
+  high: ["bold"],
+  medium: [],
+  low: ["dim"],
 };
 
 const VERDICT_STYLE: Record<Verdict["verdict"], Style> = {
@@ -237,8 +246,10 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
       "",
     );
     for (const edge of edges) {
+      const priority = finalPriority(edge);
+      const badge = priority === null ? "" : `${paint(PRIORITY_STYLE[priority], priority)} `;
       out.push(
-        `${paint("bold", edge.id)} ${paint("magenta", edge.lens)}  ${paint("bold", edge.title)}`,
+        `${paint("bold", edge.id)} ${badge}${paint("magenta", edge.lens)}  ${paint("bold", edge.title)}`,
       );
       out.push(`${INDENT}${paint("cyan", formatLocation(edge))}`);
       field("Seen", edge.observation);

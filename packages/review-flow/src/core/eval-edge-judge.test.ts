@@ -21,9 +21,10 @@ function edge(
     lineStart: 1,
     lineEnd: 9,
     lens: "design",
+    priority: "medium",
     observation: `observation ${id}`,
     suggestion: `suggestion ${id}`,
-    check: { status, note: `checker note ${id}` },
+    check: { status, note: `checker note ${id}`, priority: "medium" },
   };
 }
 

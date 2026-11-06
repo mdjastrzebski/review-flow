@@ -12,9 +12,10 @@ function edge(title: string): CheckedRoughEdge {
     lineStart: 1,
     lineEnd: 9,
     lens: "design",
+    priority: "medium",
     observation: `observation ${title}`,
     suggestion: `suggestion ${title}`,
-    check: { status: "accurate", note: "checker note" },
+    check: { status: "accurate", note: "checker note", priority: "medium" },
   };
 }
 

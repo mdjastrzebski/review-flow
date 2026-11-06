@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MODELS } from "./models.ts";
 import { renderReport, type ReportInput } from "./report.ts";
-import type { NormalizedFinding, Summary, Verdict } from "./schemas.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Summary, Verdict } from "./schemas.ts";
 import { MAX_FIX_LINES } from "./verify.ts";
 
 function makeFinding(overrides: Partial<NormalizedFinding> = {}): NormalizedFinding {
@@ -258,7 +258,11 @@ describe("renderReport", () => {
 });
 
 describe("renderReport rough edges", () => {
-  const edge = (id: string, status: "accurate" | "inaccurate" | "unclear") => ({
+  const edge = (
+    id: string,
+    status: "accurate" | "inaccurate" | "unclear",
+    priority: "high" | "medium" | "low" = "medium",
+  ) => ({
     id,
     localId: id,
     title: `Edge ${id}`,
@@ -268,7 +272,8 @@ describe("renderReport rough edges", () => {
     lens: "testability" as const,
     observation: "Obs.",
     suggestion: "Do this.",
-    check: { status, note: "checked" },
+    priority: "low" as const,
+    check: { status, note: "checked", priority },
   });
 
   it("lists them after the findings, without the ones the checker ruled out", () => {
@@ -281,9 +286,27 @@ describe("renderReport rough edges", () => {
       ],
     });
     expect(report.indexOf("## Rough edges (2)")).toBeGreaterThan(report.indexOf("F-001"));
-    expect(report).toContain("### [ ] R-001 · testability · `src/a.ts:3-4`");
+    expect(report).toContain("### [ ] R-001 · medium · testability · `src/a.ts:3-4`");
     expect(report).toContain("**Check:** unclear — checked");
     expect(report).not.toContain("R-002");
+  });
+
+  it("shows the checker's priority, not the reviewer's, and lists high first", () => {
+    const report = renderReport({
+      ...input,
+      roughEdges: [edge("R-001", "accurate", "low"), edge("R-002", "accurate", "high")],
+    });
+    expect(report).toContain("### [ ] R-001 · low · ");
+    expect(report).not.toContain("reviewer priority");
+    expect(report.indexOf("R-002 · high")).toBeLessThan(report.indexOf("R-001 · low"));
+  });
+
+  it("renders a rough edge saved before priority existed, without one, last", () => {
+    const { priority: _drop, ...oldCheck } = edge("R-001", "accurate").check;
+    const old = { ...edge("R-001", "accurate"), check: oldCheck } as unknown as CheckedRoughEdge;
+    const report = renderReport({ ...input, roughEdges: [old, edge("R-002", "accurate", "low")] });
+    expect(report).toContain("### [ ] R-001 · testability · ");
+    expect(report.indexOf("R-002")).toBeLessThan(report.indexOf("R-001"));
   });
 
   it("lists them even when there are no findings", () => {

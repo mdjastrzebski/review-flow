@@ -36,6 +36,10 @@ export const Finding = z.strictObject({
 });
 export type Finding = z.infer<typeof Finding>;
 
+/** How much a rough edge will cost the next editor; triage only, never a severity. */
+export const Priority = z.enum(["high", "medium", "low"]);
+export type Priority = z.infer<typeof Priority>;
+
 export const Lens = z.enum(["structure", "design", "testability"]);
 export type Lens = z.infer<typeof Lens>;
 
@@ -47,6 +51,8 @@ export const RoughEdge = z.strictObject({
   lineStart: LineNumber,
   lineEnd: LineNumber,
   lens: Lens,
+  /** The reviewer's proposal; the checker's `check.priority` is the final one. */
+  priority: Priority,
   /** What is in the code, and why it is hard to follow or change. */
   observation: z.string(),
   /** A concrete change, described, not a patch. */
@@ -99,6 +105,8 @@ export const RoughEdgeCheck = z.strictObject({
   status: z.enum(["accurate", "inaccurate", "unclear"]),
   /** One line: what the checker found in the code. */
   note: z.string(),
+  /** The final priority: the reviewer's, kept or changed. */
+  priority: Priority,
 });
 export type RoughEdgeCheck = z.infer<typeof RoughEdgeCheck>;
 

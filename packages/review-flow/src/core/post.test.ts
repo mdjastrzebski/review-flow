@@ -7,6 +7,7 @@ import {
   itemSubject,
   postableItems,
   postableRoughEdges,
+  roughEdgeBody,
 } from "./post.ts";
 import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "./schemas.ts";
 
@@ -194,9 +195,10 @@ describe("buildReview with rough edges", () => {
     lineStart,
     lineEnd: lineStart,
     lens: "structure",
+    priority: "low",
     observation: "Obs.",
     suggestion: "Do this.",
-    check: { status: "accurate", note: "n" },
+    check: { status: "accurate", note: "n", priority: "high" },
   });
 
   it("anchors a rough edge like a finding and labels it as one", () => {
@@ -207,8 +209,21 @@ describe("buildReview with rough edges", () => {
     );
     expect(plan.inline).toEqual(["R-001"]);
     expect(plan.inBody).toEqual(["R-002"]);
-    expect(plan.payload.comments[0]!.body).toContain("**Rough edge (structure): Edge R-001**");
+    expect(plan.payload.comments[0]!.body).toContain(
+      "**Rough edge (structure, high priority): Edge R-001**",
+    );
     expect(plan.payload.comments[0]!.body).toContain("**Suggestion:** Do this.");
     expect(plan.payload.body).toContain("0 findings · 2 rough edges · 1 inline");
+  });
+
+  it("never pre-selects rough edges, whatever their priority", () => {
+    const items = postableRoughEdges([edge("R-001", "a.ts", 2)]);
+    expect(items.map((item) => isPreselected(item))).toEqual([false]);
+  });
+
+  it("labels a rough edge from a run saved before priority existed without one", () => {
+    const { priority: _drop, ...oldCheck } = edge("R-001", "a.ts", 2).check;
+    const old = { ...edge("R-001", "a.ts", 2), check: oldCheck } as unknown as CheckedRoughEdge;
+    expect(roughEdgeBody(old)).toContain("**Rough edge (structure): Edge R-001**");
   });
 });

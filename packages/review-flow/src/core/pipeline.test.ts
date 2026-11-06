@@ -803,6 +803,7 @@ describe("runReview trust", () => {
       lineStart: 2,
       lineEnd: 2,
       lens: "design",
+      priority: "medium",
       observation: "o",
       suggestion: "s",
     });
@@ -815,6 +816,7 @@ describe("runReview trust", () => {
       localId,
       status,
       note: `n${localId}`,
+      priority: "low" as const,
     });
 
     it("checks all edges in one verifier session and saves them with their checks", async () => {

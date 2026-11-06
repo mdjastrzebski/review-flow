@@ -2,7 +2,7 @@ import { formatLocation } from "./format.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import { renderSummary } from "./report.ts";
-import { keptRoughEdges } from "./rough-edges.ts";
+import { finalPriority, keptRoughEdges } from "./rough-edges.ts";
 import type { CheckedRoughEdge, NormalizedFinding, Severity, Summary, Verdict } from "./schemas.ts";
 import type { TrustLevel } from "./trust.ts";
 
@@ -132,8 +132,10 @@ export function postableRoughEdges(edges: readonly CheckedRoughEdge[]): Postable
 
 /** Labelled, so a reader can tell it from a finding: it is not a defect. */
 export function roughEdgeBody(edge: CheckedRoughEdge): string {
+  const priority = finalPriority(edge);
+  const label = priority === null ? edge.lens : `${edge.lens}, ${priority} priority`;
   return [
-    `**Rough edge (${edge.lens}): ${edge.title.trim()}**`,
+    `**Rough edge (${label}): ${edge.title.trim()}**`,
     edge.observation.trim(),
     suggestionField("Suggestion", edge.suggestion.trim()),
   ].join("\n\n");

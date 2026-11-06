@@ -138,7 +138,7 @@ Rough edges are improvements, not defects: the code works, but its design makes 
 
 Local issues (names, parameter counts, closures, long functions, style) are out of scope. At most 5 are reported, few and high-conviction, ranked by cost to the next editor. A suggestion may propose a design the repo does not use yet; the check judges whether it preserves behavior and is simpler, not whether there is precedent.
 
-A rough edge has an id (`R-001`…), file and line range, lens, a title, the observation (what is in the code and why it is hard to follow or change), and a concrete suggestion. It names a unit and its files, with the clearest evidence as the line range; general advice is dropped. It has no severity and is never a finding: it is not counted in the finding totals, `failOn`, exit codes, or the finding scores of `eval`, which scores rough edges apart (see 11). The check gives it `accurate` or `unclear` with a one-line note; `inaccurate` ones are dropped from the report and from posting. They are written to `rough-edges.json`.
+A rough edge has an id (`R-001`…), file and line range, lens, a priority, a title, the observation (what is in the code and why it is hard to follow or change), and a concrete suggestion. It names a unit and its files, with the clearest evidence as the line range; general advice is dropped. Its `priority` (`high`: will make the next likely change clearly harder, fix with or right after this change; `medium`: real cost, worth a follow-up; `low`: nice to have) is triage, not severity. The finder proposes it and the check returns the final one, which is the only one shown (terminal, report, posted comment); when the check fails or skips an edge, the finder's stands. A rough edge is never a finding: it is not counted in the finding totals, `failOn`, exit codes, or the finding scores of `eval`, which scores rough edges apart (see 11). The check gives it `accurate` or `unclear` with a one-line note; `inaccurate` ones are dropped from the report and from posting. They are written to `rough-edges.json`.
 
 ## 6. Incremental reviews
 
@@ -163,7 +163,7 @@ A review is incremental by default when an earlier run exists for the same targe
 4. Unverified findings.
 5. Since last review (incremental runs only).
 6. Pre-existing findings.
-7. Rough edges (see 5), after all findings.
+7. Rough edges (see 5), after all findings, highest priority first.
 
 Refuted findings are kept in the run data and listed last, in their own section, so they are not mistaken for real ones. A footer shows cost, time, preset, and the run directory. A run cut by a budget says so, for example "budget hit at $1.50, 4 of 9 findings verified".
 

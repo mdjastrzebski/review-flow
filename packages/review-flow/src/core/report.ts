@@ -3,7 +3,7 @@ import type { PullRequest } from "./github.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { codeFence } from "./prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
-import { keptRoughEdges } from "./rough-edges.ts";
+import { finalPriority, keptRoughEdges } from "./rough-edges.ts";
 import type {
   CheckedRoughEdge,
   CodeRef,
@@ -133,9 +133,14 @@ function renderItem(item: RankedItem): string {
   return parts.join("\n\n");
 }
 
+function priorityLabel(edge: CheckedRoughEdge): string {
+  const priority = finalPriority(edge);
+  return priority === null ? "" : `${priority} · `;
+}
+
 function renderRoughEdge(edge: CheckedRoughEdge): string {
   return [
-    `### [ ] ${edge.id} · ${edge.lens} · \`${formatLocation(edge)}\``,
+    `### [ ] ${edge.id} · ${priorityLabel(edge)}${edge.lens} · \`${formatLocation(edge)}\``,
     `**${escapeHtml(oneLine(edge.title), CODE_OR_LT_OR_STAR)}**`,
     field("Observation", edge.observation, { fence: false }),
     field("Suggestion", edge.suggestion),
