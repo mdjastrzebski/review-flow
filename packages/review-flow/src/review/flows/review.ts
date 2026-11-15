@@ -33,6 +33,7 @@ import type { Intent, SummaryOutcome } from "../summary.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "../trust.ts";
 import { buildChangeContext, changeRangeOf, type ChangeRange } from "../verify.ts";
 import { find } from "./find.ts";
+import { type ReviewScope } from "./scope.ts";
 import { summarize } from "./summarize.ts";
 
 export { failedVerdict, VERIFIER_CONCURRENCY } from "./verify.ts";
@@ -355,27 +356,24 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
   logTable("Review", setup);
 
   const sharedContext = buildChangeContext(await loadPrompt("change"), change, input.diff);
+  const scope: ReviewScope = { repo, change, sharedContext, models };
   const { summary, found } = await ctx.parallel({
     summary: (c) =>
       input.summarize
         ? c.run(summarize, {
-            repo,
-            change,
-            sharedContext,
+            scope,
             intent: input.intent,
-            models,
-            trust: input.trust,
-            onSummary: input.onSummary ?? (() => c.log("Summary written")),
+            onSummary: (summary) =>
+              input.onSummary === undefined
+                ? c.log("Summary written")
+                : input.onSummary(summary, input.trust),
           })
         : Promise.resolve(null),
     found: (c) =>
       input.find
         ? c.run(find, {
-            repo,
+            scope,
             diff: input.diff,
-            change,
-            sharedContext,
-            models,
             roughEdges: input.roughEdges,
             ...(input.onFindings === undefined ? {} : { onFindings: input.onFindings }),
             ...(input.onVerdicts === undefined ? {} : { onVerdicts: input.onVerdicts }),

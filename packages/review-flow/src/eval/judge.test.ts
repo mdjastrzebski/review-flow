@@ -85,11 +85,10 @@ describe("matchesOf", () => {
 describe("judgeCase", () => {
   const fake = (result: Partial<AgentResult<JudgeOutput>>): RunAgent =>
     (async () => ({
-      status: "ok",
+      status: "success",
       output: null,
       rawText: "",
       raw: null,
-      error: null,
       costUsd: 0.02,
       usage: null,
       durationMs: 5,
@@ -128,7 +127,7 @@ describe("judgeCase", () => {
     const result = await judgeCase({
       ...base,
       findings: [finding("F-001")],
-      runAgent: fake({ status: "timeout", error: "timed out" }),
+      runAgent: fake({ status: "failure", reason: "timeout", error: "timed out" }),
     });
     expect(result).toMatchObject({ status: "failed", error: "timed out", costUsd: 0.02 });
   });

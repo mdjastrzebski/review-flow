@@ -48,11 +48,10 @@ describe("gradesOf", () => {
 
 describe("judgeRoughEdges", () => {
   const ok = <T>(output: T): AgentResult<T> => ({
-    status: "ok",
+    status: "success",
     output,
     rawText: "",
     raw: {},
-    error: null,
     costUsd: 0.2,
     usage: null,
     durationMs: 5,
@@ -89,7 +88,12 @@ describe("judgeRoughEdges", () => {
   });
 
   it("reports a failed call", async () => {
-    const runAgent: RunAgent = async () => ({ ...ok(null), status: "timeout", error: "timed out" });
+    const runAgent: RunAgent = async () => ({
+      ...ok(null),
+      status: "failure",
+      reason: "timeout",
+      error: "timed out",
+    });
     const result = await judgeRoughEdges({ ...options, edges: [edge("R-001")], runAgent });
     expect(result).toMatchObject({ status: "failed", error: "timed out" });
   });

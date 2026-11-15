@@ -137,8 +137,13 @@ describe("interpretResult", () => {
       { subtype: "error_max_structured_output_retries", errors: ["gave up"] },
       Answer,
     );
-    expect(outcome).toMatchObject({ status: "invalid_output", costUsd: null, usage: null });
-    expect(outcome.error).toContain("gave up");
+    expect(outcome).toMatchObject({
+      status: "failure",
+      reason: "invalid_output",
+      costUsd: null,
+      usage: null,
+    });
+    expect(outcome.status === "failure" && outcome.error).toContain("gave up");
   });
 
   it("maps other error subtypes to error, keeping cost", () => {
@@ -146,7 +151,7 @@ describe("interpretResult", () => {
       { subtype: "error_max_turns", total_cost_usd: 0.3, errors: [] },
       Answer,
     );
-    expect(outcome).toMatchObject({ status: "error", costUsd: 0.3 });
+    expect(outcome).toMatchObject({ status: "failure", reason: "error", costUsd: 0.3 });
   });
 });
 
@@ -183,7 +188,7 @@ describe("createClaudeAgent", () => {
     const { task: t, progress } = task("ok");
     const result = await agent()(t);
     expect(result).toMatchObject({
-      status: "ok",
+      status: "success",
       output: { answer: "hi" },
       rawText: "done",
       costUsd: 0.12,
@@ -210,12 +215,12 @@ describe("createClaudeAgent", () => {
 
   it("hands the shared context to the CLI in a file", async () => {
     const result = await agent()(task("context", { sharedContext: "THE DIFF" }).task);
-    expect(result.output).toEqual({ answer: "THE DIFF" });
+    expect(result).toMatchObject({ status: "success", output: { answer: "THE DIFF" } });
   });
 
   it("runs the guard hook from --settings and records denials", async () => {
     const result = await agent()(task("hook").task);
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("success");
     const raw = result.raw as { messages: { hook?: string }[]; deniedToolCalls: string[] };
     const hooks = raw.messages.flatMap((m) => (m.hook === undefined ? [] : [m.hook]));
     expect(JSON.parse(hooks[0] ?? "")).toMatchObject({
@@ -233,38 +238,44 @@ describe("createClaudeAgent", () => {
 
   it("reports schema mismatches as invalid_output", async () => {
     const result = await agent()(task("bad").task);
-    expect(result).toMatchObject({ status: "invalid_output", output: null, costUsd: 0.12 });
+    expect(result).toMatchObject({ status: "failure", reason: "invalid_output", costUsd: 0.12 });
   });
 
   it("reports a crash with the exit code and stderr", async () => {
     const result = await agent()(task("crash").task);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/exit code 3.*boom/);
+    expect(result).toMatchObject({
+      status: "failure",
+      reason: "error",
+      error: expect.stringMatching(/exit code 3.*boom/),
+    });
   });
 
   it("times out a hung session", async () => {
     const result = await agent()(task("hang", { timeoutMs: 500 }).task);
-    expect(result).toMatchObject({ status: "timeout", output: null });
+    expect(result).toMatchObject({ status: "failure", reason: "timeout" });
   });
 
   it("stops when the caller aborts", async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 300);
     const result = await agent()(task("hang", { signal: controller.signal }).task);
-    expect(result).toMatchObject({ status: "error", error: "Cancelled" });
+    expect(result).toMatchObject({ status: "failure", reason: "error", error: "Cancelled" });
   });
 
   it("stops when the caller aborts while the session is being set up", async () => {
     const controller = new AbortController();
     const running = agent()(task("hang", { signal: controller.signal }).task);
     controller.abort();
-    expect(await running).toMatchObject({ status: "error", error: "Cancelled" });
+    expect(await running).toMatchObject({ status: "failure", reason: "error", error: "Cancelled" });
   });
 
   it("reports a missing binary", async () => {
     const missing = createClaudeAgent({ bin: path.join(sandbox, "no-such-claude") });
     const result = await missing(task("ok").task);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/Could not run/);
+    expect(result).toMatchObject({
+      status: "failure",
+      reason: "error",
+      error: expect.stringMatching(/Could not run/),
+    });
   });
 });

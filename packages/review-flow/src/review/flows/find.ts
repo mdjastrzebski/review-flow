@@ -1,5 +1,5 @@
+import { describeFailure } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import type { RoleModels } from "../models.ts";
 import { normalizeFindings, normalizeRoughEdges } from "../normalize.ts";
 import { codeFence, loadPrompt, renderPrompt } from "../prompts.ts";
 import { RUN_FILES } from "../run-dir.ts";
@@ -12,18 +12,13 @@ import {
   type ReviewOutput,
   type Verdict,
 } from "../schemas.ts";
-import type { ChangeRange } from "../verify.ts";
 import { checkRoughEdges } from "./check-rough-edges.ts";
+import { runRole, type ReviewScope } from "./scope.ts";
 import { verify } from "./verify.ts";
 
-const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
-
 export interface FindInput {
-  repo: string;
+  scope: ReviewScope;
   diff: string;
-  change: ChangeRange;
-  sharedContext: string;
-  models: Pick<RoleModels, "reviewer" | "verifier">;
   /** Ask the reviewer for rough edges and check them. */
   roughEdges: boolean;
   /** The reviewer's finding count, once findings.json is written; for the run index. */
@@ -46,29 +41,25 @@ export interface FindResult {
  * written only when rough edges were asked for.
  */
 export async function find(input: FindInput, ctx: FlowContext): Promise<FindResult> {
-  const { repo, models } = input;
+  const { scope } = input;
+  const { repo } = scope;
   const { findings, edges } = await ctx.step("review", async (c) => {
     const prompt = renderPrompt(await loadPrompt("reviewer"), {
-      ...input.change,
+      ...scope.change,
       diffBlock: codeFence(input.diff, "diff"),
       roughEdges: input.roughEdges ? await loadPrompt("rough-edges") : "",
     });
     c.log("Reviewing…");
     const lenient = input.roughEdges ? lenientReviewOutput() : null;
-    const review = await c.agent<FindingsOutput | ReviewOutput>({
+    const review = await runRole<FindingsOutput | ReviewOutput>(c, scope, "reviewer", {
       taskId: "reviewer",
-      role: "reviewer",
       prompt,
+      // The diff is in the prompt: the reviewer is the only task of its role.
       sharedContext: null,
-      cwd: repo,
       schema: lenient?.schema ?? FindingsOutput,
-      model: models.reviewer.model,
-      effort: models.reviewer.effort,
-      timeoutMs: REVIEWER_TIMEOUT_MS,
     });
-    if (review.output === null) {
-      throw new Error(`Reviewer failed (${review.status}): ${review.error ?? "no output"}`);
-    }
+    if (review.status === "failure")
+      throw new Error(`Reviewer failed (${describeFailure(review)})`);
 
     for (const note of lenient?.notes() ?? []) c.log(note);
     const normalized = normalizeFindings(review.output, repo);
@@ -86,12 +77,11 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
   input.onFindings?.(findings.length);
   ctx.signal.throwIfAborted();
 
-  const shared = { repo, change: input.change, sharedContext: input.sharedContext, models };
-  const verdicts = await ctx.run(verify, { ...shared, findings });
+  const verdicts = await ctx.run(verify, { scope, findings });
   let roughEdges: CheckedRoughEdge[] = [];
   if (edges !== null) {
     if (edges.length > 0)
-      roughEdges = await ctx.run(checkRoughEdges, { ...shared, edges }, { name: "check" });
+      roughEdges = await ctx.run(checkRoughEdges, { scope, edges }, { name: "check" });
     await ctx.write(RUN_FILES.roughEdges, roughEdges);
   }
   input.onVerdicts?.(countVerdicts(verdicts));

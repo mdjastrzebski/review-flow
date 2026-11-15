@@ -109,11 +109,10 @@ function stubAgent(effect: (task: AgentTask<unknown>) => Promise<void> = async (
     await effect(task as AgentTask<unknown>);
     const answer = task.role === "reviewer" ? review : confirmed;
     return {
-      status: "ok",
+      status: "success",
       output: task.schema.parse(answer),
       rawText: "",
       raw: {},
-      error: null,
       costUsd: 0.25,
       usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
       durationMs: 10,
@@ -250,11 +249,10 @@ describe("runEval", () => {
             ? checks
             : confirmed;
       return {
-        status: "ok",
+        status: "success",
         output: task.schema.parse(answer),
         rawText: "",
         raw: {},
-        error: null,
         costUsd: 0.25,
         usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
         durationMs: 10,
@@ -310,11 +308,10 @@ describe("runEval", () => {
               }
             : confirmed;
       return {
-        status: "ok",
+        status: "success",
         output: task.schema.parse(answer),
         rawText: "",
         raw: {},
-        error: null,
         costUsd: 0.25,
         usage: null,
         durationMs: 10,
@@ -331,11 +328,10 @@ describe("runEval", () => {
         worthPosting: true,
       };
       return {
-        status: "ok",
+        status: "success",
         output: task.schema.parse({ edges: [{ id: "R-001", ...grade }] }),
         rawText: "",
         raw: {},
-        error: null,
         costUsd: 0.4,
         usage: null,
         durationMs: 10,
@@ -412,13 +408,12 @@ describe("runEval", () => {
     const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
       if (task.role !== "judge") return reviewer(task);
       return {
-        status: "ok",
+        status: "success",
         output: task.schema.parse({
           bugs: [{ bug: 0, matches: [{ finding: "F-001", reason: "same defect" }] }],
         }),
         rawText: "",
         raw: {},
-        error: null,
         costUsd: 0.4,
         usage: null,
         durationMs: 10,
@@ -492,11 +487,10 @@ describe("runEval", () => {
               ? { checks: [{ localId: "R-001", status, note: "n", priority: "medium" }] }
               : confirmed;
         return {
-          status: "ok",
+          status: "success",
           output: task.schema.parse(answer),
           rawText: "",
           raw: {},
-          error: null,
           costUsd: 0.25,
           usage: null,
           durationMs: 10,
@@ -517,11 +511,10 @@ describe("runEval", () => {
     const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
       judged.push(task as AgentTask<unknown>);
       return {
-        status: "ok",
+        status: "success",
         output: task.schema.parse({ reason: "r", preferred: "1" }),
         rawText: "",
         raw: {},
-        error: null,
         costUsd: 0.3,
         usage: null,
         durationMs: 10,

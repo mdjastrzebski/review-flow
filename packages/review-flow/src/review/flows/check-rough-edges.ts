@@ -1,5 +1,5 @@
+import { describeFailure } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import type { RoleModels } from "../models.ts";
 import { loadPrompt } from "../prompts.ts";
 import {
   ROUGH_EDGE_CHECKER_TASK_ID,
@@ -7,19 +7,15 @@ import {
   buildRoughEdgeCheckerPrompt,
 } from "../rough-edges.ts";
 import { RoughEdgeChecks, type CheckedRoughEdge, type NormalizedRoughEdge } from "../schemas.ts";
-import type { ChangeRange } from "../verify.ts";
-import { VERIFIER_TIMEOUT_MS } from "./verify.ts";
+import { runRole, type ReviewScope } from "./scope.ts";
 
 export interface CheckRoughEdgesInput {
-  repo: string;
+  scope: ReviewScope;
   edges: readonly NormalizedRoughEdge[];
-  change: ChangeRange;
-  sharedContext: string;
-  models: Pick<RoleModels, "verifier">;
 }
 
 /**
- * One batched checker session for all rough edges, on the verifier's model. It runs after the
+ * One batched checker session for all rough edges, in the verifier role. It runs after the
  * finding verifiers so the shared diff is already cached. A failed or incomplete answer leaves
  * the edges `unclear`; anything thrown stops the run.
  */
@@ -27,24 +23,15 @@ export async function checkRoughEdges(
   input: CheckRoughEdgesInput,
   ctx: FlowContext,
 ): Promise<CheckedRoughEdge[]> {
-  const { edges } = input;
-  const result = await ctx.agent({
+  const { scope, edges } = input;
+  const template = await loadPrompt("rough-edge-checker");
+  const result = await runRole(ctx, scope, "verifier", {
     taskId: ROUGH_EDGE_CHECKER_TASK_ID,
-    role: "verifier",
-    prompt: buildRoughEdgeCheckerPrompt(
-      await loadPrompt("rough-edge-checker"),
-      edges,
-      input.change,
-    ),
-    sharedContext: input.sharedContext,
-    cwd: input.repo,
+    prompt: buildRoughEdgeCheckerPrompt(template, edges, scope.change),
     schema: RoughEdgeChecks,
-    model: input.models.verifier.model,
-    effort: input.models.verifier.effort,
-    timeoutMs: VERIFIER_TIMEOUT_MS,
   });
-  if (result.output === null) {
-    const failure = `${result.status}: ${result.error ?? "no output"}`;
+  if (result.status === "failure") {
+    const failure = describeFailure(result);
     ctx.warn(`Rough edge check failed (${failure}); marked unclear.`);
     return applyChecks(edges, null, failure);
   }

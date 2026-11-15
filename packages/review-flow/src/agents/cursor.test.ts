@@ -155,7 +155,7 @@ describe("createCursorAgent", () => {
     const { task: t, progress } = task("ok");
     const result = await agent()(t);
     expect(result).toMatchObject({
-      status: "ok",
+      status: "success",
       output: { answer: "hi" },
       costUsd: null,
       usage: { input: 10, cacheRead: 20, cacheWrite: 30, output: 40 },
@@ -169,7 +169,7 @@ describe("createCursorAgent", () => {
     const { task: t, progress } = task("bad");
     const result = await agent()(t);
     expect(result).toMatchObject({
-      status: "ok",
+      status: "success",
       output: { answer: "hi" },
       usage: { input: 20, cacheRead: 40, cacheWrite: 60, output: 80 },
     });
@@ -180,7 +180,8 @@ describe("createCursorAgent", () => {
 
   it("runs with its own empty config dir, removed afterwards", async () => {
     const result = await agent()(task("config").task);
-    const [dir = "", config = ""] = result.output?.answer.split("|") ?? [];
+    const answer = result.status === "success" ? result.output.answer : "";
+    const [dir = "", config = ""] = answer.split("|");
     expect(JSON.parse(config)).toEqual({ version: 1, permissions: { allow: [], deny: [] } });
     expect(dir).toContain("review-flow-cursor-");
     expect(existsSync(dir)).toBe(false);
@@ -188,7 +189,7 @@ describe("createCursorAgent", () => {
 
   it("records forbidden calls that Cursor refused", async () => {
     const result = await agent()(task("denied").task);
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("success");
     expect((result.raw as { deniedToolCalls: string[] }).deniedToolCalls).toEqual([
       expect.stringMatching(/^Shell: /),
     ]);
@@ -198,7 +199,7 @@ describe("createCursorAgent", () => {
     const { task: t, progress } = task("outside");
     const result = await agent()(t);
     expect(result).toMatchObject({
-      status: "ok",
+      status: "success",
       outsideReads: [expect.stringMatching(/^Read: \/etc\/hosts is outside/)],
     });
     expect(progress.map((p) => p.tool)).toContain("Outside read");
@@ -206,32 +207,41 @@ describe("createCursorAgent", () => {
 
   it("stops the session when any other forbidden call ran", async () => {
     const result = await agent()(task("escape").task);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/Forbidden tool call ran: Shell: /);
+    expect(result).toMatchObject({
+      status: "failure",
+      reason: "error",
+      error: expect.stringMatching(/Forbidden tool call ran: Shell: /),
+    });
   });
 
   it("reports a crash with the exit code and stderr", async () => {
     const result = await agent()(task("crash").task);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/exit code 3.*boom/);
+    expect(result).toMatchObject({
+      status: "failure",
+      reason: "error",
+      error: expect.stringMatching(/exit code 3.*boom/),
+    });
   });
 
   it("times out a hung session", async () => {
     const result = await agent()(task("hang", { timeoutMs: 500 }).task);
-    expect(result).toMatchObject({ status: "timeout", output: null });
+    expect(result).toMatchObject({ status: "failure", reason: "timeout" });
   });
 
   it("stops when the caller aborts", async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 300);
     const result = await agent()(task("hang", { signal: controller.signal }).task);
-    expect(result).toMatchObject({ status: "error", error: "Cancelled" });
+    expect(result).toMatchObject({ status: "failure", reason: "error", error: "Cancelled" });
   });
 
   it("reports a missing binary", async () => {
     const missing = createCursorAgent({ bin: path.join(sandbox, "no-such-agent") });
     const result = await missing(task("ok").task);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/Could not run/);
+    expect(result).toMatchObject({
+      status: "failure",
+      reason: "error",
+      error: expect.stringMatching(/Could not run/),
+    });
   });
 });

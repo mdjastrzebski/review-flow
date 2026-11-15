@@ -34,11 +34,10 @@ function fakeAgent(
     tasks.push(task as AgentTask<unknown>);
     await config.effect?.(task as AgentTask<unknown>);
     return {
-      status: "ok",
+      status: "success",
       output: task.schema.parse({ ok: true }),
       rawText: "{}",
       raw: { task: task.taskId },
-      error: null,
       costUsd: config.costUsd === undefined ? 0.5 : config.costUsd,
       usage: { input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
       durationMs: 5,

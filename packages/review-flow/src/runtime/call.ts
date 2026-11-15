@@ -3,7 +3,7 @@ import type { AgentCallTask, AgentResult, RunAgent, TokenUsage } from "./agent.t
 import { formatDuration, formatElapsed } from "./format.ts";
 import { writeJson } from "./json.ts";
 import { computeCostUsd } from "./prices.ts";
-import type { CallRecord } from "./records.ts";
+import { callStatus, type CallRecord } from "./records.ts";
 import type { RunDirBase } from "./run-dir.ts";
 
 export interface TaskActivity {
@@ -93,7 +93,7 @@ export async function runAgentCall<T>(
   const costUsd = result.costUsd ?? computedCost;
   activity(`done: ${result.status}${costUsd === null ? "" : `, $${costUsd.toFixed(2)}`}`, true);
   if (scope.verbose) {
-    if (result.error !== null) line(`error: ${result.error}`);
+    if (result.status === "failure") line(`error: ${result.error}`);
     line(
       `${describeUsage(result.usage)} · ${formatDuration(result.durationMs)} · cost ${result.costUsd !== null ? "reported" : computedCost !== null ? "computed" : "unknown"}`,
     );
@@ -107,8 +107,7 @@ export async function runAgentCall<T>(
     harness: scope.harness,
     model: task.model,
     effort: task.effort,
-    status: result.status,
-    error: result.error,
+    ...callStatus(result),
     usage: result.usage,
     costUsd,
     costSource:

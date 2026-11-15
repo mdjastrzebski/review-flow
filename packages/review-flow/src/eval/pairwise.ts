@@ -113,8 +113,8 @@ export async function judgePair(options: {
     onProgress: () => {},
   });
   const call = { costUsd: result.costUsd, durationMs: result.durationMs };
-  if (result.status !== "ok" || result.output === null) {
-    return { ...base, ...call, winner: null, reason: null, error: result.error ?? result.status };
+  if (result.status === "failure") {
+    return { ...base, ...call, winner: null, reason: null, error: result.error };
   }
   const { preferred, reason } = result.output;
   const winner = preferred === "tie" ? "tie" : (preferred === "1") === aFirst ? "a" : "b";

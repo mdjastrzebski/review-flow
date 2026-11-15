@@ -1,10 +1,22 @@
-import type { AgentStatus, TokenUsage } from "./agent.ts";
+import type { AgentFailureReason, AgentResult, TokenUsage } from "./agent.ts";
 
 /**
  * `reported`: the harness reported the cost. `computed`: tokens × the price table (prices.ts).
  * `unknown`: neither.
  */
 export type CostSource = "reported" | "computed" | "unknown";
+
+/** A call's outcome as persisted: `ok`, or why it failed. */
+export type CallStatus = "ok" | AgentFailureReason;
+
+export function callStatus(result: AgentResult<unknown>): {
+  status: CallStatus;
+  error: string | null;
+} {
+  return result.status === "success"
+    ? { status: "ok", error: null }
+    : { status: result.reason, error: result.error };
+}
 
 /** One model call (one agent task); a line of calls.jsonl. */
 export interface CallRecord {
@@ -15,7 +27,7 @@ export interface CallRecord {
   harness: string;
   model: string | null;
   effort: string | null;
-  status: AgentStatus;
+  status: CallStatus;
   error: string | null;
   /** null when the harness reports no token counts. */
   usage: TokenUsage | null;

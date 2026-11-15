@@ -93,10 +93,10 @@ export async function judgeRoughEdges(options: {
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     onProgress: () => {},
   });
-  if (result.status !== "ok" || result.output === null) {
+  if (result.status === "failure") {
     return {
       status: "failed",
-      error: result.error ?? result.status,
+      error: result.error,
       costUsd: result.costUsd,
       durationMs: result.durationMs,
     };

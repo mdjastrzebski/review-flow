@@ -23,11 +23,10 @@ function answering(preferred: "1" | "2" | "tie", seen: AgentTask<unknown>[] = []
   return async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
     seen.push(task as AgentTask<unknown>);
     return {
-      status: "ok",
+      status: "success",
       output: task.schema.parse({ reason: "because", preferred }),
       rawText: "",
       raw: {},
-      error: null,
       costUsd: 0.2,
       usage: null,
       durationMs: 5,
@@ -83,11 +82,11 @@ describe("judgePair", () => {
 
   it("records a failed call with no winner", async () => {
     const runAgent: RunAgent = async () => ({
-      status: "timeout",
-      output: null,
+      status: "failure",
+      reason: "timeout",
+      error: "timed out",
       rawText: "",
       raw: {},
-      error: "timed out",
       costUsd: null,
       usage: null,
       durationMs: 1,

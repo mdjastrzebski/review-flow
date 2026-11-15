@@ -15,8 +15,16 @@ export type PromptName =
   | "rough-edge-judge"
   | "rough-edge-pairwise";
 
-export async function loadPrompt(name: PromptName): Promise<string> {
-  return readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");
+const loaded = new Map<PromptName, Promise<string>>();
+
+/** A prompt template; each is read once per process. */
+export function loadPrompt(name: PromptName): Promise<string> {
+  let prompt = loaded.get(name);
+  if (prompt === undefined) {
+    prompt = readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");
+    loaded.set(name, prompt);
+  }
+  return prompt;
 }
 
 /**

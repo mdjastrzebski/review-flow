@@ -1,14 +1,13 @@
-import type { AgentStatus } from "../../runtime/agent.ts";
+import type { AgentFailureReason } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import type { RoleModels } from "../models.ts";
 import { loadPrompt } from "../prompts.ts";
 import { applyVerdictRules } from "../rank.ts";
 import { RUN_FILES } from "../run-dir.ts";
 import { countVerdicts } from "../run-index.ts";
 import { Verdict, type NormalizedFinding } from "../schemas.ts";
-import { buildVerifierPrompt, verifierTaskId, type ChangeRange } from "../verify.ts";
+import { buildVerifierPrompt, verifierTaskId } from "../verify.ts";
+import { runRole, type ReviewScope } from "./scope.ts";
 
-export const VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
 export const VERIFIER_CONCURRENCY = 3;
 
 /**
@@ -17,8 +16,7 @@ export const VERIFIER_CONCURRENCY = 3;
  */
 export function failedVerdict(
   finding: NormalizedFinding,
-  status: AgentStatus,
-  error: string | null,
+  failure: { reason: AgentFailureReason; error: string },
 ): Verdict {
   return {
     verdict: "inconclusive",
@@ -27,7 +25,7 @@ export function failedVerdict(
     confidence: "low",
     fixCost: "small",
     evidence: [],
-    summary: `Verification failed (${status}): ${error ?? "no output"}`,
+    summary: `Verification failed (${failure.reason}): ${failure.error}`,
     fix: {
       assessment: "not_applicable",
       detail: "Not assessed; verification failed.",
@@ -37,35 +35,25 @@ export function failedVerdict(
 }
 
 export interface VerifyInput {
-  repo: string;
+  scope: ReviewScope;
   findings: readonly NormalizedFinding[];
-  change: ChangeRange;
-  sharedContext: string;
-  models: Pick<RoleModels, "verifier">;
-}
-
-interface VerifierInput extends Omit<VerifyInput, "findings"> {
-  finding: NormalizedFinding;
-  template: string;
 }
 
 /** One fresh verifier session. An agent failure becomes an inconclusive verdict. */
-async function verifier(input: VerifierInput, ctx: FlowContext): Promise<Verdict> {
-  const { finding } = input;
-  const result = await ctx.agent({
+async function verifier(
+  input: { scope: ReviewScope; finding: NormalizedFinding },
+  ctx: FlowContext,
+): Promise<Verdict> {
+  const { scope, finding } = input;
+  const template = await loadPrompt("verifier");
+  const result = await runRole(ctx, scope, "verifier", {
     taskId: verifierTaskId(finding),
-    role: "verifier",
-    prompt: buildVerifierPrompt(input.template, finding, input.change),
-    sharedContext: input.sharedContext,
-    cwd: input.repo,
+    prompt: buildVerifierPrompt(template, finding, scope.change),
     schema: Verdict,
-    model: input.models.verifier.model,
-    effort: input.models.verifier.effort,
-    timeoutMs: VERIFIER_TIMEOUT_MS,
   });
-  if (result.output === null) {
-    ctx.warn(`${finding.id}: verifier failed (${result.status}); marked inconclusive.`);
-    return failedVerdict(finding, result.status, result.error);
+  if (result.status === "failure") {
+    ctx.warn(`${finding.id}: verifier failed (${result.reason}); marked inconclusive.`);
+    return failedVerdict(finding, result);
   }
   return applyVerdictRules(result.output);
 }
@@ -81,14 +69,13 @@ export async function verify(
   input: VerifyInput,
   ctx: FlowContext,
 ): Promise<Record<string, Verdict>> {
-  const { findings } = input;
+  const { scope, findings } = input;
   if (findings.length > 0) ctx.log(`Verifying ${findings.length} finding(s)…`);
-  const template = await loadPrompt("verifier");
   const verdicts = await ctx.map(
     findings,
     async (finding, _, c): Promise<[string, Verdict]> => [
       finding.id,
-      await c.run(verifier, { ...input, finding, template }, { name: `verifier:${finding.id}` }),
+      await c.run(verifier, { scope, finding }, { name: `verifier:${finding.id}` }),
     ],
     { concurrency: VERIFIER_CONCURRENCY, warmFirst: true },
   );

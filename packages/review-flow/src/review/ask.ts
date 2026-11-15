@@ -1,8 +1,8 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { AgentStatus, RunAgent } from "../runtime/agent.ts";
-import type { CallRecord, CostSource } from "../runtime/records.ts";
+import type { RunAgent } from "../runtime/agent.ts";
+import type { CallRecord, CallStatus, CostSource } from "../runtime/records.ts";
 import { formatLocation } from "./format.ts";
 import {
   assertStatusUnchanged,
@@ -307,7 +307,7 @@ export interface AskRecord {
   model: string | null;
   question: string | null;
   answer: string | null;
-  status: AgentStatus;
+  status: CallStatus;
   error: string | null;
   costUsd: number | null;
   costSource: CostSource;
@@ -401,7 +401,7 @@ export async function createAskSession(options: AskSessionOptions) {
           afterCall: () => assertStatusUnchanged(checkout.dir, status),
         },
       );
-      const answer = result.output?.answer.trim() ?? null;
+      const answer = result.status === "success" ? result.output.answer.trim() : null;
       if (answer !== null) history.push({ question, answer });
       const { call } = result;
       await appendAsk(ask.paths, {
@@ -447,7 +447,7 @@ export async function recordOpen(
   },
 ): Promise<void> {
   const taskId = `ask-open-${process.pid}`;
-  const status: AgentStatus = fields.error === null ? "ok" : "error";
+  const status: CallStatus = fields.error === null ? "ok" : "error";
   const call: CallRecord = {
     taskId,
     role: "answerer",

@@ -97,11 +97,10 @@ function stubAgent(answer = "It is on `a.txt:2`."): {
             ? verdict
             : { answer };
     return {
-      status: "ok",
+      status: "success",
       output: task.schema.parse(output),
       rawText: "",
       raw: {},
-      error: null,
       costUsd: 0.04,
       usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 },
       durationMs: 10,

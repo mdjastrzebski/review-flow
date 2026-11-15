@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
   AgentProgress,
+  AgentOutcome,
   AgentResult,
   AgentTask,
   RunAgent,
@@ -372,9 +373,7 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
       task.onProgress({ tool: "Outside read", detail: entry }),
     );
     let usage: TokenUsage | null = null;
-    const finish = (
-      fields: Pick<AgentResult<T>, "status" | "output" | "rawText" | "error">,
-    ): AgentResult<T> => ({
+    const finish = (fields: AgentOutcome<T> & { rawText: string }): AgentResult<T> => ({
       ...fields,
       raw: { attempts, deniedToolCalls: guard.denied, escapedToolCalls: guard.escaped },
       outsideReads: guard.outsideReads,
@@ -382,8 +381,8 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
       usage,
       durationMs: Date.now() - startedAt,
     });
-    const failure = (status: "error" | "timeout", error: string, rawText = "") =>
-      finish({ status, output: null, rawText, error });
+    const failure = (reason: "error" | "timeout", error: string, rawText = "") =>
+      finish({ status: "failure", reason, error, rawText });
 
     // Covers a task dequeued just before its caller aborted.
     if (task.signal?.aborted) return failure("error", "Cancelled");
@@ -454,9 +453,14 @@ export function createCursorAgent(options: CursorOptions): RunAgent {
         }
 
         const parsed = parseAnswer(rawText, task.schema);
-        if (parsed.ok) return finish({ status: "ok", output: parsed.value, rawText, error: null });
+        if (parsed.ok) return finish({ status: "success", output: parsed.value, rawText });
         if (repaired || current.sessionId === null) {
-          return finish({ status: "invalid_output", output: null, rawText, error: parsed.error });
+          return finish({
+            status: "failure",
+            reason: "invalid_output",
+            error: parsed.error,
+            rawText,
+          });
         }
         task.onProgress({ tool: "Repair", detail: "answer was not valid; asking once more" });
         ({ run, current } = await attempt(repairPrompt(parsed.error), current.sessionId));

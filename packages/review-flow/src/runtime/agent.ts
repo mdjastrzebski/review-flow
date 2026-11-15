@@ -43,18 +43,20 @@ export interface TokenUsage {
   output: number;
 }
 
-export type AgentStatus = "ok" | "invalid_output" | "error" | "timeout";
+/** Why a task has no output. */
+export type AgentFailureReason = "invalid_output" | "error" | "timeout";
 
-export interface AgentResult<T> {
-  status: AgentStatus;
-  /** Schema-valid output; null unless status is "ok". */
-  output: T | null;
+/** How a task ended: schema-valid output, or why there is none. */
+export type AgentOutcome<T> =
+  | { status: "success"; output: T }
+  | { status: "failure"; reason: AgentFailureReason; error: string };
+
+/** What every task reports, whatever its outcome. */
+export interface AgentRunInfo {
   /** The agent's final text answer, as returned by the harness. */
   rawText: string;
   /** Everything the harness emitted, persisted to raw/<taskId>.json for debugging. */
   raw: unknown;
-  /** Why the task did not succeed; null when status is "ok". */
-  error: string | null;
   costUsd: number | null;
   /** null when the harness reports no token counts. */
   usage: TokenUsage | null;
@@ -64,6 +66,13 @@ export interface AgentResult<T> {
    * (cursor) records them instead of stopping the task.
    */
   outsideReads?: string[];
+}
+
+export type AgentResult<T> = AgentOutcome<T> & AgentRunInfo;
+
+/** A failure as one line, e.g. `timeout: Timed out after 600000 ms`. */
+export function describeFailure(failure: { reason: AgentFailureReason; error: string }): string {
+  return `${failure.reason}: ${failure.error}`;
 }
 
 export type RunAgent = <T>(task: AgentTask<T>) => Promise<AgentResult<T>>;

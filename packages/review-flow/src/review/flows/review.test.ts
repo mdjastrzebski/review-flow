@@ -111,8 +111,8 @@ function stubAgent({
           : verdict(task as AgentTask<unknown>);
     if (answer === null) {
       return {
-        status: "invalid_output",
-        output: null,
+        status: "failure",
+        reason: "invalid_output",
         rawText: "nope",
         raw: { stub: true },
         error: "bad json",
@@ -122,11 +122,10 @@ function stubAgent({
       };
     }
     return {
-      status: "ok",
+      status: "success",
       output: task.schema.parse(answer),
       rawText: JSON.stringify(answer),
       raw: { stub: true },
-      error: null,
       costUsd: 0.5,
       usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 },
       durationMs: 10,

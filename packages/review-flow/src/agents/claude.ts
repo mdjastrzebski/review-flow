@@ -2,7 +2,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "../runtime/index.ts";
+import type {
+  AgentFailureReason,
+  AgentOutcome,
+  AgentResult,
+  AgentRunInfo,
+  AgentTask,
+  RunAgent,
+  TokenUsage,
+} from "../runtime/index.ts";
 import { z } from "zod";
 import { READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL } from "./guard.ts";
 import {
@@ -161,32 +169,32 @@ export function parseUsage(result: StreamMessage): TokenUsage | null {
   };
 }
 
-type Outcome<T> = Omit<AgentResult<T>, "raw" | "durationMs">;
+type Outcome<T> = AgentOutcome<T> & Pick<AgentRunInfo, "rawText" | "costUsd" | "usage">;
 
 /** Turns the final `result` message into an outcome, validating the structured output. */
 export function interpretResult<T>(result: StreamMessage, schema: z.ZodType<T>): Outcome<T> {
   const costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : null;
   const usage = parseUsage(result);
   const rawText = typeof result.result === "string" ? result.result : "";
-  const fail = (status: Outcome<T>["status"], error: string): Outcome<T> => ({
-    status,
-    output: null,
-    rawText,
+  const fail = (reason: AgentFailureReason, error: string): Outcome<T> => ({
+    status: "failure",
+    reason,
     error,
+    rawText,
     costUsd,
     usage,
   });
 
   if (result.subtype !== "success") {
-    const status =
+    const reason =
       result.subtype === "error_max_structured_output_retries" ? "invalid_output" : "error";
-    return fail(status, [result.subtype ?? "unknown", ...(result.errors ?? [])].join(": "));
+    return fail(reason, [result.subtype ?? "unknown", ...(result.errors ?? [])].join(": "));
   }
   if (result.is_error === true) return fail("error", rawText);
 
   const parsed = schema.safeParse(result.structured_output);
   if (!parsed.success) return fail("invalid_output", z.prettifyError(parsed.error));
-  return { status: "ok", output: parsed.data, rawText, error: null, costUsd, usage };
+  return { status: "success", output: parsed.data, rawText, costUsd, usage };
 }
 
 function describeToolInput(tool: string, input: Record<string, unknown>, cwd: string) {
@@ -267,8 +275,8 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
       raw: { args, messages, stderr, deniedToolCalls: denied },
       durationMs: Date.now() - startedAt,
     });
-    const failure = (status: "error" | "timeout", error: string) =>
-      finish({ status, output: null, rawText: "", error, costUsd: null, usage: null });
+    const failure = (reason: "error" | "timeout", error: string) =>
+      finish({ status: "failure", reason, error, rawText: "", costUsd: null, usage: null });
 
     // Covers a task dequeued just before its caller aborted.
     if (task.signal?.aborted) return failure("error", "Cancelled");
