@@ -64,7 +64,7 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
     for (const note of lenient?.notes() ?? []) c.log(note);
     const normalized = normalizeFindings(review.output, repo);
     for (const note of normalized.notes) c.log(note);
-    await c.write(RUN_FILES.findings, normalized.findings);
+    await c.writeFile(RUN_FILES.findings, normalized.findings);
     c.log(`Reviewer returned ${normalized.findings.length} finding(s)`);
     // Present exactly when rough edges are on: the schema above asks for them.
     const roughEdges =
@@ -82,7 +82,7 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
   if (edges !== null) {
     if (edges.length > 0)
       roughEdges = await ctx.run(checkRoughEdges, { scope, edges }, { name: "check" });
-    await ctx.write(RUN_FILES.roughEdges, roughEdges);
+    await ctx.writeFile(RUN_FILES.roughEdges, roughEdges);
   }
   input.onVerdicts?.(countVerdicts(verdicts));
   return { findings, verdicts, roughEdges };

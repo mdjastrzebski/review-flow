@@ -36,7 +36,7 @@ export async function summarize(input: SummarizeInput, ctx: FlowContext): Promis
     return { status: "failed", error };
   }
   const summary = normalizeSummary(result.output, scope.repo);
-  await ctx.write(RUN_FILES.summary, summary);
+  await ctx.writeFile(RUN_FILES.summary, summary);
   input.onSummary(summary);
   return { status: "ok", summary };
 }

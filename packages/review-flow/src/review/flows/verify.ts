@@ -80,7 +80,7 @@ export async function verify(
     { concurrency: VERIFIER_CONCURRENCY, warmFirst: true },
   );
   const result = Object.fromEntries(verdicts);
-  await ctx.write(RUN_FILES.verdicts, result);
+  await ctx.writeFile(RUN_FILES.verdicts, result);
   if (findings.length > 0) {
     const counts = countVerdicts(result);
     ctx.log(

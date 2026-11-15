@@ -27,7 +27,7 @@ export function formatRunTimestamp(date: Date): string {
   );
 }
 
-/** A review run's artifacts, by file name; flows write them with `ctx.write`. */
+/** A review run's artifacts, by file name; flows write them with `ctx.writeFile`. */
 export const RUN_FILES = {
   diff: "diff.patch",
   summary: "summary.json",

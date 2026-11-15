@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { writeFile as fsWriteFile } from "node:fs/promises";
 import path from "node:path";
 import pLimit from "p-limit";
 import type { AgentCallTask, AgentResult, RunAgent } from "./agent.ts";
@@ -81,7 +81,7 @@ export interface FlowContext {
   ): Promise<R[]>;
 
   /** Writes an artifact into the nearest run dir: JSON for objects, as is for strings. */
-  write(name: string, data: unknown): Promise<string>;
+  writeFile(name: string, data: unknown): Promise<string>;
 
   /** Merges fields into the nearest run's run.json, now and in its final record. */
   annotate(fields: Record<string, unknown>): void;
@@ -442,9 +442,9 @@ function contextOf(scope: Scope, env: Env): FlowContext {
       );
     },
 
-    async write(name, data) {
+    async writeFile(name, data) {
       const file = scope.run.dir.path(name);
-      if (typeof data === "string") await writeFile(file, data);
+      if (typeof data === "string") await fsWriteFile(file, data);
       else await writeJson(file, data);
       return file;
     },

@@ -336,8 +336,8 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
   const { repo, change, models } = input;
   const runDir = runDirPaths(ctx.runDir.root);
   // Read by `ask` while the review goes on.
-  await ctx.write(RUN_FILES.diff, input.diff);
-  await ctx.write(RUN_FILES.intent, input.intent);
+  await ctx.writeFile(RUN_FILES.diff, input.diff);
+  await ctx.writeFile(RUN_FILES.intent, input.intent);
   const logTable: LogTable =
     input.logTable ??
     ((_, rows) => {
@@ -404,7 +404,7 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
       verdicts,
       roughEdges: edges,
     });
-    await c.write(RUN_FILES.report, report);
+    await c.writeFile(RUN_FILES.report, report);
   });
   const saved: [string, string][] = [];
   if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);

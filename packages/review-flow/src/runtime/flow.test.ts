@@ -392,7 +392,7 @@ describe("nested runs", () => {
     const child = async (id: string, ctx: FlowContext) => {
       during = await readJson<RunRecordBase>(ctx.runDir.runJsonPath);
       await ctx.step("work", (c) => c.agent(task(id)));
-      await ctx.write("note.txt", "hello");
+      await ctx.writeFile("note.txt", "hello");
       ctx.annotate({ id });
     };
     const root = async (_: null, ctx: FlowContext) => {
