@@ -1,4 +1,4 @@
-import { defineFlow } from "../../runtime/flow.ts";
+import type { FlowContext } from "../../runtime/flow.ts";
 import type { RoleModels } from "../models.ts";
 import { normalizeFindings, normalizeRoughEdges } from "../normalize.ts";
 import { codeFence, loadPrompt, renderPrompt } from "../prompts.ts";
@@ -13,8 +13,8 @@ import {
   type Verdict,
 } from "../schemas.ts";
 import type { ChangeRange } from "../verify.ts";
-import { checkRoughEdgesFlow } from "./check-rough-edges.ts";
-import { verifyFlow } from "./verify.ts";
+import { checkRoughEdges } from "./check-rough-edges.ts";
+import { verify } from "./verify.ts";
 
 const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -45,7 +45,7 @@ export interface FindResult {
  * the batched rough edge check (its own node, so its cost shows apart). rough-edges.json is
  * written only when rough edges were asked for.
  */
-export const findFlow = defineFlow("find", async (input: FindInput, ctx): Promise<FindResult> => {
+export async function find(input: FindInput, ctx: FlowContext): Promise<FindResult> {
   const { repo, models } = input;
   const { findings, edges } = await ctx.step("review", async (c) => {
     const prompt = renderPrompt(await loadPrompt("reviewer"), {
@@ -87,12 +87,13 @@ export const findFlow = defineFlow("find", async (input: FindInput, ctx): Promis
   ctx.signal.throwIfAborted();
 
   const shared = { repo, change: input.change, sharedContext: input.sharedContext, models };
-  const verdicts = await ctx.run(verifyFlow, { ...shared, findings });
+  const verdicts = await ctx.run(verify, { ...shared, findings });
   let roughEdges: CheckedRoughEdge[] = [];
   if (edges !== null) {
-    if (edges.length > 0) roughEdges = await ctx.run(checkRoughEdgesFlow, { ...shared, edges });
+    if (edges.length > 0)
+      roughEdges = await ctx.run(checkRoughEdges, { ...shared, edges }, { name: "check" });
     await ctx.write(RUN_FILES.roughEdges, roughEdges);
   }
   input.onVerdicts?.(countVerdicts(verdicts));
   return { findings, verdicts, roughEdges };
-});
+}

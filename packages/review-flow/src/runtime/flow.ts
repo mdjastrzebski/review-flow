@@ -16,12 +16,18 @@ import {
 } from "./records.ts";
 import { createRunDirAt, type RunDirBase } from "./run-dir.ts";
 
-/** A unit of work: plain async code that composes child flows through its context. */
+/**
+ * A unit of work: any async function of an input and a context, composing child flows through
+ * the context. Its node in the tree takes the function's name (`async function find(…)` → `find`)
+ * unless the caller gives another; the name is part of the saved paths, so renaming it renames them.
+ */
 export type Flow<I, O> = (input: I, ctx: FlowContext) => Promise<O>;
 
-/** Names a flow; its node in the tree takes this name unless the caller gives another. */
-export function defineFlow<I, O>(name: string, fn: Flow<I, O>): Flow<I, O> {
-  return Object.defineProperty(fn, "name", { value: name });
+/** The node name: the caller's, else the function's; an anonymous flow must be given one. */
+function nodeName(flow: Flow<never, unknown>, name: string | undefined): string {
+  const resolved = name ?? flow.name;
+  if (resolved === "") throw new Error("An anonymous flow needs a name: pass `name` to run it.");
+  return resolved;
 }
 
 /** Work timed before a flow started, such as collecting inputs before its run dir could exist. */
@@ -308,7 +314,7 @@ async function runChild<I, O>(
     ...(opts.log === undefined ? {} : { log: opts.log }),
     afterCall: opts.afterCall === undefined ? env.afterCall : [...env.afterCall, opts.afterCall],
   };
-  const name = opts.name ?? flow.name;
+  const name = nodeName(flow, opts.name);
   const call = (ctx: FlowContext) => flow(input, ctx);
   if (opts.dir === undefined) {
     const scope = newScope(name, "flow", parent.run, parent, opts.before, opts.detached);
@@ -478,6 +484,6 @@ export function startRun<I, O>(flow: Flow<I, O>, input: I, options: StartRunOpti
       options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
     verbose: options.verbose ?? false,
   };
-  const root = newScope(options.name ?? flow.name, "flow", run, null, options.before);
+  const root = newScope(nodeName(flow, options.name), "flow", run, null, options.before);
   return withRun(run, root, () => enter(root, env, (ctx) => flow(input, ctx)), options.onFinish);
 }

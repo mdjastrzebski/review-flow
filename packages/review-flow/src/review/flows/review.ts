@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { RunAgent } from "../../runtime/agent.ts";
 import type { TaskActivity } from "../../runtime/call.ts";
-import { defineFlow, startRun, type TimedStep } from "../../runtime/flow.ts";
+import { startRun, type FlowContext, type TimedStep } from "../../runtime/flow.ts";
 import { formatDuration } from "../../runtime/format.ts";
 import { findNode, type RunRecordBase } from "../../runtime/records.ts";
 import { describeModel } from "../format.ts";
@@ -32,8 +32,8 @@ import type { CheckedRoughEdge, NormalizedFinding, Summary, Verdict } from "../s
 import type { Intent, SummaryOutcome } from "../summary.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "../trust.ts";
 import { buildChangeContext, changeRangeOf, type ChangeRange } from "../verify.ts";
-import { findFlow } from "./find.ts";
-import { summarizeFlow } from "./summarize.ts";
+import { find } from "./find.ts";
+import { summarize } from "./summarize.ts";
 
 export { failedVerdict, VERIFIER_CONCURRENCY } from "./verify.ts";
 
@@ -331,114 +331,111 @@ const STEP_ROW = ["collect", "summarize", "find/review", "find/verify", "find/ch
  * (summarize ‖ find) → report. Summarize and Find run in parallel; the first to throw stops the
  * other, and both settle before the run ends, so run.json records every call.
  */
-export const reviewFlow = defineFlow(
-  "review",
-  async (input: ReviewInput, ctx): Promise<ReviewRunResult> => {
-    const { repo, change, models, find } = input;
-    const runDir = runDirPaths(ctx.runDir.root);
-    // Read by `ask` while the review goes on.
-    await ctx.write(RUN_FILES.diff, input.diff);
-    await ctx.write(RUN_FILES.intent, input.intent);
-    const logTable: LogTable =
-      input.logTable ??
-      ((_, rows) => {
-        for (const [label, value] of rows) ctx.log(`${label}: ${value}`);
-      });
-    const setup = [...input.setup, ["Checkout", repo] as const, ["Run dir", runDir.root] as const];
-    if (input.askCommand !== undefined) {
-      setup.push([
-        "Ask",
-        input.askCommand(path.basename(runDir.root), {
-          harness: input.harness,
-          model: models.verifier.model,
-        }),
-      ]);
-    }
-    logTable("Review", setup);
-
-    const sharedContext = buildChangeContext(await loadPrompt("change"), change, input.diff);
-    const { summary, found } = await ctx.parallel({
-      summary: (c) =>
-        input.summarize
-          ? c.run(summarizeFlow, {
-              repo,
-              change,
-              sharedContext,
-              intent: input.intent,
-              models,
-              trust: input.trust,
-              onSummary: input.onSummary ?? (() => c.log("Summary written")),
-            })
-          : Promise.resolve(null),
-      found: (c) =>
-        find
-          ? c.run(findFlow, {
-              repo,
-              diff: input.diff,
-              change,
-              sharedContext,
-              models,
-              roughEdges: input.roughEdges,
-              ...(input.onFindings === undefined ? {} : { onFindings: input.onFindings }),
-              ...(input.onVerdicts === undefined ? {} : { onVerdicts: input.onVerdicts }),
-            })
-          : Promise.resolve(null),
+export async function review(input: ReviewInput, ctx: FlowContext): Promise<ReviewRunResult> {
+  const { repo, change, models } = input;
+  const runDir = runDirPaths(ctx.runDir.root);
+  // Read by `ask` while the review goes on.
+  await ctx.write(RUN_FILES.diff, input.diff);
+  await ctx.write(RUN_FILES.intent, input.intent);
+  const logTable: LogTable =
+    input.logTable ??
+    ((_, rows) => {
+      for (const [label, value] of rows) ctx.log(`${label}: ${value}`);
     });
-    if (!find && summary?.status === "failed") {
-      throw new Error(`Summarizer failed (${summary.error})`);
-    }
-    const findings = found?.findings ?? [];
-    const verdicts = found?.verdicts ?? {};
-    const edges = found?.roughEdges ?? [];
-
-    const { durationMs, totals } = ctx.snapshot();
-    const { costUsd } = totals;
-    await ctx.step("report", async (c) => {
-      const report = renderReport({
+  const setup = [...input.setup, ["Checkout", repo] as const, ["Run dir", runDir.root] as const];
+  if (input.askCommand !== undefined) {
+    setup.push([
+      "Ask",
+      input.askCommand(path.basename(runDir.root), {
         harness: input.harness,
-        models,
-        base: input.base,
-        head: input.head,
-        ...(input.pr === undefined ? {} : { pr: input.pr }),
-        trust: input.trust,
-        durationMs,
-        costUsd,
-        summary,
-        findings: found === null ? null : findings,
-        verdicts,
-        roughEdges: edges,
-      });
-      await c.write(RUN_FILES.report, report);
-    });
-    const saved: [string, string][] = [];
-    if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);
-    if (found !== null) {
-      saved.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
-      if (input.roughEdges) saved.push(["Rough edges", runDir.roughEdgesPath]);
-    }
-    saved.push(["Report", runDir.reportPath]);
-    if (ctx.verbose) {
-      const node = ctx.snapshot();
-      const steps = STEP_ROW.flatMap((step) => {
-        const ran = findNode(node, step);
-        return ran === undefined ? [] : [`${ran.name} ${formatDuration(ran.durationMs)}`];
-      });
-      saved.push(["Steps", steps.join(" · ")]);
-    }
-    logTable("Saved", saved);
+        model: models.verifier.model,
+      }),
+    ]);
+  }
+  logTable("Review", setup);
 
-    return {
-      runDir,
-      checkout: repo,
+  const sharedContext = buildChangeContext(await loadPrompt("change"), change, input.diff);
+  const { summary, found } = await ctx.parallel({
+    summary: (c) =>
+      input.summarize
+        ? c.run(summarize, {
+            repo,
+            change,
+            sharedContext,
+            intent: input.intent,
+            models,
+            trust: input.trust,
+            onSummary: input.onSummary ?? (() => c.log("Summary written")),
+          })
+        : Promise.resolve(null),
+    found: (c) =>
+      input.find
+        ? c.run(find, {
+            repo,
+            diff: input.diff,
+            change,
+            sharedContext,
+            models,
+            roughEdges: input.roughEdges,
+            ...(input.onFindings === undefined ? {} : { onFindings: input.onFindings }),
+            ...(input.onVerdicts === undefined ? {} : { onVerdicts: input.onVerdicts }),
+          })
+        : Promise.resolve(null),
+  });
+  if (!input.find && summary?.status === "failed") {
+    throw new Error(`Summarizer failed (${summary.error})`);
+  }
+  const findings = found?.findings ?? [];
+  const verdicts = found?.verdicts ?? {};
+  const edges = found?.roughEdges ?? [];
+
+  const { durationMs, totals } = ctx.snapshot();
+  const { costUsd } = totals;
+  await ctx.step("report", async (c) => {
+    const report = renderReport({
+      harness: input.harness,
+      models,
+      base: input.base,
+      head: input.head,
+      ...(input.pr === undefined ? {} : { pr: input.pr }),
+      trust: input.trust,
+      durationMs,
+      costUsd,
       summary,
-      findings,
+      findings: found === null ? null : findings,
       verdicts,
       roughEdges: edges,
-      costUsd,
-      durationMs,
-    };
-  },
-);
+    });
+    await c.write(RUN_FILES.report, report);
+  });
+  const saved: [string, string][] = [];
+  if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);
+  if (found !== null) {
+    saved.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
+    if (input.roughEdges) saved.push(["Rough edges", runDir.roughEdgesPath]);
+  }
+  saved.push(["Report", runDir.reportPath]);
+  if (ctx.verbose) {
+    const node = ctx.snapshot();
+    const steps = STEP_ROW.flatMap((step) => {
+      const ran = findNode(node, step);
+      return ran === undefined ? [] : [`${ran.name} ${formatDuration(ran.durationMs)}`];
+    });
+    saved.push(["Steps", steps.join(" · ")]);
+  }
+  logTable("Saved", saved);
+
+  return {
+    runDir,
+    checkout: repo,
+    summary,
+    findings,
+    verdicts,
+    roughEdges: edges,
+    costUsd,
+    durationMs,
+  };
+}
 
 /** collect → (summarize ‖ review → normalize → verify → rank) → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
@@ -454,7 +451,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   let findings: number | null = null;
   let verdicts: VerdictCounts | null = null;
   return startRun(
-    reviewFlow,
+    review,
     { ...input, onFindings: (n) => (findings = n), onVerdicts: (v) => (verdicts = v) },
     {
       dir: runDir,

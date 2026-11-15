@@ -2,14 +2,14 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { AgentResult, AgentTask, RunAgent } from "../runtime/agent.ts";
 import type { TaskActivity } from "../runtime/call.ts";
-import { defineFlow, startRun, type FlowContext } from "../runtime/flow.ts";
+import { startRun, type FlowContext } from "../runtime/flow.ts";
 import { readJsonOrNull, writeJson } from "../runtime/json.ts";
 import type { RunRecordBase } from "../runtime/records.ts";
 import { createRunDirAt } from "../runtime/run-dir.ts";
 import {
   collectStep,
   prepareReview,
-  reviewFlow,
+  review as reviewFlow,
   type ReviewRunOptions,
   type ReviewRunResult,
   type RunRecord,
@@ -169,9 +169,9 @@ function judgeAgent(
 ): RunAgent {
   return <T>(task: AgentTask<T>): Promise<AgentResult<T>> =>
     ctx.run(
-      defineFlow(name, (t: AgentTask<T>, c) => c.agent(t)),
+      (t: AgentTask<T>, c: FlowContext) => c.agent(t),
       task,
-      agent === undefined ? { detached: true } : { agent, detached: true },
+      agent === undefined ? { name, detached: true } : { name, agent, detached: true },
     );
 }
 
@@ -186,133 +186,130 @@ interface CaseInput {
  * nested run in the case's dir; then judges the findings. Failures are recorded on the case; a
  * changed working tree is rethrown to stop the eval.
  */
-const caseFlow = defineFlow(
-  "case",
-  async ({ evalCase, caseRoot, options }: CaseInput, ctx): Promise<CaseResult> => {
-    let review: ReviewRunResult | null = null;
-    let error: string | null = null;
-    const log = (message: string) => options.log(`  ${message}`);
-    try {
-      const checkout = path.join(options.checkoutsDir, checkoutName(evalCase.repo));
-      await ensureClone(evalCase.repo, checkout, [evalCase.base, evalCase.head]);
-      await checkoutDetached(checkout, evalCase.head);
-      const prepared = await prepareReview({
-        cwd: checkout,
-        base: evalCase.base,
-        trust: EVAL_CASE_TRUST,
-        harness: options.harness,
-        models: options.models,
-        runAgent: options.runAgent,
-        log,
-        // The eval's own table covers the setup; per case, only --verbose keeps the details.
-        logTable: (_, rows) => {
-          if (!options.verbose) return;
-          for (const [label, value] of rows) log(`${label}: ${value}`);
-        },
-        ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
-        // Leaves the checkout's .gitignore alone; the run dir is the case's.
-        runRoot: caseRoot,
-        // Off by default so finding scores stay comparable; scored apart when on (spec 11).
-        roughEdges: options.roughEdges ?? false,
-        ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
-        // The checkout is clean; this also keeps a stray file out of the scored diff.
-        committedOnly: true,
-      });
-      review = await ctx.run(reviewFlow, prepared.input, {
-        name: "review",
-        dir: { root: caseRoot, meta: { ...prepared.meta } },
-        before: [collectStep(prepared)],
-        afterCall: prepared.afterCall,
-        log,
-      });
-    } catch (caught) {
-      // Agents wrote to the checkout despite read-only settings: stop rather than carry on.
-      if (caught instanceof WorkingTreeChangedError) throw caught;
-      error = caught instanceof Error ? caught.message : String(caught);
-    }
+async function reviewCase(
+  { evalCase, caseRoot, options }: CaseInput,
+  ctx: FlowContext,
+): Promise<CaseResult> {
+  let review: ReviewRunResult | null = null;
+  let error: string | null = null;
+  const log = (message: string) => options.log(`  ${message}`);
+  try {
+    const checkout = path.join(options.checkoutsDir, checkoutName(evalCase.repo));
+    await ensureClone(evalCase.repo, checkout, [evalCase.base, evalCase.head]);
+    await checkoutDetached(checkout, evalCase.head);
+    const prepared = await prepareReview({
+      cwd: checkout,
+      base: evalCase.base,
+      trust: EVAL_CASE_TRUST,
+      harness: options.harness,
+      models: options.models,
+      runAgent: options.runAgent,
+      log,
+      // The eval's own table covers the setup; per case, only --verbose keeps the details.
+      logTable: (_, rows) => {
+        if (!options.verbose) return;
+        for (const [label, value] of rows) log(`${label}: ${value}`);
+      },
+      ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
+      // Leaves the checkout's .gitignore alone; the run dir is the case's.
+      runRoot: caseRoot,
+      // Off by default so finding scores stay comparable; scored apart when on (spec 11).
+      roughEdges: options.roughEdges ?? false,
+      ...(options.summarize === undefined ? {} : { summarize: options.summarize }),
+      // The checkout is clean; this also keeps a stray file out of the scored diff.
+      committedOnly: true,
+    });
+    review = await ctx.run(reviewFlow, prepared.input, {
+      name: "review",
+      dir: { root: caseRoot, meta: { ...prepared.meta } },
+      before: [collectStep(prepared)],
+      afterCall: prepared.afterCall,
+      log,
+    });
+  } catch (caught) {
+    // Agents wrote to the checkout despite read-only settings: stop rather than carry on.
+    if (caught instanceof WorkingTreeChangedError) throw caught;
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
 
-    // Written even by a failed review, unless it failed before making its run dir.
-    const paths = runDirPaths(caseRoot);
-    const run = await readJsonOrNull<RunRecord>(paths.runJsonPath);
-    const findings =
-      review?.findings ?? (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath));
-    let bugs: BugResult[] | null =
-      review === null ? null : scoreBugs(evalCase.bugs, review.findings, review.verdicts);
-    let judge: JudgeCall | null = null;
-    if (review !== null && options.judge !== undefined && evalCase.bugs.length > 0) {
-      const judged = await judgeBugsOf(
-        evalCase,
-        review.findings,
-        review.verdicts,
-        caseRoot,
-        options.judge,
-        judgeAgent(ctx, "judge"),
-        options.fixesDir,
+  // Written even by a failed review, unless it failed before making its run dir.
+  const paths = runDirPaths(caseRoot);
+  const run = await readJsonOrNull<RunRecord>(paths.runJsonPath);
+  const findings =
+    review?.findings ?? (await readJsonOrNull<NormalizedFinding[]>(paths.findingsPath));
+  let bugs: BugResult[] | null =
+    review === null ? null : scoreBugs(evalCase.bugs, review.findings, review.verdicts);
+  let judge: JudgeCall | null = null;
+  if (review !== null && options.judge !== undefined && evalCase.bugs.length > 0) {
+    const judged = await judgeBugsOf(
+      evalCase,
+      review.findings,
+      review.verdicts,
+      caseRoot,
+      options.judge,
+      judgeAgent(ctx, "judge"),
+      options.fixesDir,
+    );
+    judge = judged.call;
+    bugs = judged.bugs ?? bugs;
+    if (judged.call.status === "failed") {
+      options.warn?.(
+        `${evalCase.id}: the judge failed (${judged.call.error ?? "no result"}); scored by location.`,
       );
-      judge = judged.call;
-      bugs = judged.bugs ?? bugs;
-      if (judged.call.status === "failed") {
-        options.warn?.(
-          `${evalCase.id}: the judge failed (${judged.call.error ?? "no result"}); scored by location.`,
-        );
-      }
     }
-    const { edgeJudge } = options;
-    const roughEdges = options.roughEdges
-      ? await scoreRoughEdges({
-          evalCase,
-          review,
-          run,
-          caseRoot,
-          judge:
-            edgeJudge === undefined
-              ? undefined
-              : { ...edgeJudge, runAgent: judgeAgent(ctx, "edge-judge", edgeJudge) },
-          warn: options.warn,
-        })
-      : undefined;
-    return {
-      id: evalCase.id,
-      kind: evalCase.kind,
-      preset: evalCase.preset,
-      status: review === null ? "failed" : "ok",
-      error,
-      findings: findings?.length ?? null,
-      reported: review === null ? null : countReported(review.verdicts),
-      bugs,
-      // The review's alone: judges are the eval's cost, not the reviewed config's.
-      costUsd: run?.totals.costUsd ?? null,
-      unknownCostCalls: run?.totals.unknownCostCalls ?? 0,
-      durationMs: run?.totals.durationMs ?? 0,
-      ...(judge === null ? {} : { judge }),
-      ...(roughEdges === undefined ? {} : { roughEdges }),
-    };
-  },
-);
+  }
+  const { edgeJudge } = options;
+  const roughEdges = options.roughEdges
+    ? await scoreRoughEdges({
+        evalCase,
+        review,
+        run,
+        caseRoot,
+        judge:
+          edgeJudge === undefined
+            ? undefined
+            : { ...edgeJudge, runAgent: judgeAgent(ctx, "edge-judge", edgeJudge) },
+        warn: options.warn,
+      })
+    : undefined;
+  return {
+    id: evalCase.id,
+    kind: evalCase.kind,
+    preset: evalCase.preset,
+    status: review === null ? "failed" : "ok",
+    error,
+    findings: findings?.length ?? null,
+    reported: review === null ? null : countReported(review.verdicts),
+    bugs,
+    // The review's alone: judges are the eval's cost, not the reviewed config's.
+    costUsd: run?.totals.costUsd ?? null,
+    unknownCostCalls: run?.totals.unknownCostCalls ?? 0,
+    durationMs: run?.totals.durationMs ?? 0,
+    ...(judge === null ? {} : { judge }),
+    ...(roughEdges === undefined ? {} : { roughEdges }),
+  };
+}
 
 /** Reviews each case in turn, one at a time; cases.json is rewritten after each. */
-const evalFlow = defineFlow(
-  "eval",
-  async (
-    { options, root, results }: { options: EvalRunOptions; root: string; results: CaseResult[] },
-    ctx,
-  ): Promise<EvalRunResult> => {
-    const paths = evalRunPaths(root);
-    for (const [index, evalCase] of options.cases.entries()) {
-      ctx.log(`[${index + 1}/${options.cases.length}] ${evalCase.id} (${evalCase.kind})`);
-      const result = await ctx.run(
-        caseFlow,
-        { evalCase, caseRoot: paths.caseRoot(evalCase.id), options },
-        { name: `case:${evalCase.id}` },
-      );
-      results.push(result);
-      ctx.annotate({ scores: summarizeCases(results) });
-      ctx.log(`  → ${evalCase.id}: ${describeCase(result)}`);
-      await writeJson(paths.casesPath, results);
-    }
-    return { root, cases: results, scores: summarizeCases(results) };
-  },
-);
+async function evaluate(
+  { options, root, results }: { options: EvalRunOptions; root: string; results: CaseResult[] },
+  ctx: FlowContext,
+): Promise<EvalRunResult> {
+  const paths = evalRunPaths(root);
+  for (const [index, evalCase] of options.cases.entries()) {
+    ctx.log(`[${index + 1}/${options.cases.length}] ${evalCase.id} (${evalCase.kind})`);
+    const result = await ctx.run(
+      reviewCase,
+      { evalCase, caseRoot: paths.caseRoot(evalCase.id), options },
+      { name: `case:${evalCase.id}` },
+    );
+    results.push(result);
+    ctx.annotate({ scores: summarizeCases(results) });
+    ctx.log(`  → ${evalCase.id}: ${describeCase(result)}`);
+    await writeJson(paths.casesPath, results);
+  }
+  return { root, cases: results, scores: summarizeCases(results) };
+}
 
 /**
  * Reviews each case in turn and scores the findings. The eval run goes in the repo's
@@ -356,9 +353,10 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
 
   const results: CaseResult[] = [];
   return startRun(
-    evalFlow,
+    evaluate,
     { options, root, results },
     {
+      name: "eval",
       dir,
       runAgent: options.runAgent,
       harness,

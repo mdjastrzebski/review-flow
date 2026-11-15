@@ -1,5 +1,5 @@
 import type { AgentStatus } from "../../runtime/agent.ts";
-import { defineFlow } from "../../runtime/flow.ts";
+import type { FlowContext } from "../../runtime/flow.ts";
 import type { RoleModels } from "../models.ts";
 import { loadPrompt } from "../prompts.ts";
 import { applyVerdictRules } from "../rank.ts";
@@ -50,7 +50,7 @@ interface VerifierInput extends Omit<VerifyInput, "findings"> {
 }
 
 /** One fresh verifier session. An agent failure becomes an inconclusive verdict. */
-const verifierFlow = defineFlow("verifier", async (input: VerifierInput, ctx): Promise<Verdict> => {
+async function verifier(input: VerifierInput, ctx: FlowContext): Promise<Verdict> {
   const { finding } = input;
   const result = await ctx.agent({
     taskId: verifierTaskId(finding),
@@ -68,7 +68,7 @@ const verifierFlow = defineFlow("verifier", async (input: VerifierInput, ctx): P
     return failedVerdict(finding, result.status, result.error);
   }
   return applyVerdictRules(result.output);
-});
+}
 
 /**
  * One verifier per finding, at most VERIFIER_CONCURRENCY at a time; anything thrown (e.g. the
@@ -77,32 +77,28 @@ const verifierFlow = defineFlow("verifier", async (input: VerifierInput, ctx): P
  * others read it instead of each writing it again; a cache write costs about 40× a cache read.
  * Writes verdicts.json.
  */
-export const verifyFlow = defineFlow(
-  "verify",
-  async (input: VerifyInput, ctx): Promise<Record<string, Verdict>> => {
-    const { findings } = input;
-    if (findings.length > 0) ctx.log(`Verifying ${findings.length} finding(s)…`);
-    const template = await loadPrompt("verifier");
-    const verdicts = await ctx.map(
-      findings,
-      async (finding, _, c): Promise<[string, Verdict]> => [
-        finding.id,
-        await c.run(
-          verifierFlow,
-          { ...input, finding, template },
-          { name: `verifier:${finding.id}` },
-        ),
-      ],
-      { concurrency: VERIFIER_CONCURRENCY, warmFirst: true },
+export async function verify(
+  input: VerifyInput,
+  ctx: FlowContext,
+): Promise<Record<string, Verdict>> {
+  const { findings } = input;
+  if (findings.length > 0) ctx.log(`Verifying ${findings.length} finding(s)…`);
+  const template = await loadPrompt("verifier");
+  const verdicts = await ctx.map(
+    findings,
+    async (finding, _, c): Promise<[string, Verdict]> => [
+      finding.id,
+      await c.run(verifier, { ...input, finding, template }, { name: `verifier:${finding.id}` }),
+    ],
+    { concurrency: VERIFIER_CONCURRENCY, warmFirst: true },
+  );
+  const result = Object.fromEntries(verdicts);
+  await ctx.write(RUN_FILES.verdicts, result);
+  if (findings.length > 0) {
+    const counts = countVerdicts(result);
+    ctx.log(
+      `Verified: ${counts.confirmed} confirmed, ${counts.inconclusive} inconclusive, ${counts.refuted} refuted`,
     );
-    const result = Object.fromEntries(verdicts);
-    await ctx.write(RUN_FILES.verdicts, result);
-    if (findings.length > 0) {
-      const counts = countVerdicts(result);
-      ctx.log(
-        `Verified: ${counts.confirmed} confirmed, ${counts.inconclusive} inconclusive, ${counts.refuted} refuted`,
-      );
-    }
-    return result;
-  },
-);
+  }
+  return result;
+}

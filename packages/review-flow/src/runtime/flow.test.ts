@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { AgentResult, AgentTask, RunAgent } from "./agent.ts";
-import { defineFlow, startRun, type Flow, type FlowContext, type StartRunOptions } from "./flow.ts";
+import { startRun, type Flow, type FlowContext, type StartRunOptions } from "./flow.ts";
 import { flattenTree, type CallRecord, type FlowNode, type RunRecordBase } from "./records.ts";
 import { createRunDirAt, type RunDirBase } from "./run-dir.ts";
 
@@ -80,10 +80,10 @@ describe("ctx.agent", () => {
   it("saves the prompt and raw output, records the call with its path, then runs afterCall", async () => {
     const { runAgent } = fakeAgent();
     const after: CallRecord[] = [];
-    const flow = defineFlow("root", async (_: null, ctx) => {
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.step("ask", (c) => c.agent(task("t1")));
-    });
-    await startRun(flow, null, options(runAgent, { afterCall: async (c) => void after.push(c) }));
+    };
+    await startRun(root, null, options(runAgent, { afterCall: async (c) => void after.push(c) }));
 
     expect(await readFile(dir.promptPath("t1"), "utf8")).toBe("prompt of t1");
     expect(await readJson(dir.rawPath("t1"))).toEqual({ task: "t1" });
@@ -103,17 +103,17 @@ describe("ctx.agent", () => {
 
   it("computes the cost from tokens when the harness reports none", async () => {
     const { runAgent } = fakeAgent({ costUsd: null });
-    const flow = defineFlow("root", async (_: null, ctx) => (await ctx.agent(task("t1"))).call);
-    const call = await startRun(flow, null, options(runAgent));
+    const root = async (_: null, ctx: FlowContext) => (await ctx.agent(task("t1"))).call;
+    const call = await startRun(root, null, options(runAgent));
     expect(call).toMatchObject({ costUsd: 2, costSource: "computed" });
   });
 
   it("fails the call when afterCall throws, keeping its record", async () => {
     const { runAgent } = fakeAgent();
-    const flow = defineFlow("root", async (_: null, ctx) => ctx.agent(task("t1")));
+    const root = async (_: null, ctx: FlowContext) => ctx.agent(task("t1"));
     await expect(
       startRun(
-        flow,
+        root,
         null,
         options(runAgent, {
           afterCall: async () => {
@@ -129,28 +129,54 @@ describe("ctx.agent", () => {
 
   it("passes the scope's signal unless the task has its own", async () => {
     const { runAgent, tasks } = fakeAgent();
-    const flow = defineFlow("root", async (_: null, ctx) => {
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("t1"));
-    });
-    await startRun(flow, null, options(runAgent));
+    };
+    await startRun(root, null, options(runAgent));
     expect(tasks[0]?.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("node names", () => {
+  it("takes the function's name, unless the caller gives one", async () => {
+    const { runAgent } = fakeAgent();
+    async function child(_: null, ctx: FlowContext) {
+      await ctx.agent(task(ctx.path.replaceAll("/", "-")));
+    }
+    async function root(_: null, ctx: FlowContext) {
+      await ctx.run(child, null);
+      await ctx.run(child, null, { name: "renamed" });
+    }
+    await startRun(root, null, options(runAgent));
+    const calls = await readCalls(dir.callsPath);
+    expect(calls.map((c) => c.path)).toEqual(["root/child", "root/renamed"]);
+  });
+
+  it("rejects an anonymous flow without a name", async () => {
+    const { runAgent } = fakeAgent();
+    await expect(
+      startRun(async (_: null, ctx: FlowContext) => ctx.run(async () => {}, null), null, {
+        ...options(runAgent),
+        name: "root",
+      }),
+    ).rejects.toThrow("anonymous flow");
   });
 });
 
 describe("tree", () => {
   it("nests flows and steps, with totals that include descendants", async () => {
     const { runAgent } = fakeAgent();
-    const leaf: Flow<string, void> = defineFlow("leaf", async (id, ctx) => {
+    const leaf: Flow<string, void> = async (id, ctx: FlowContext) => {
       await ctx.agent(task(id));
-    });
-    const root = defineFlow("root", async (_: null, ctx) => {
+    };
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("own"));
       await ctx.step("group", async (c) => {
         await c.run(leaf, "a");
         await c.run(leaf, "b", { name: "leaf:b" });
       });
       return ctx.snapshot();
-    });
+    };
     const live = await startRun(root, null, options(runAgent));
     expect(live.status).toBe("running");
 
@@ -175,9 +201,9 @@ describe("tree", () => {
   it("records steps timed before the run as its first children", async () => {
     const { runAgent } = fakeAgent();
     const startedAt = new Date(Date.now() - 1000);
-    const flow = defineFlow("root", async () => {});
+    const root = async () => {};
     await startRun(
-      flow,
+      root,
       null,
       options(runAgent, { before: [{ name: "collect", startedAt, durationMs: 900 }] }),
     );
@@ -195,12 +221,12 @@ describe("startRun", () => {
     const { runAgent } = fakeAgent();
     let during: RunRecordBase | null = null;
     const finished: RunRecordBase[] = [];
-    const flow = defineFlow("root", async (_: null, ctx) => {
+    const root = async (_: null, ctx: FlowContext) => {
       during = await readJson<RunRecordBase>(dir.runJsonPath);
       ctx.annotate({ note: "added" });
-    });
+    };
     await startRun(
-      flow,
+      root,
       null,
       options(runAgent, {
         meta: { harness: "fake" },
@@ -224,14 +250,14 @@ describe("startRun", () => {
   it("writes the failed record and calls onFinish when the flow throws", async () => {
     const { runAgent } = fakeAgent();
     const finished: RunRecordBase[] = [];
-    const flow = defineFlow("root", async (_: null, ctx) => {
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.step("first", async () => {});
       await ctx.step("broken", async () => {
         throw new Error("boom");
       });
-    });
+    };
     await expect(
-      startRun(flow, null, options(runAgent, { onFinish: async (r) => void finished.push(r) })),
+      startRun(root, null, options(runAgent, { onFinish: async (r) => void finished.push(r) })),
     ).rejects.toThrow("boom");
     const run = await readJson<RunRecordBase>(dir.runJsonPath);
     expect(run).toMatchObject({ status: "failed", error: "boom", flow: { status: "failed" } });
@@ -246,34 +272,32 @@ describe("startRun", () => {
 describe("ctx.parallel", () => {
   it("returns each branch's result by name", async () => {
     const { runAgent } = fakeAgent();
-    const flow = defineFlow("root", async (_: null, ctx) =>
-      ctx.parallel({ a: async () => 1, b: async () => "two" }),
-    );
-    expect(await startRun(flow, null, options(runAgent))).toEqual({ a: 1, b: "two" });
+    const root = async (_: null, ctx: FlowContext) =>
+      ctx.parallel({ a: async () => 1, b: async () => "two" });
+    expect(await startRun(root, null, options(runAgent))).toEqual({ a: 1, b: "two" });
   });
 
   it("aborts the other branches on the first throw, and rethrows it once all settle", async () => {
     const { runAgent } = fakeAgent();
     const events: string[] = [];
-    const slow = defineFlow("slow", async (_: null, ctx) => {
+    const slow = async (_: null, ctx: FlowContext) => {
       await new Promise<void>((resolve) =>
         ctx.signal.addEventListener("abort", () => resolve(), { once: true }),
       );
       await sleep(10);
       events.push("slow settled");
       throw new Error("aborted late");
-    });
-    const failing = defineFlow("failing", async () => {
+    };
+    const failing = async () => {
       await sleep(5);
       throw new Error("first");
-    });
-    const flow = defineFlow("root", async (_: null, ctx) =>
+    };
+    const root = async (_: null, ctx: FlowContext) =>
       ctx.parallel({
         slow: (c) => c.run(slow, null),
         failing: (c) => c.run(failing, null),
-      }),
-    );
-    const error = await startRun(flow, null, options(runAgent)).catch((e: unknown) => e);
+      });
+    const error = await startRun(root, null, options(runAgent)).catch((e: unknown) => e);
     events.push("rethrown");
     expect((error as Error).message).toBe("first");
     expect(events).toEqual(["slow settled", "rethrown"]);
@@ -299,7 +323,7 @@ describe("ctx.map", () => {
         active--;
       },
     });
-    const flow = defineFlow("root", async (_: null, ctx) =>
+    const root = async (_: null, ctx: FlowContext) =>
       ctx.map(
         items,
         async (item, index, c) => {
@@ -307,9 +331,8 @@ describe("ctx.map", () => {
           return `${index}:${item}`;
         },
         { concurrency: 3 },
-      ),
-    );
-    expect(await startRun(flow, null, options(runAgent))).toEqual(
+      );
+    expect(await startRun(root, null, options(runAgent))).toEqual(
       items.map((item, i) => `${i}:${item}`),
     );
     expect(maxActive).toBe(3);
@@ -327,16 +350,15 @@ describe("ctx.map", () => {
         await sleep(20);
       },
     });
-    const item = defineFlow("item", async (id: string, ctx) => {
+    const item = async (id: string, ctx: FlowContext) => {
       await ctx.agent(task(id));
-    });
-    const flow = defineFlow("root", async (_: null, ctx) =>
+    };
+    const root = async (_: null, ctx: FlowContext) =>
       ctx.map(items.slice(0, 3), (id, _i, c) => c.run(item, id, { name: `item:${id}` }), {
         concurrency: 3,
         warmFirst: true,
-      }),
-    );
-    await startRun(flow, null, options(runAgent));
+      });
+    await startRun(root, null, options(runAgent));
     expect(events.slice(0, 2)).toEqual(["start a", "activity"]);
     expect(events).toHaveLength(4);
   });
@@ -356,10 +378,9 @@ describe("ctx.map", () => {
         );
       },
     });
-    const flow = defineFlow("root", async (_: null, ctx: FlowContext) =>
-      ctx.map(items, (id, _i, c) => c.agent(task(id)), { concurrency: 3 }),
-    );
-    await expect(startRun(flow, null, options(runAgent))).rejects.toThrow("b broke");
+    const root = async (_: null, ctx: FlowContext) =>
+      ctx.map(items, (id, _i, c) => c.agent(task(id)), { concurrency: 3 });
+    await expect(startRun(root, null, options(runAgent))).rejects.toThrow("b broke");
     expect(started.toSorted()).toEqual(["a", "b", "c"]);
     expect(signals.filter((s) => s.aborted)).toHaveLength(3);
   });
@@ -369,16 +390,16 @@ describe("nested runs", () => {
   it("writes their own run.json and calls.jsonl, and rolls up into the parent", async () => {
     const { runAgent } = fakeAgent();
     let during: RunRecordBase | null = null;
-    const child = defineFlow("child", async (id: string, ctx) => {
+    const child = async (id: string, ctx: FlowContext) => {
       during = await readJson<RunRecordBase>(ctx.runDir.runJsonPath);
       await ctx.step("work", (c) => c.agent(task(id)));
       await ctx.write("note.txt", "hello");
       ctx.annotate({ id });
-    });
-    const root = defineFlow("root", async (_: null, ctx) => {
+    };
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("own"));
       await ctx.run(child, "x", { name: "case:x", dir: { root: "x", meta: { kind: "case" } } });
-    });
+    };
     await startRun(root, null, options(runAgent));
 
     const childDir = path.join(dir.root, "x");
@@ -407,13 +428,13 @@ describe("nested runs", () => {
 
   it("records a detached subtree but leaves it out of the totals and per-path views", async () => {
     const { runAgent } = fakeAgent();
-    const side = defineFlow("side", async (_: null, ctx) => {
+    const side = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("side"));
-    });
-    const root = defineFlow("root", async (_: null, ctx) => {
+    };
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.step("main", (c) => c.agent(task("main")));
       await ctx.run(side, null, { detached: true });
-    });
+    };
     await startRun(root, null, options(runAgent));
 
     expect((await readCalls(dir.callsPath)).map((c) => c.path)).toEqual(["root/main", "root/side"]);
@@ -435,16 +456,16 @@ describe("nested runs", () => {
     const main = fakeAgent();
     const other = fakeAgent();
     const checked: string[] = [];
-    const judge = defineFlow("judge", async (_: null, ctx) => {
+    const judge = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("judged"));
-    });
-    const root = defineFlow("root", async (_: null, ctx) => {
+    };
+    const root = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("main"));
       await ctx.run(judge, null, {
         agent: { runAgent: other.runAgent, harness: "other" },
         afterCall: async (c) => void checked.push(c.taskId),
       });
-    });
+    };
     await startRun(root, null, options(main.runAgent));
     expect(main.tasks.map((t) => t.taskId)).toEqual(["main"]);
     expect(other.tasks.map((t) => t.taskId)).toEqual(["judged"]);
