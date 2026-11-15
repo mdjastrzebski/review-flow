@@ -14,8 +14,8 @@ import { runRole, type ReviewScope } from "./scope.ts";
 export interface SummarizeInput {
   scope: ReviewScope;
   intent: Intent;
-  /** The summary, as soon as it is written. */
-  onSummary: (summary: Summary) => void;
+  /** The summary, as soon as it is written. Default: a `Summary written` line. */
+  onSummary?: ((summary: Summary) => void) | undefined;
 }
 
 /**
@@ -37,6 +37,7 @@ export async function summarize(input: SummarizeInput, ctx: FlowContext): Promis
   }
   const summary = normalizeSummary(result.output, scope.repo);
   await ctx.writeFile(RUN_FILES.summary, summary);
-  input.onSummary(summary);
+  if (input.onSummary === undefined) ctx.log("Summary written");
+  else input.onSummary(summary);
   return { status: "ok", summary };
 }

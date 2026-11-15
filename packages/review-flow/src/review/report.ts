@@ -17,13 +17,17 @@ import { formatCodeRef, goalNote, type SummaryOutcome } from "./summary.ts";
 import type { TrustLevel } from "./trust.ts";
 import { truncateFix } from "./verify.ts";
 
-export interface ReportInput {
+/** The review's facts shown in the report's header. */
+export interface ReportMeta {
   harness: Harness;
-  models: RoleModels;
   base: { ref: string; sha: string };
   head: { sha: string; snapshotSha?: string };
   pr?: PullRequest;
   trust: TrustLevel;
+}
+
+export interface ReportInput extends ReportMeta {
+  models: RoleModels;
   durationMs: number;
   /** null when the harness reported no cost (Cursor). */
   costUsd: number | null;

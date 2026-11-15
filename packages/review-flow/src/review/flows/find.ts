@@ -22,9 +22,9 @@ export interface FindInput {
   /** Ask the reviewer for rough edges and check them. */
   roughEdges: boolean;
   /** The reviewer's finding count, once findings.json is written; for the run index. */
-  onFindings?: (count: number) => void;
+  onFindings?: ((count: number) => void) | undefined;
   /** The verdict counts, once verification is done; for the run index. */
-  onVerdicts?: (counts: VerdictCounts) => void;
+  onVerdicts?: ((counts: VerdictCounts) => void) | undefined;
 }
 
 export interface FindResult {

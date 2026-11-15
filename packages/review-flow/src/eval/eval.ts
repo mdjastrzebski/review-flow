@@ -4,11 +4,13 @@ import type { AgentResult, AgentTask, RunAgent } from "../runtime/agent.ts";
 import type { TaskActivity } from "../runtime/call.ts";
 import { startRun, type FlowContext } from "../runtime/flow.ts";
 import { readJsonOrNull, writeJson } from "../runtime/json.ts";
-import type { RunRecordBase } from "../runtime/records.ts";
+import { findNode, type RunRecordBase } from "../runtime/records.ts";
 import { createRunDirAt } from "../runtime/run-dir.ts";
 import {
   collectStep,
   prepareReview,
+  reviewRows,
+  savedRows,
   review as reviewFlow,
   type ReviewRunOptions,
   type ReviewRunResult,
@@ -205,11 +207,6 @@ async function reviewCase(
       models: options.models,
       runAgent: options.runAgent,
       log,
-      // The eval's own table covers the setup; per case, only --verbose keeps the details.
-      logTable: (_, rows) => {
-        if (!options.verbose) return;
-        for (const [label, value] of rows) log(`${label}: ${value}`);
-      },
       ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
       // Leaves the checkout's .gitignore alone; the run dir is the case's.
       runRoot: caseRoot,
@@ -219,6 +216,11 @@ async function reviewCase(
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
     });
+    // The eval's own table covers the setup; per case, only --verbose keeps the details.
+    const logRows = (rows: [string, string][]) => {
+      if (options.verbose) for (const [label, value] of rows) log(`${label}: ${value}`);
+    };
+    logRows(reviewRows(prepared, runDirPaths(caseRoot)));
     review = await ctx.run(reviewFlow, prepared.input, {
       name: "review",
       dir: { root: caseRoot, meta: { ...prepared.meta } },
@@ -226,6 +228,7 @@ async function reviewCase(
       afterCall: prepared.afterCall,
       log,
     });
+    logRows(savedRows(review, prepared.input.steps, findNode(ctx.snapshot(), "review") ?? null));
   } catch (caught) {
     // Agents wrote to the checkout despite read-only settings: stop rather than carry on.
     if (caught instanceof WorkingTreeChangedError) throw caught;

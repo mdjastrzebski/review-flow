@@ -3,7 +3,7 @@ import type { RunAgent } from "../../runtime/agent.ts";
 import type { TaskActivity } from "../../runtime/call.ts";
 import { startRun, type FlowContext, type TimedStep } from "../../runtime/flow.ts";
 import { formatDuration } from "../../runtime/format.ts";
-import { findNode, type RunRecordBase } from "../../runtime/records.ts";
+import { findNode, type FlowNode, type RunRecordBase } from "../../runtime/records.ts";
 import { describeModel } from "../format.ts";
 import {
   assertStatusUnchanged,
@@ -18,7 +18,7 @@ import {
 import type { PullRequest } from "../github.ts";
 import type { Harness, RoleModels } from "../models.ts";
 import { loadPrompt } from "../prompts.ts";
-import { renderReport } from "../report.ts";
+import { renderReport, type ReportMeta } from "../report.ts";
 import { createRunDir, ensureStateDir, RUN_FILES, runDirPaths, type RunDir } from "../run-dir.ts";
 import { createRunDirAt } from "../../runtime/run-dir.ts";
 import {
@@ -32,7 +32,7 @@ import type { CheckedRoughEdge, NormalizedFinding, Summary, Verdict } from "../s
 import type { Intent, SummaryOutcome } from "../summary.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "../trust.ts";
 import { buildChangeContext, changeRangeOf, type ChangeRange } from "../verify.ts";
-import { find } from "./find.ts";
+import { find, type FindResult } from "./find.ts";
 import { type ReviewScope } from "./scope.ts";
 import { summarize } from "./summarize.ts";
 
@@ -177,28 +177,29 @@ export interface ReviewInput {
   diff: string;
   change: ChangeRange;
   intent: Intent;
-  harness: Harness;
   models: RoleModels;
-  trust: TrustLevel;
-  base: { ref: string; sha: string };
-  head: ReviewMeta["head"];
-  pr?: PullRequest;
-  summarize: boolean;
-  find: boolean;
-  roughEdges: boolean;
-  /** The review box's rows up to the checkout; the flow adds the checkout and run dir. */
-  setup: [string, string][];
-  logTable?: LogTable;
-  onSummary?: ReviewRunOptions["onSummary"];
-  askCommand?: ReviewRunOptions["askCommand"];
-  onFindings?: (count: number) => void;
-  onVerdicts?: (counts: VerdictCounts) => void;
+  /** What the report's header shows. */
+  meta: ReportMeta;
+  steps: { summarize: boolean; find: boolean; roughEdges: boolean };
+  hooks?: ReviewHooks;
+}
+
+/** Progress as the review goes on. */
+export interface ReviewHooks {
+  /** The summary, as soon as it is written. Default: a `Summary written` line. */
+  onSummary?: ((summary: Summary) => void) | undefined;
+  /** The reviewer's finding count; for the run index. */
+  onFindings?: ((count: number) => void) | undefined;
+  /** The verdict counts once verification is done; for the run index. */
+  onVerdicts?: ((counts: VerdictCounts) => void) | undefined;
 }
 
 /** A collected review: the flow's input, run.json's fields, and the checkout guard. */
 export interface PreparedReview {
   input: ReviewInput;
   meta: ReviewMeta;
+  /** The review box's rows up to the checkout. */
+  setup: [string, string][];
   /** When collect started: the run's start. */
   startedAt: Date;
   stats: DiffStats;
@@ -279,29 +280,25 @@ export async function prepareReview(options: ReviewRunOptions): Promise<Prepared
   const status = await snapshotStatus(repo);
 
   const baseRef = { ref: base, sha: baseSha };
-  const optional = {
-    ...(pr === undefined ? {} : { pr }),
-    ...(options.logTable === undefined ? {} : { logTable: options.logTable }),
-    ...(options.onSummary === undefined ? {} : { onSummary: options.onSummary }),
-    ...(options.askCommand === undefined ? {} : { askCommand: options.askCommand }),
-  };
+  const { onSummary } = options;
   return {
     input: {
       repo,
       diff,
       change,
       intent,
-      harness,
       models,
-      trust: trust.level,
-      base: baseRef,
-      head,
-      summarize,
-      find,
-      roughEdges,
-      setup,
-      ...optional,
+      meta: {
+        harness,
+        trust: trust.level,
+        base: baseRef,
+        head,
+        ...(pr === undefined ? {} : { pr }),
+      },
+      steps: { summarize, find, roughEdges },
+      hooks: { onSummary: onSummary && ((summary) => onSummary(summary, trust.level)) },
     },
+    setup,
     meta: {
       harness,
       models,
@@ -325,111 +322,105 @@ export function collectStep({ startedAt }: PreparedReview): TimedStep {
   return { name: "collect", startedAt, durationMs: Date.now() - startedAt.getTime() };
 }
 
+/** The review box: collect's rows, then the checkout, the run dir, and how to ask about the run. */
+export function reviewRows(
+  prepared: PreparedReview,
+  runDir: RunDir,
+  askCommand?: ReviewRunOptions["askCommand"],
+): [string, string][] {
+  const { input } = prepared;
+  const rows: [string, string][] = [
+    ...prepared.setup,
+    ["Checkout", input.repo],
+    ["Run dir", runDir.root],
+  ];
+  if (askCommand !== undefined) {
+    const answerer = { harness: input.meta.harness, model: input.models.verifier.model };
+    rows.push(["Ask", askCommand(path.basename(runDir.root), answerer)]);
+  }
+  return rows;
+}
+
 /** Nodes listed in the verbose `Steps` row, by path below the review node. */
 const STEP_ROW = ["collect", "summarize", "find/review", "find/verify", "find/check", "report"];
+
+/** The files a finished review wrote; with its flow node, also the step times. */
+export function savedRows(
+  { runDir, summary }: ReviewRunResult,
+  steps: ReviewInput["steps"],
+  node: FlowNode | null,
+): [string, string][] {
+  const rows: [string, string][] = [];
+  if (summary?.status === "ok") rows.push(["Summary", runDir.summaryPath]);
+  if (steps.find) rows.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
+  if (steps.roughEdges) rows.push(["Rough edges", runDir.roughEdgesPath]);
+  rows.push(["Report", runDir.reportPath]);
+  if (node !== null) {
+    const times = STEP_ROW.flatMap((step) => {
+      const ran = findNode(node, step);
+      return ran === undefined ? [] : [`${ran.name} ${formatDuration(ran.durationMs)}`];
+    });
+    rows.push(["Steps", times.join(" · ")]);
+  }
+  return rows;
+}
+
+const NOTHING_FOUND: FindResult = { findings: [], verdicts: {}, roughEdges: [] };
+const skipped = async () => null;
 
 /**
  * (summarize ‖ find) → report. Summarize and Find run in parallel; the first to throw stops the
  * other, and both settle before the run ends, so run.json records every call.
  */
 export async function review(input: ReviewInput, ctx: FlowContext): Promise<ReviewRunResult> {
-  const { repo, change, models } = input;
-  const runDir = runDirPaths(ctx.runDir.root);
+  const { repo, change, diff, models, steps, hooks = {} } = input;
   // Read by `ask` while the review goes on.
-  await ctx.writeFile(RUN_FILES.diff, input.diff);
+  await ctx.writeFile(RUN_FILES.diff, diff);
   await ctx.writeFile(RUN_FILES.intent, input.intent);
-  const logTable: LogTable =
-    input.logTable ??
-    ((_, rows) => {
-      for (const [label, value] of rows) ctx.log(`${label}: ${value}`);
-    });
-  const setup = [...input.setup, ["Checkout", repo] as const, ["Run dir", runDir.root] as const];
-  if (input.askCommand !== undefined) {
-    setup.push([
-      "Ask",
-      input.askCommand(path.basename(runDir.root), {
-        harness: input.harness,
-        model: models.verifier.model,
-      }),
-    ]);
-  }
-  logTable("Review", setup);
 
-  const sharedContext = buildChangeContext(await loadPrompt("change"), change, input.diff);
+  const sharedContext = buildChangeContext(await loadPrompt("change"), change, diff);
   const scope: ReviewScope = { repo, change, sharedContext, models };
   const { summary, found } = await ctx.parallel({
-    summary: (c) =>
-      input.summarize
-        ? c.run(summarize, {
+    summary: steps.summarize
+      ? (c: FlowContext) =>
+          c.run(summarize, { scope, intent: input.intent, onSummary: hooks.onSummary })
+      : skipped,
+    found: steps.find
+      ? (c: FlowContext) =>
+          c.run(find, {
             scope,
-            intent: input.intent,
-            onSummary: (summary) =>
-              input.onSummary === undefined
-                ? c.log("Summary written")
-                : input.onSummary(summary, input.trust),
+            diff,
+            roughEdges: steps.roughEdges,
+            onFindings: hooks.onFindings,
+            onVerdicts: hooks.onVerdicts,
           })
-        : Promise.resolve(null),
-    found: (c) =>
-      input.find
-        ? c.run(find, {
-            scope,
-            diff: input.diff,
-            roughEdges: input.roughEdges,
-            ...(input.onFindings === undefined ? {} : { onFindings: input.onFindings }),
-            ...(input.onVerdicts === undefined ? {} : { onVerdicts: input.onVerdicts }),
-          })
-        : Promise.resolve(null),
+      : skipped,
   });
-  if (!input.find && summary?.status === "failed") {
+  // A summary-only run with no summary has nothing to show.
+  if (found === null && summary?.status === "failed") {
     throw new Error(`Summarizer failed (${summary.error})`);
   }
-  const findings = found?.findings ?? [];
-  const verdicts = found?.verdicts ?? {};
-  const edges = found?.roughEdges ?? [];
 
   const { durationMs, totals } = ctx.snapshot();
   const { costUsd } = totals;
-  await ctx.step("report", async (c) => {
-    const report = renderReport({
-      harness: input.harness,
-      models,
-      base: input.base,
-      head: input.head,
-      ...(input.pr === undefined ? {} : { pr: input.pr }),
-      trust: input.trust,
-      durationMs,
-      costUsd,
-      summary,
-      findings: found === null ? null : findings,
-      verdicts,
-      roughEdges: edges,
-    });
-    await c.writeFile(RUN_FILES.report, report);
-  });
-  const saved: [string, string][] = [];
-  if (summary?.status === "ok") saved.push(["Summary", runDir.summaryPath]);
-  if (found !== null) {
-    saved.push(["Findings", runDir.findingsPath], ["Verdicts", runDir.verdictsPath]);
-    if (input.roughEdges) saved.push(["Rough edges", runDir.roughEdgesPath]);
-  }
-  saved.push(["Report", runDir.reportPath]);
-  if (ctx.verbose) {
-    const node = ctx.snapshot();
-    const steps = STEP_ROW.flatMap((step) => {
-      const ran = findNode(node, step);
-      return ran === undefined ? [] : [`${ran.name} ${formatDuration(ran.durationMs)}`];
-    });
-    saved.push(["Steps", steps.join(" · ")]);
-  }
-  logTable("Saved", saved);
-
+  await ctx.step("report", (c) =>
+    c.writeFile(
+      RUN_FILES.report,
+      renderReport({
+        ...input.meta,
+        models,
+        durationMs,
+        costUsd,
+        summary,
+        ...(found ?? { ...NOTHING_FOUND, findings: null }),
+      }),
+    ),
+  );
   return {
-    runDir,
+    runDir: runDirPaths(ctx.runDir.root),
     checkout: repo,
     summary,
-    findings,
-    verdicts,
-    roughEdges: edges,
+    ...(found ?? NOTHING_FOUND),
     costUsd,
     durationMs,
   };
@@ -445,16 +436,30 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     runRoot === undefined
       ? await createRunDir(stateRepo, await shortSha(input.repo, "HEAD"), prepared.startedAt)
       : runDirPaths((await createRunDirAt(runRoot)).root);
+  const logTable: LogTable =
+    options.logTable ??
+    ((_, rows) => {
+      for (const [label, value] of rows) options.log(`${label}: ${value}`);
+    });
+  logTable("Review", reviewRows(prepared, runDir, options.askCommand));
   // Outside the flow, so a failed run still indexes what it got to.
   let findings: number | null = null;
   let verdicts: VerdictCounts | null = null;
-  return startRun(
+  let flow: FlowNode | null = null;
+  const result = await startRun(
     review,
-    { ...input, onFindings: (n) => (findings = n), onVerdicts: (v) => (verdicts = v) },
+    {
+      ...input,
+      hooks: {
+        ...input.hooks,
+        onFindings: (n) => (findings = n),
+        onVerdicts: (v) => (verdicts = v),
+      },
+    },
     {
       dir: runDir,
       runAgent: options.runAgent,
-      harness: input.harness,
+      harness: input.meta.harness,
       log: options.log,
       ...(options.warn === undefined ? {} : { warn: options.warn }),
       ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
@@ -462,29 +467,29 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
       meta: { ...meta },
       before: [collectStep(prepared)],
       afterCall: prepared.afterCall,
-      ...(runRoot === undefined
-        ? {
-            onFinish: async (run) => {
-              await appendIndexEntry(stateRepo, {
-                id: path.basename(runDir.root),
-                kind: "review",
-                startedAt: run.startedAt,
-                durationMs: run.totals.durationMs,
-                status: run.status === "ok" ? "ok" : "failed",
-                harness: meta.harness,
-                models: meta.models,
-                base: meta.base,
-                head: meta.head,
-                ...(meta.pr === undefined ? {} : { pr: meta.pr.number }),
-                diff: prepared.stats,
-                findings,
-                verdicts,
-                costUsd: run.totals.costUsd,
-                unknownCostCalls: run.totals.unknownCostCalls,
-              });
-            },
-          }
-        : {}),
+      onFinish: async (run) => {
+        flow = run.flow;
+        if (runRoot !== undefined) return;
+        await appendIndexEntry(stateRepo, {
+          id: path.basename(runDir.root),
+          kind: "review",
+          startedAt: run.startedAt,
+          durationMs: run.totals.durationMs,
+          status: run.status === "ok" ? "ok" : "failed",
+          harness: meta.harness,
+          models: meta.models,
+          base: meta.base,
+          head: meta.head,
+          ...(meta.pr === undefined ? {} : { pr: meta.pr.number }),
+          diff: prepared.stats,
+          findings,
+          verdicts,
+          costUsd: run.totals.costUsd,
+          unknownCostCalls: run.totals.unknownCostCalls,
+        });
+      },
     },
   );
+  logTable("Saved", savedRows(result, input.steps, options.verbose ? flow : null));
+  return result;
 }
