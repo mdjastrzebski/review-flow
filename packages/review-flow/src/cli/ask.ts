@@ -43,9 +43,56 @@ export interface AskOptions {
   verbose: boolean;
 }
 
-const color = () => process.stdout.hasColors?.() ?? false;
-const paint = (style: Parameters<typeof styleText>[0], text: string) =>
-  color() ? styleText(style, text, { validateStream: false }) : text;
+/** `review-flow ask [run] [question]`. */
+export async function askCommand(
+  ref: string | undefined,
+  question: string | undefined,
+  options: AskOptions,
+  cwd: string,
+): Promise<void> {
+  // `ask "<question>"`: run ids and paths have no spaces, so one argument with a space is a question.
+  if (question === undefined && ref !== undefined && /\s/.test(ref)) {
+    question = ref;
+    ref = undefined;
+  }
+  const repo = await resolveRepoRoot(options.repo);
+  const ask = await pickRun(repo, ref, cwd);
+  const agent = answerer(ask, options);
+  const warning = checkHarnessTrust(
+    agent.harness,
+    HARNESS_ENFORCEMENT[agent.harness],
+    runTrust(ask),
+    false,
+  );
+  if (warning !== null) note.warn(warning);
+  if (question === undefined && !options.open && !interactive()) {
+    throw new Error("No terminal to ask in: pass the question as an argument.");
+  }
+
+  const checkout = await openCheckout(repo, ask);
+  // Ctrl-C outside a prompt: drop the lease, and remove the worktree if this was the last user.
+  // With --open, the child CLI gets Ctrl-C instead.
+  const onSigint = () => {
+    checkout.releaseSync();
+    process.exit(130);
+  };
+  if (!options.open) process.once("SIGINT", onSigint);
+  try {
+    await printHeader(ask, checkout, cwd);
+    if (options.open) {
+      await openSession(ask, checkout, agent, options);
+      return;
+    }
+    console.log();
+    await askLoop(ask, checkout, agent, {
+      ...(question === undefined ? {} : { question }),
+      verbose: options.verbose,
+    });
+  } finally {
+    process.off("SIGINT", onSigint);
+    await checkout.release();
+  }
+}
 
 /** The run to ask about: `ref`, else the latest run, asking which when several are running. */
 async function pickRun(repo: string, ref: string | undefined, cwd: string): Promise<AskRun> {
@@ -66,6 +113,25 @@ async function pickRun(repo: string, ref: string | undefined, cwd: string): Prom
   );
   if (id === null) throw new Error("No run chosen.");
   return running.find((r) => r.id === id)!;
+}
+
+export interface LoopAgent {
+  harness: Harness;
+  model: ModelChoice;
+  runAgent: RunAgent;
+}
+
+/** The answerer's harness and model: the run's verifier, unless overridden. */
+function answerer(ask: AskRun, options: AskOptions): LoopAgent & { harness: Harness } {
+  const harness = options.harness ?? ask.run.harness;
+  return {
+    harness,
+    model: resolveAnswerer(harness, ask.run, {
+      model: options.model ?? null,
+      effort: options.effort ?? null,
+    }),
+    runAgent: getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
+  };
 }
 
 function runTrust(ask: AskRun): Trust {
@@ -106,10 +172,45 @@ async function printHeader(ask: AskRun, checkout: AskCheckout, cwd: string): Pro
   }
 }
 
-export interface LoopAgent {
-  harness: Harness;
-  model: ModelChoice;
-  runAgent: RunAgent;
+const paint = (style: Parameters<typeof styleText>[0], text: string) =>
+  color() ? styleText(style, text, { validateStream: false }) : text;
+
+const color = () => process.stdout.hasColors?.() ?? false;
+
+/** `ask --open`: the harness's own interactive CLI, holding the lease until it exits. */
+async function openSession(
+  ask: AskRun,
+  checkout: AskCheckout,
+  agent: LoopAgent,
+  options: AskOptions,
+): Promise<void> {
+  const loaded = await loadAnswererInput(ask, checkout.drift);
+  const input = await loaded.input([]);
+  const context = buildOpenContext(loaded.sharedContext, input);
+  note.info(`Opening ${agent.harness} in ${checkout.dir}. Its cost isn't recorded.`);
+  const startedAt = new Date();
+  // The child gets Ctrl-C itself; this process waits for it to exit.
+  const ignore = () => {};
+  process.on("SIGINT", ignore);
+  let result;
+  try {
+    result = await openInteractive(
+      agent.harness,
+      { claudeBin: options.claudeBin, cursorBin: options.cursorBin },
+      { cwd: checkout.dir, model: agent.model, context },
+    );
+  } finally {
+    process.off("SIGINT", ignore);
+  }
+  await recordOpen(ask.paths, {
+    harness: agent.harness,
+    model: agent.model,
+    startedAt,
+    durationMs: Date.now() - startedAt.getTime(),
+    error: result.error,
+    findings: input.findings.state,
+  });
+  if (result.error !== null) throw new Error(result.error);
 }
 
 /**
@@ -184,104 +285,4 @@ export async function askLoop(
     const total = `${unknownCost ? "≥ " : ""}${formatCost(costUsd)}`;
     console.log(paint("dim", `${count} question(s): ${total} · ${formatDuration(durationMs)}`));
   }
-}
-
-/** The answerer's harness and model: the run's verifier, unless overridden. */
-function answerer(ask: AskRun, options: AskOptions): LoopAgent & { harness: Harness } {
-  const harness = options.harness ?? ask.run.harness;
-  return {
-    harness,
-    model: resolveAnswerer(harness, ask.run, {
-      model: options.model ?? null,
-      effort: options.effort ?? null,
-    }),
-    runAgent: getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
-  };
-}
-
-/** `review-flow ask [run] [question]`. */
-export async function askCommand(
-  ref: string | undefined,
-  question: string | undefined,
-  options: AskOptions,
-  cwd: string,
-): Promise<void> {
-  // `ask "<question>"`: run ids and paths have no spaces, so one argument with a space is a question.
-  if (question === undefined && ref !== undefined && /\s/.test(ref)) {
-    question = ref;
-    ref = undefined;
-  }
-  const repo = await resolveRepoRoot(options.repo);
-  const ask = await pickRun(repo, ref, cwd);
-  const agent = answerer(ask, options);
-  const warning = checkHarnessTrust(
-    agent.harness,
-    HARNESS_ENFORCEMENT[agent.harness],
-    runTrust(ask),
-    false,
-  );
-  if (warning !== null) note.warn(warning);
-  if (question === undefined && !options.open && !interactive()) {
-    throw new Error("No terminal to ask in: pass the question as an argument.");
-  }
-
-  const checkout = await openCheckout(repo, ask);
-  // Ctrl-C outside a prompt: drop the lease, and remove the worktree if this was the last user.
-  // With --open, the child CLI gets Ctrl-C instead.
-  const onSigint = () => {
-    checkout.releaseSync();
-    process.exit(130);
-  };
-  if (!options.open) process.once("SIGINT", onSigint);
-  try {
-    await printHeader(ask, checkout, cwd);
-    if (options.open) {
-      await openSession(ask, checkout, agent, options);
-      return;
-    }
-    console.log();
-    await askLoop(ask, checkout, agent, {
-      ...(question === undefined ? {} : { question }),
-      verbose: options.verbose,
-    });
-  } finally {
-    process.off("SIGINT", onSigint);
-    await checkout.release();
-  }
-}
-
-/** `ask --open`: the harness's own interactive CLI, holding the lease until it exits. */
-async function openSession(
-  ask: AskRun,
-  checkout: AskCheckout,
-  agent: LoopAgent,
-  options: AskOptions,
-): Promise<void> {
-  const loaded = await loadAnswererInput(ask, checkout.drift);
-  const input = await loaded.input([]);
-  const context = buildOpenContext(loaded.sharedContext, input);
-  note.info(`Opening ${agent.harness} in ${checkout.dir}. Its cost isn't recorded.`);
-  const startedAt = new Date();
-  // The child gets Ctrl-C itself; this process waits for it to exit.
-  const ignore = () => {};
-  process.on("SIGINT", ignore);
-  let result;
-  try {
-    result = await openInteractive(
-      agent.harness,
-      { claudeBin: options.claudeBin, cursorBin: options.cursorBin },
-      { cwd: checkout.dir, model: agent.model, context },
-    );
-  } finally {
-    process.off("SIGINT", ignore);
-  }
-  await recordOpen(ask.paths, {
-    harness: agent.harness,
-    model: agent.model,
-    startedAt,
-    durationMs: Date.now() - startedAt.getTime(),
-    error: result.error,
-    findings: input.findings.state,
-  });
-  if (result.error !== null) throw new Error(result.error);
 }

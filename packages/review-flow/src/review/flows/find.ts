@@ -37,19 +37,6 @@ export interface FindResult {
   roughEdges: CheckedRoughEdge[];
 }
 
-/** The reviewer prompt; the rough edge section only when they are asked for. */
-export function buildReviewerPrompt(
-  change: ChangeRange,
-  diff: string,
-  roughEdges: boolean,
-): string {
-  return renderPrompt("reviewer", {
-    ...change,
-    diffBlock: codeFence(diff, "diff"),
-    roughEdges: roughEdges ? loadPrompt("rough-edges") : "",
-  });
-}
-
 /**
  * Find: the reviewer (step `review`; a failure stops the run), then a verifier per finding, then
  * the batched rough edge check (its own node, so its cost shows apart). rough-edges.json is
@@ -97,4 +84,17 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
   }
   input.onVerdicts?.(countVerdicts(verdicts));
   return { findings, verdicts, roughEdges };
+}
+
+/** The reviewer prompt; the rough edge section only when they are asked for. */
+export function buildReviewerPrompt(
+  change: ChangeRange,
+  diff: string,
+  roughEdges: boolean,
+): string {
+  return renderPrompt("reviewer", {
+    ...change,
+    diffBlock: codeFence(diff, "diff"),
+    roughEdges: roughEdges ? loadPrompt("rough-edges") : "",
+  });
 }

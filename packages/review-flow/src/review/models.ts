@@ -1,13 +1,16 @@
-export const HARNESSES = ["claude", "cursor"] as const;
-export type Harness = (typeof HARNESSES)[number];
-
-/** Roles of the review pipeline, each with its model in `run.json`. */
-export type ReviewRole = "summarizer" | "reviewer" | "verifier";
 /** `answerer` answers `ask` questions after (or during) a review; `judge` scores eval findings. */
 export type Role = ReviewRole | "answerer" | "judge";
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** Roles of the review pipeline, each with its model in `run.json`. */
+export type ReviewRole = "summarizer" | "reviewer" | "verifier";
+
+export type Harness = (typeof HARNESSES)[number];
+
+export const HARNESSES = ["claude", "cursor"] as const;
+
 export type Effort = (typeof EFFORTS)[number];
+
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export interface ModelChoice {
   /** null = don't pass a model; the harness uses its own default. */
@@ -15,6 +18,29 @@ export interface ModelChoice {
   /** null = don't pass an effort; the harness or model uses its own default. */
   effort: Effort | null;
 }
+
+/** The rough-edge judge's model on `harness`; overrides apply as in `resolveModels`. */
+export function resolveEdgeJudge(
+  harness: Harness,
+  overrides: { model: string | null; effort: Effort | null },
+): ModelChoice {
+  const base = DEFAULT_EDGE_JUDGE[harness];
+  const { model, effort } = overrides;
+  return {
+    model: model ?? base.model,
+    effort: effort ?? (model !== null && harness === "cursor" ? null : base.effort),
+  };
+}
+
+/**
+ * The rough-edge judge grades the reviewer's own output, so it runs on another model to avoid
+ * self-preference: Opus on Claude (another model, same family); on Cursor, a Claude model, another
+ * family than the default Grok.
+ */
+export const DEFAULT_EDGE_JUDGE: Record<Harness, ModelChoice> = {
+  claude: { model: "claude-opus-5-5", effort: "high" },
+  cursor: { model: "claude-sonnet-5-5-high", effort: null },
+};
 
 export type RoleModels = Record<ReviewRole, ModelChoice>;
 
@@ -35,6 +61,9 @@ export const DEFAULT_MODELS: Record<Harness, RoleModels> = {
     verifier: { model: "grok-4.7-low", effort: null },
   },
 };
+
+/** The eval judge's model: chosen like the answerer's, from the run's verifier model. */
+export const resolveJudge = resolveAnswerer;
 
 export interface ModelOverrides {
   /** Applies to every role, unless the role's own override is set. */
@@ -82,32 +111,6 @@ export function resolveAnswerer(
   overrides: { model: string | null; effort: Effort | null },
 ): ModelChoice {
   const base = run.harness === harness ? run.models.verifier : DEFAULT_MODELS[harness].verifier;
-  const { model, effort } = overrides;
-  return {
-    model: model ?? base.model,
-    effort: effort ?? (model !== null && harness === "cursor" ? null : base.effort),
-  };
-}
-
-/** The eval judge's model: chosen like the answerer's, from the run's verifier model. */
-export const resolveJudge = resolveAnswerer;
-
-/**
- * The rough-edge judge grades the reviewer's own output, so it runs on another model to avoid
- * self-preference: Opus on Claude (another model, same family); on Cursor, a Claude model, another
- * family than the default Grok.
- */
-export const DEFAULT_EDGE_JUDGE: Record<Harness, ModelChoice> = {
-  claude: { model: "claude-opus-5-5", effort: "high" },
-  cursor: { model: "claude-sonnet-5-5-high", effort: null },
-};
-
-/** The rough-edge judge's model on `harness`; overrides apply as in `resolveModels`. */
-export function resolveEdgeJudge(
-  harness: Harness,
-  overrides: { model: string | null; effort: Effort | null },
-): ModelChoice {
-  const base = DEFAULT_EDGE_JUDGE[harness];
   const { model, effort } = overrides;
   return {
     model: model ?? base.model,

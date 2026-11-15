@@ -1,25 +1,6 @@
 import type { EvalCase } from "./dataset.ts";
 import type { CheckedRoughEdge } from "../review/schemas.ts";
 
-/** The rubric, in the order the judge answers it; a rough edge is postable when all are yes. */
-export const RUBRIC = ["accurate", "notLocal", "concrete", "worthPosting"] as const;
-export type RubricQuestion = (typeof RUBRIC)[number];
-
-/** The rubric judge's answers on one rough edge. */
-export type EdgeGrade = { reason: string } & Record<RubricQuestion, boolean>;
-
-export const isPostable = (grade: EdgeGrade): boolean => RUBRIC.every((q) => grade[q]);
-
-export type EdgeJudgeResult =
-  | {
-      status: "ok";
-      /** Rough edge id to its grade; an edge the judge skipped or answered twice has none. */
-      grades: Map<string, EdgeGrade>;
-      costUsd: number | null;
-      durationMs: number;
-    }
-  | { status: "failed"; error: string; costUsd: number | null; durationMs: number };
-
 /** A case's rough edges by the checker's status, and what the check cost. */
 export interface RoughEdgeResult {
   accurate: number;
@@ -45,6 +26,23 @@ export interface EdgeJudgeTally {
   droppedPostable: number;
   /** Graded rough edges answered no, per question. */
   no: Record<RubricQuestion, number>;
+}
+
+export type RubricQuestion = (typeof RUBRIC)[number];
+
+/** The rubric, in the order the judge answers it; a rough edge is postable when all are yes. */
+export const RUBRIC = ["accurate", "notLocal", "concrete", "worthPosting"] as const;
+
+/**
+ * `N kept (A accurate, U unclear, I inaccurate)`, plus `, P postable` when judged; null when the
+ * case has no rough-edge result.
+ */
+export function roughEdgeOutcome(result: { roughEdges?: RoughEdgeResult | null }): string | null {
+  const r = result.roughEdges;
+  if (r == null) return null;
+  const text = `${r.accurate + r.unclear} kept (${r.accurate} accurate, ${r.unclear} unclear, ${r.inaccurate} inaccurate)`;
+  if (r.judge?.status !== "ok") return text;
+  return `${text}, ${r.judge.keptPostable + r.judge.droppedPostable} postable`;
 }
 
 export interface RoughEdgeScores {
@@ -87,24 +85,79 @@ export interface RoughEdgeJudgeScores {
   costUsd: number | null;
 }
 
-export function countRoughEdges(
-  edges: readonly CheckedRoughEdge[],
-  checkCostUsd: number | null,
-): RoughEdgeResult {
-  const count = (status: CheckedRoughEdge["check"]["status"]) =>
-    edges.filter((e) => e.check.status === status).length;
+/** Rough-edge scores over the cases that finished; undefined when none had rough edges on. */
+export function summarizeRoughEdges(
+  ok: readonly { kind: EvalCase["kind"]; roughEdges?: RoughEdgeResult | null }[],
+): RoughEdgeScores | undefined {
+  const scored = ok.flatMap((c) =>
+    c.roughEdges == null ? [] : [{ kind: c.kind, ...c.roughEdges }],
+  );
+  if (scored.length === 0) return undefined;
+  const sum = (values: readonly number[]) => values.reduce((a, b) => a + b, 0);
+  const clean = scored.filter((r) => r.kind === "clean");
+  const costs = scored.flatMap((r) => (r.checkCostUsd === null ? [] : [r.checkCostUsd]));
+  const judge = summarizeEdgeJudge(scored.flatMap((r) => (r.judge === undefined ? [] : [r.judge])));
   return {
-    accurate: count("accurate"),
-    unclear: count("unclear"),
-    inaccurate: count("inaccurate"),
-    checkCostUsd,
+    cases: scored.length,
+    accurate: sum(scored.map((r) => r.accurate)),
+    unclear: sum(scored.map((r) => r.unclear)),
+    inaccurate: sum(scored.map((r) => r.inaccurate)),
+    keptPerCase: sum(scored.map(kept)) / scored.length,
+    keptPerCleanCase: clean.length === 0 ? null : sum(clean.map(kept)) / clean.length,
+    checkCostUsd: costs.length === 0 ? null : sum(costs),
+    unknownCheckCost: scored.length - costs.length,
+    ...(judge === undefined ? {} : { judge }),
   };
 }
 
-const kept = (r: RoughEdgeResult) => r.accurate + r.unclear;
+function summarizeEdgeJudge(tallies: readonly EdgeJudgeTally[]): RoughEdgeJudgeScores | undefined {
+  if (tallies.length === 0) return undefined;
+  const ok = tallies.filter((t) => t.status === "ok");
+  const sum = (of: (t: EdgeJudgeTally) => number) => ok.reduce((a, t) => a + of(t), 0);
+  const keptGraded = sum((t) => t.kept);
+  const dropped = sum((t) => t.dropped);
+  const keptRejected = keptGraded - sum((t) => t.keptPostable);
+  const droppedAccepted = sum((t) => t.droppedPostable);
+  const postable = sum((t) => t.keptPostable) + droppedAccepted;
+  const costs = tallies.flatMap((t) => (t.costUsd === null ? [] : [t.costUsd]));
+  const no = noAnswers();
+  for (const q of RUBRIC) no[q] = sum((t) => t.no[q]);
+  return {
+    cases: ok.length,
+    failed: tallies.length - ok.length,
+    graded: keptGraded + dropped,
+    postable,
+    postableRate: rate(postable, keptGraded + dropped),
+    kept: keptGraded,
+    keptRejected,
+    keptRejectedRate: rate(keptRejected, keptGraded),
+    dropped,
+    droppedAccepted,
+    droppedAcceptedRate: rate(droppedAccepted, dropped),
+    no,
+    costUsd: costs.length === 0 ? null : costs.reduce((a, b) => a + b, 0),
+  };
+}
 
 const noAnswers = (): Record<RubricQuestion, number> =>
   Object.fromEntries(RUBRIC.map((q) => [q, 0])) as Record<RubricQuestion, number>;
+
+const rate = (n: number, d: number) => (d === 0 ? null : n / d);
+
+const kept = (r: RoughEdgeResult) => r.accurate + r.unclear;
+
+export type EdgeJudgeResult =
+  | {
+      status: "ok";
+      /** Rough edge id to its grade; an edge the judge skipped or answered twice has none. */
+      grades: Map<string, EdgeGrade>;
+      costUsd: number | null;
+      durationMs: number;
+    }
+  | { status: "failed"; error: string; costUsd: number | null; durationMs: number };
+
+/** The rubric judge's answers on one rough edge. */
+export type EdgeGrade = { reason: string } & Record<RubricQuestion, boolean>;
 
 /** Counts the judge's grades against the checker's verdicts; a failed call counts nothing. */
 export function tallyEdgeJudge(
@@ -139,70 +192,18 @@ export function tallyEdgeJudge(
   return tally;
 }
 
-const rate = (n: number, d: number) => (d === 0 ? null : n / d);
+export const isPostable = (grade: EdgeGrade): boolean => RUBRIC.every((q) => grade[q]);
 
-function summarizeEdgeJudge(tallies: readonly EdgeJudgeTally[]): RoughEdgeJudgeScores | undefined {
-  if (tallies.length === 0) return undefined;
-  const ok = tallies.filter((t) => t.status === "ok");
-  const sum = (of: (t: EdgeJudgeTally) => number) => ok.reduce((a, t) => a + of(t), 0);
-  const keptGraded = sum((t) => t.kept);
-  const dropped = sum((t) => t.dropped);
-  const keptRejected = keptGraded - sum((t) => t.keptPostable);
-  const droppedAccepted = sum((t) => t.droppedPostable);
-  const postable = sum((t) => t.keptPostable) + droppedAccepted;
-  const costs = tallies.flatMap((t) => (t.costUsd === null ? [] : [t.costUsd]));
-  const no = noAnswers();
-  for (const q of RUBRIC) no[q] = sum((t) => t.no[q]);
+export function countRoughEdges(
+  edges: readonly CheckedRoughEdge[],
+  checkCostUsd: number | null,
+): RoughEdgeResult {
+  const count = (status: CheckedRoughEdge["check"]["status"]) =>
+    edges.filter((e) => e.check.status === status).length;
   return {
-    cases: ok.length,
-    failed: tallies.length - ok.length,
-    graded: keptGraded + dropped,
-    postable,
-    postableRate: rate(postable, keptGraded + dropped),
-    kept: keptGraded,
-    keptRejected,
-    keptRejectedRate: rate(keptRejected, keptGraded),
-    dropped,
-    droppedAccepted,
-    droppedAcceptedRate: rate(droppedAccepted, dropped),
-    no,
-    costUsd: costs.length === 0 ? null : costs.reduce((a, b) => a + b, 0),
+    accurate: count("accurate"),
+    unclear: count("unclear"),
+    inaccurate: count("inaccurate"),
+    checkCostUsd,
   };
-}
-
-/** Rough-edge scores over the cases that finished; undefined when none had rough edges on. */
-export function summarizeRoughEdges(
-  ok: readonly { kind: EvalCase["kind"]; roughEdges?: RoughEdgeResult | null }[],
-): RoughEdgeScores | undefined {
-  const scored = ok.flatMap((c) =>
-    c.roughEdges == null ? [] : [{ kind: c.kind, ...c.roughEdges }],
-  );
-  if (scored.length === 0) return undefined;
-  const sum = (values: readonly number[]) => values.reduce((a, b) => a + b, 0);
-  const clean = scored.filter((r) => r.kind === "clean");
-  const costs = scored.flatMap((r) => (r.checkCostUsd === null ? [] : [r.checkCostUsd]));
-  const judge = summarizeEdgeJudge(scored.flatMap((r) => (r.judge === undefined ? [] : [r.judge])));
-  return {
-    cases: scored.length,
-    accurate: sum(scored.map((r) => r.accurate)),
-    unclear: sum(scored.map((r) => r.unclear)),
-    inaccurate: sum(scored.map((r) => r.inaccurate)),
-    keptPerCase: sum(scored.map(kept)) / scored.length,
-    keptPerCleanCase: clean.length === 0 ? null : sum(clean.map(kept)) / clean.length,
-    checkCostUsd: costs.length === 0 ? null : sum(costs),
-    unknownCheckCost: scored.length - costs.length,
-    ...(judge === undefined ? {} : { judge }),
-  };
-}
-
-/**
- * `N kept (A accurate, U unclear, I inaccurate)`, plus `, P postable` when judged; null when the
- * case has no rough-edge result.
- */
-export function roughEdgeOutcome(result: { roughEdges?: RoughEdgeResult | null }): string | null {
-  const r = result.roughEdges;
-  if (r == null) return null;
-  const text = `${r.accurate + r.unclear} kept (${r.accurate} accurate, ${r.unclear} unclear, ${r.inaccurate} inaccurate)`;
-  if (r.judge?.status !== "ok") return text;
-  return `${text}, ${r.judge.keptPostable + r.judge.droppedPostable} postable`;
 }

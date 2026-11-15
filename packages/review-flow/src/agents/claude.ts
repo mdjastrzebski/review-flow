@@ -27,102 +27,7 @@ export interface ClaudeOptions {
   bin: string;
 }
 
-// guard-hook.ts from source, guard-hook.js once built: Node won't strip types inside node_modules.
-const GUARD_HOOK = fileURLToPath(
-  new URL(`./guard-hook${path.extname(import.meta.url)}`, import.meta.url),
-);
-
-/**
- * The CLI validates `--json-schema` with a validator that doesn't know zod's default
- * draft-2020-12 `$schema` URI, so drop it; the schema itself uses only portable keywords.
- */
-export function toOutputSchema(schema: z.ZodType): Record<string, unknown> {
-  const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema);
-  return jsonSchema;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-/** Settings passed with `--settings`: the guard hook, and no auto-memory. */
-export function guardSettings(cwd: string, deniedLog: string): string {
-  const command = [process.execPath, GUARD_HOOK, cwd, deniedLog].map(shellQuote).join(" ");
-  return JSON.stringify({
-    autoMemoryEnabled: false,
-    hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
-  });
-}
-
-/**
- * Flags for one task. The prompt goes on stdin and the shared context in a file, so large diffs
- * don't hit argv limits. The shared context is appended to the system prompt: unlike the user
- * message, the system prompt is cached as its own block, so later sessions read it from cache.
- */
-export function claudeArgs(
-  task: AgentTask<unknown>,
-  settings: string,
-  contextFile: string | null,
-): string[] {
-  const tools = READ_ONLY_TOOLS.join(",");
-  return [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    ...(task.model === null ? [] : ["--model", task.model]),
-    ...(task.effort === null ? [] : ["--effort", task.effort]),
-    // Read-only: only these tools exist, they run without prompts, and nothing else is allowed.
-    "--tools",
-    tools,
-    "--allowed-tools",
-    tools,
-    "--permission-mode",
-    "dontAsk",
-    // Isolation: no user/project/local settings (so no CLAUDE.md or their hooks), no MCP servers,
-    // no slash commands or skills, no saved session.
-    "--setting-sources",
-    "",
-    "--settings",
-    settings,
-    "--strict-mcp-config",
-    "--disable-slash-commands",
-    "--no-session-persistence",
-    "--json-schema",
-    JSON.stringify(toOutputSchema(task.schema)),
-    ...(contextFile === null ? [] : ["--append-system-prompt-file", contextFile]),
-  ];
-}
-
-/**
- * Flags for `ask --open`: an interactive session with the same tools, guard, and isolation as a
- * task, and the context in the system prompt. Session persistence can only be turned off with -p.
- */
-export function claudeOpenArgs(
-  { model, effort }: { model: string | null; effort: string | null },
-  settings: string,
-  contextFile: string,
-): string[] {
-  const tools = READ_ONLY_TOOLS.join(",");
-  return [
-    ...(model === null ? [] : ["--model", model]),
-    ...(effort === null ? [] : ["--effort", effort]),
-    "--tools",
-    tools,
-    "--allowed-tools",
-    tools,
-    "--permission-mode",
-    "dontAsk",
-    "--setting-sources",
-    "",
-    "--settings",
-    settings,
-    "--strict-mcp-config",
-    "--disable-slash-commands",
-    "--append-system-prompt-file",
-    contextFile,
-  ];
-}
+type Outcome<T> = AgentOutcome<T> & Pick<AgentRunInfo, "rawText" | "costUsd" | "usage">;
 
 /** The fields of a `stream-json` message that the harness reads. */
 interface StreamMessage {
@@ -156,111 +61,6 @@ interface StreamMessage {
     cache_creation_input_tokens?: number;
     output_tokens?: number;
   };
-}
-
-export function parseUsage(result: StreamMessage): TokenUsage | null {
-  const usage = result.usage;
-  if (usage === undefined) return null;
-  return {
-    input: usage.input_tokens ?? 0,
-    cacheRead: usage.cache_read_input_tokens ?? 0,
-    cacheWrite: usage.cache_creation_input_tokens ?? 0,
-    output: usage.output_tokens ?? 0,
-  };
-}
-
-type Outcome<T> = AgentOutcome<T> & Pick<AgentRunInfo, "rawText" | "costUsd" | "usage">;
-
-/** Turns the final `result` message into an outcome, validating the structured output. */
-export function interpretResult<T>(result: StreamMessage, schema: z.ZodType<T>): Outcome<T> {
-  const costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : null;
-  const usage = parseUsage(result);
-  const rawText = typeof result.result === "string" ? result.result : "";
-  const fail = (reason: AgentFailureReason, error: string): Outcome<T> => ({
-    status: "failure",
-    reason,
-    error,
-    rawText,
-    costUsd,
-    usage,
-  });
-
-  if (result.subtype !== "success") {
-    const reason =
-      result.subtype === "error_max_structured_output_retries" ? "invalid_output" : "error";
-    return fail(reason, [result.subtype ?? "unknown", ...(result.errors ?? [])].join(": "));
-  }
-  if (result.is_error === true) return fail("error", rawText);
-
-  const parsed = schema.safeParse(result.structured_output);
-  if (!parsed.success) return fail("invalid_output", z.prettifyError(parsed.error));
-  return { status: "success", output: parsed.data, rawText, costUsd, usage };
-}
-
-function describeToolInput(tool: string, input: Record<string, unknown>, cwd: string) {
-  const str = (key: string) => (typeof input[key] === "string" ? input[key] : null);
-  const rel = (p: string | null) =>
-    p === null ? null : path.relative(cwd, path.resolve(cwd, p)) || ".";
-  switch (tool) {
-    case "Read":
-      return rel(str("file_path"));
-    case "Grep":
-    case "Glob": {
-      const pattern = str("pattern");
-      const where = rel(str("path"));
-      return where === null ? pattern : `${pattern} in ${where}`;
-    }
-    case STRUCTURED_OUTPUT_TOOL:
-      return "submitting result";
-    default:
-      return null;
-  }
-}
-
-function reportToolCalls(message: StreamMessage, task: AgentTask<unknown>): void {
-  for (const block of message.message?.content ?? []) {
-    if (block.type !== "tool_use" || typeof block.name !== "string") continue;
-    const input = (block.input ?? {}) as Record<string, unknown>;
-    task.onProgress({ tool: block.name, detail: describeToolInput(block.name, input, task.cwd) });
-  }
-}
-
-/** `--verbose` lines for one stream message: session setup, the agent's text, tool errors, the result. */
-export function describeMessage(message: StreamMessage): string[] {
-  if (message.type === "system" && message.subtype === "init") {
-    const parts = [
-      message.model === undefined ? null : `model ${message.model}`,
-      message.claude_code_version === undefined ? null : `claude ${message.claude_code_version}`,
-      message.tools === undefined ? null : `tools ${message.tools.join(",")}`,
-    ].filter((part) => part !== null);
-    return [
-      `session ${message.session_id ?? "?"}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`,
-    ];
-  }
-  if (message.type === "result") {
-    return [`result: ${message.subtype ?? "?"}, ${message.num_turns ?? "?"} turn(s)`];
-  }
-  const lines: string[] = [];
-  for (const block of message.message?.content ?? []) {
-    if (block.type === "text" && block.text) lines.push(`text: ${oneLine(block.text)}`);
-    if (block.type === "thinking" && block.thinking) {
-      lines.push(`thinking: ${oneLine(block.thinking)}`);
-    }
-    if (block.type === "tool_result" && block.is_error === true) {
-      const content =
-        typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-      lines.push(`tool error: ${oneLine(content ?? "")}`);
-    }
-  }
-  return lines;
-}
-
-async function readLines(file: string): Promise<string[]> {
-  try {
-    return (await readFile(file, "utf8")).split("\n").filter((line) => line !== "");
-  } catch {
-    return [];
-  }
 }
 
 export function createClaudeAgent(options: ClaudeOptions): RunAgent {
@@ -327,4 +127,204 @@ export function createClaudeAgent(options: ClaudeOptions): RunAgent {
     if (result === null) return failure("error", noResultError(options.bin, run));
     return finish(interpretResult(result, task.schema));
   };
+}
+
+/**
+ * Flags for one task. The prompt goes on stdin and the shared context in a file, so large diffs
+ * don't hit argv limits. The shared context is appended to the system prompt: unlike the user
+ * message, the system prompt is cached as its own block, so later sessions read it from cache.
+ */
+export function claudeArgs(
+  task: AgentTask<unknown>,
+  settings: string,
+  contextFile: string | null,
+): string[] {
+  const tools = READ_ONLY_TOOLS.join(",");
+  return [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    ...(task.model === null ? [] : ["--model", task.model]),
+    ...(task.effort === null ? [] : ["--effort", task.effort]),
+    // Read-only: only these tools exist, they run without prompts, and nothing else is allowed.
+    "--tools",
+    tools,
+    "--allowed-tools",
+    tools,
+    "--permission-mode",
+    "dontAsk",
+    // Isolation: no user/project/local settings (so no CLAUDE.md or their hooks), no MCP servers,
+    // no slash commands or skills, no saved session.
+    "--setting-sources",
+    "",
+    "--settings",
+    settings,
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--json-schema",
+    JSON.stringify(toOutputSchema(task.schema)),
+    ...(contextFile === null ? [] : ["--append-system-prompt-file", contextFile]),
+  ];
+}
+
+/**
+ * The CLI validates `--json-schema` with a validator that doesn't know zod's default
+ * draft-2020-12 `$schema` URI, so drop it; the schema itself uses only portable keywords.
+ */
+export function toOutputSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema);
+  return jsonSchema;
+}
+
+/** Settings passed with `--settings`: the guard hook, and no auto-memory. */
+export function guardSettings(cwd: string, deniedLog: string): string {
+  const command = [process.execPath, GUARD_HOOK, cwd, deniedLog].map(shellQuote).join(" ");
+  return JSON.stringify({
+    autoMemoryEnabled: false,
+    hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
+  });
+}
+
+// guard-hook.ts from source, guard-hook.js once built: Node won't strip types inside node_modules.
+const GUARD_HOOK = fileURLToPath(
+  new URL(`./guard-hook${path.extname(import.meta.url)}`, import.meta.url),
+);
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function reportToolCalls(message: StreamMessage, task: AgentTask<unknown>): void {
+  for (const block of message.message?.content ?? []) {
+    if (block.type !== "tool_use" || typeof block.name !== "string") continue;
+    const input = (block.input ?? {}) as Record<string, unknown>;
+    task.onProgress({ tool: block.name, detail: describeToolInput(block.name, input, task.cwd) });
+  }
+}
+
+function describeToolInput(tool: string, input: Record<string, unknown>, cwd: string) {
+  const str = (key: string) => (typeof input[key] === "string" ? input[key] : null);
+  const rel = (p: string | null) =>
+    p === null ? null : path.relative(cwd, path.resolve(cwd, p)) || ".";
+  switch (tool) {
+    case "Read":
+      return rel(str("file_path"));
+    case "Grep":
+    case "Glob": {
+      const pattern = str("pattern");
+      const where = rel(str("path"));
+      return where === null ? pattern : `${pattern} in ${where}`;
+    }
+    case STRUCTURED_OUTPUT_TOOL:
+      return "submitting result";
+    default:
+      return null;
+  }
+}
+
+/** `--verbose` lines for one stream message: session setup, the agent's text, tool errors, the result. */
+export function describeMessage(message: StreamMessage): string[] {
+  if (message.type === "system" && message.subtype === "init") {
+    const parts = [
+      message.model === undefined ? null : `model ${message.model}`,
+      message.claude_code_version === undefined ? null : `claude ${message.claude_code_version}`,
+      message.tools === undefined ? null : `tools ${message.tools.join(",")}`,
+    ].filter((part) => part !== null);
+    return [
+      `session ${message.session_id ?? "?"}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`,
+    ];
+  }
+  if (message.type === "result") {
+    return [`result: ${message.subtype ?? "?"}, ${message.num_turns ?? "?"} turn(s)`];
+  }
+  const lines: string[] = [];
+  for (const block of message.message?.content ?? []) {
+    if (block.type === "text" && block.text) lines.push(`text: ${oneLine(block.text)}`);
+    if (block.type === "thinking" && block.thinking) {
+      lines.push(`thinking: ${oneLine(block.thinking)}`);
+    }
+    if (block.type === "tool_result" && block.is_error === true) {
+      const content =
+        typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+      lines.push(`tool error: ${oneLine(content ?? "")}`);
+    }
+  }
+  return lines;
+}
+
+async function readLines(file: string): Promise<string[]> {
+  try {
+    return (await readFile(file, "utf8")).split("\n").filter((line) => line !== "");
+  } catch {
+    return [];
+  }
+}
+
+/** Turns the final `result` message into an outcome, validating the structured output. */
+export function interpretResult<T>(result: StreamMessage, schema: z.ZodType<T>): Outcome<T> {
+  const costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : null;
+  const usage = parseUsage(result);
+  const rawText = typeof result.result === "string" ? result.result : "";
+  const fail = (reason: AgentFailureReason, error: string): Outcome<T> => ({
+    status: "failure",
+    reason,
+    error,
+    rawText,
+    costUsd,
+    usage,
+  });
+
+  if (result.subtype !== "success") {
+    const reason =
+      result.subtype === "error_max_structured_output_retries" ? "invalid_output" : "error";
+    return fail(reason, [result.subtype ?? "unknown", ...(result.errors ?? [])].join(": "));
+  }
+  if (result.is_error === true) return fail("error", rawText);
+
+  const parsed = schema.safeParse(result.structured_output);
+  if (!parsed.success) return fail("invalid_output", z.prettifyError(parsed.error));
+  return { status: "success", output: parsed.data, rawText, costUsd, usage };
+}
+
+export function parseUsage(result: StreamMessage): TokenUsage | null {
+  const usage = result.usage;
+  if (usage === undefined) return null;
+  return {
+    input: usage.input_tokens ?? 0,
+    cacheRead: usage.cache_read_input_tokens ?? 0,
+    cacheWrite: usage.cache_creation_input_tokens ?? 0,
+    output: usage.output_tokens ?? 0,
+  };
+}
+
+/**
+ * Flags for `ask --open`: an interactive session with the same tools, guard, and isolation as a
+ * task, and the context in the system prompt. Session persistence can only be turned off with -p.
+ */
+export function claudeOpenArgs(
+  { model, effort }: { model: string | null; effort: string | null },
+  settings: string,
+  contextFile: string,
+): string[] {
+  const tools = READ_ONLY_TOOLS.join(",");
+  return [
+    ...(model === null ? [] : ["--model", model]),
+    ...(effort === null ? [] : ["--effort", effort]),
+    "--tools",
+    tools,
+    "--allowed-tools",
+    tools,
+    "--permission-mode",
+    "dontAsk",
+    "--setting-sources",
+    "",
+    "--settings",
+    settings,
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--append-system-prompt-file",
+    contextFile,
+  ];
 }

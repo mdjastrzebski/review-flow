@@ -4,18 +4,12 @@ import path from "node:path";
 import type { EvalBug } from "./dataset.ts";
 import { gh } from "../review/github.ts";
 
-/** Keeps a large fix from dominating the judge prompt. */
-export const MAX_FIX_DIFF_CHARS = 12_000;
-
-/** Fix diffs, fetched once and kept outside any project, next to the case checkouts. */
-export function defaultFixesDir(): string {
-  const cache = process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache");
-  return path.join(cache, "review-flow", "eval-fixes");
-}
-
-function parsePrUrl(url: string): { repo: string; number: string } | null {
-  const match = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/.exec(url);
-  return match === null ? null : { repo: match[1] ?? "", number: match[2] ?? "" };
+/** The fix diffs of a case's bugs, in order; null for one that couldn't be fetched. */
+export async function fetchFixDiffs(
+  bugs: readonly Pick<EvalBug, "fix">[],
+  dir: string,
+): Promise<(string | null)[]> {
+  return Promise.all(bugs.map((bug) => fetchFixDiff(bug, dir)));
 }
 
 /**
@@ -41,10 +35,16 @@ export async function fetchFixDiff(bug: Pick<EvalBug, "fix">, dir: string): Prom
   }
 }
 
-/** The fix diffs of a case's bugs, in order; null for one that couldn't be fetched. */
-export async function fetchFixDiffs(
-  bugs: readonly Pick<EvalBug, "fix">[],
-  dir: string,
-): Promise<(string | null)[]> {
-  return Promise.all(bugs.map((bug) => fetchFixDiff(bug, dir)));
+function parsePrUrl(url: string): { repo: string; number: string } | null {
+  const match = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/.exec(url);
+  return match === null ? null : { repo: match[1] ?? "", number: match[2] ?? "" };
 }
+
+/** Fix diffs, fetched once and kept outside any project, next to the case checkouts. */
+export function defaultFixesDir(): string {
+  const cache = process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache");
+  return path.join(cache, "review-flow", "eval-fixes");
+}
+
+/** Keeps a large fix from dominating the judge prompt. */
+export const MAX_FIX_DIFF_CHARS = 12_000;

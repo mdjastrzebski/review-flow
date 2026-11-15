@@ -12,6 +12,15 @@ export interface RunDirBase {
   path(name: string): string;
 }
 
+/** Creates a run dir at `root`, whose parent must exist, with its prompts/ and raw/ subdirs. */
+export async function createRunDirAt(root: string): Promise<RunDirBase> {
+  // Non-recursive so two runs in the same second fail loudly instead of sharing a directory.
+  await mkdir(root);
+  await mkdir(path.join(root, "prompts"));
+  await mkdir(path.join(root, "raw"));
+  return runDirBase(root);
+}
+
 export function runDirBase(root: string): RunDirBase {
   return {
     root,
@@ -21,13 +30,4 @@ export function runDirBase(root: string): RunDirBase {
     rawPath: (taskId) => path.join(root, "raw", `${taskId}.json`),
     path: (name) => path.join(root, name),
   };
-}
-
-/** Creates a run dir at `root`, whose parent must exist, with its prompts/ and raw/ subdirs. */
-export async function createRunDirAt(root: string): Promise<RunDirBase> {
-  // Non-recursive so two runs in the same second fail loudly instead of sharing a directory.
-  await mkdir(root);
-  await mkdir(path.join(root, "prompts"));
-  await mkdir(path.join(root, "raw"));
-  return runDirBase(root);
 }

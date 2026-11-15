@@ -16,8 +16,6 @@ export interface Progress {
   end(): void;
 }
 
-const silent: Progress = { log() {}, warn() {}, logTable() {}, end() {} };
-
 /**
  * Progress on stdout. In a terminal: clack lines with a spinner showing the latest agent
  * activity, and paths under `cwd` shortened. Otherwise plain lines, one per event. `--verbose`
@@ -116,3 +114,5 @@ export function createProgress(options: {
     },
   };
 }
+
+const silent: Progress = { log() {}, warn() {}, logTable() {}, end() {} };

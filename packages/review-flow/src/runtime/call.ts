@@ -6,16 +6,6 @@ import { computeCostUsd } from "./prices.ts";
 import { callStatus, type CallRecord } from "./records.ts";
 import type { RunDirBase } from "./run-dir.ts";
 
-export interface TaskActivity {
-  taskId: string;
-  /** Since the task started. */
-  elapsedMs: number;
-  /** A tool call or heartbeat; on the last event, the outcome, such as `done: ok, $0.06`. */
-  text: string;
-  /** The task has ended. */
-  done: boolean;
-}
-
 /** What `runAgentCall` needs: where records go, and how to report progress. */
 export interface CallScope {
   runDir: RunDirBase;
@@ -32,14 +22,14 @@ export interface CallScope {
   afterCall?: (call: CallRecord) => Promise<void>;
 }
 
-const HEARTBEAT_INTERVAL_MS = 15_000;
-const QUIET_THRESHOLD_MS = 30_000;
-
-/** `in 1,200 · cache read 30,000 · cache write 0 · out 800`. */
-function describeUsage(usage: TokenUsage | null): string {
-  if (usage === null) return "tokens: not reported";
-  const n = (count: number) => count.toLocaleString("en-US");
-  return `tokens: in ${n(usage.input)} · cache read ${n(usage.cacheRead)} · cache write ${n(usage.cacheWrite)} · out ${n(usage.output)}`;
+export interface TaskActivity {
+  taskId: string;
+  /** Since the task started. */
+  elapsedMs: number;
+  /** A tool call or heartbeat; on the last event, the outcome, such as `done: ok, $0.06`. */
+  text: string;
+  /** The task has ended. */
+  done: boolean;
 }
 
 /**
@@ -121,4 +111,15 @@ export async function runAgentCall<T>(
   await appendFile(scope.runDir.callsPath, `${JSON.stringify(call)}\n`);
   await scope.afterCall?.(call);
   return { ...result, call };
+}
+
+const QUIET_THRESHOLD_MS = 30_000;
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+/** `in 1,200 · cache read 30,000 · cache write 0 · out 800`. */
+function describeUsage(usage: TokenUsage | null): string {
+  if (usage === null) return "tokens: not reported";
+  const n = (count: number) => count.toLocaleString("en-US");
+  return `tokens: in ${n(usage.input)} · cache read ${n(usage.cacheRead)} · cache write ${n(usage.cacheWrite)} · out ${n(usage.output)}`;
 }

@@ -3,9 +3,11 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { HARNESSES, type Harness } from "./models.ts";
 
-/** Only the keys implemented so far; other keys in the file are kept on write. */
-export interface UserConfig {
-  harness?: Harness;
+/** Sets `harness` in the user config, creating the file if needed. */
+export async function saveUserHarness(harness: Harness, file = userConfigPath()): Promise<void> {
+  const raw = await readRaw(file);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify({ ...raw, harness }, null, 2)}\n`);
 }
 
 export function userConfigPath(): string {
@@ -33,6 +35,11 @@ async function readRaw(file: string): Promise<Record<string, unknown>> {
   return raw as Record<string, unknown>;
 }
 
+/** Only the keys implemented so far; other keys in the file are kept on write. */
+export interface UserConfig {
+  harness?: Harness;
+}
+
 export async function readUserConfig(file = userConfigPath()): Promise<UserConfig> {
   const { harness } = await readRaw(file);
   if (harness === undefined) return {};
@@ -40,11 +47,4 @@ export async function readUserConfig(file = userConfigPath()): Promise<UserConfi
     throw new Error(`${file}: harness must be one of ${HARNESSES.join(", ")}.`);
   }
   return { harness: harness as Harness };
-}
-
-/** Sets `harness` in the user config, creating the file if needed. */
-export async function saveUserHarness(harness: Harness, file = userConfigPath()): Promise<void> {
-  const raw = await readRaw(file);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify({ ...raw, harness }, null, 2)}\n`);
 }

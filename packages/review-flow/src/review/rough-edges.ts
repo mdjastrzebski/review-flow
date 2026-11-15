@@ -8,25 +8,30 @@ import type {
   RoughEdgeChecks,
 } from "./schemas.ts";
 
-export const ROUGH_EDGE_CHECKER_TASK_ID = "verifier-rough-edges";
+/**
+ * Rough edges the checker did not rule out, highest final priority first; ties and runs without
+ * priority keep reviewer order.
+ */
+export function keptRoughEdges(edges: readonly CheckedRoughEdge[]): CheckedRoughEdge[] {
+  return edges
+    .filter((edge) => edge.check.status !== "inaccurate")
+    .sort((a, b) => priorityRank(a) - priorityRank(b));
+}
+
+function priorityRank(edge: CheckedRoughEdge): number {
+  const priority = finalPriority(edge);
+  return priority === null ? PRIORITY_ORDER.length : PRIORITY_ORDER.indexOf(priority);
+}
 
 /**
- * Each rough edge as the reviewer wrote it, for a prompt; shared by the checker and eval judge.
- * The suggestion is included: judging whether the observation holds can't be done without it.
- * Fenced, since it is agent text.
+ * The final (checker's) priority. Runs saved before priority existed have none; they read as
+ * null, since `rough-edges.json` is read back without validation.
  */
-export function describeRoughEdges(edges: readonly NormalizedRoughEdge[]): string {
-  return edges
-    .map((edge) =>
-      [
-        `### ${edge.id}: ${edge.title}`,
-        `Location: \`${formatLocation(edge)}\` · lens: ${edge.lens} · reviewer priority: ${edge.priority}`,
-        `Observation:\n\n${codeFence(edge.observation)}`,
-        `Suggestion:\n\n${codeFence(edge.suggestion)}`,
-      ].join("\n\n"),
-    )
-    .join("\n\n");
+export function finalPriority(edge: CheckedRoughEdge): Priority | null {
+  return (edge.check as Partial<RoughEdgeCheck>).priority ?? null;
 }
+
+const PRIORITY_ORDER: readonly Priority[] = ["high", "medium", "low"];
 
 /**
  * Pairs each rough edge with its check. The checker answers by id; an edge it skipped or answered
@@ -60,27 +65,22 @@ export function applyChecks(
   });
 }
 
-const PRIORITY_ORDER: readonly Priority[] = ["high", "medium", "low"];
-
 /**
- * The final (checker's) priority. Runs saved before priority existed have none; they read as
- * null, since `rough-edges.json` is read back without validation.
+ * Each rough edge as the reviewer wrote it, for a prompt; shared by the checker and eval judge.
+ * The suggestion is included: judging whether the observation holds can't be done without it.
+ * Fenced, since it is agent text.
  */
-export function finalPriority(edge: CheckedRoughEdge): Priority | null {
-  return (edge.check as Partial<RoughEdgeCheck>).priority ?? null;
-}
-
-function priorityRank(edge: CheckedRoughEdge): number {
-  const priority = finalPriority(edge);
-  return priority === null ? PRIORITY_ORDER.length : PRIORITY_ORDER.indexOf(priority);
-}
-
-/**
- * Rough edges the checker did not rule out, highest final priority first; ties and runs without
- * priority keep reviewer order.
- */
-export function keptRoughEdges(edges: readonly CheckedRoughEdge[]): CheckedRoughEdge[] {
+export function describeRoughEdges(edges: readonly NormalizedRoughEdge[]): string {
   return edges
-    .filter((edge) => edge.check.status !== "inaccurate")
-    .sort((a, b) => priorityRank(a) - priorityRank(b));
+    .map((edge) =>
+      [
+        `### ${edge.id}: ${edge.title}`,
+        `Location: \`${formatLocation(edge)}\` · lens: ${edge.lens} · reviewer priority: ${edge.priority}`,
+        `Observation:\n\n${codeFence(edge.observation)}`,
+        `Suggestion:\n\n${codeFence(edge.suggestion)}`,
+      ].join("\n\n"),
+    )
+    .join("\n\n");
 }
+
+export const ROUGH_EDGE_CHECKER_TASK_ID = "verifier-rough-edges";

@@ -7,53 +7,9 @@ import { Verdict, type NormalizedFinding } from "../schemas.ts";
 import { buildVerifierPrompt, verifierTaskId } from "../verify.ts";
 import { runRole, type ReviewScope } from "./scope.ts";
 
-export const VERIFIER_CONCURRENCY = 3;
-
-/**
- * Stand-in verdict for a verifier that produced no valid output, so every finding still has a
- * verdict. Inconclusive is the honest state: nobody checked the claim.
- */
-export function failedVerdict(
-  finding: NormalizedFinding,
-  failure: { reason: AgentFailureReason; error: string },
-): Verdict {
-  return {
-    verdict: "inconclusive",
-    // Unverified, so the reviewer's own severity is all there is to rank by.
-    severity: finding.severity,
-    confidence: "low",
-    fixCost: "small",
-    evidence: [],
-    summary: `Verification failed (${failure.reason}): ${failure.error}`,
-    fix: {
-      assessment: "not_applicable",
-      detail: "Not assessed; verification failed.",
-      betterFix: null,
-    },
-  };
-}
-
 export interface VerifyInput {
   scope: ReviewScope;
   findings: readonly NormalizedFinding[];
-}
-
-/** One fresh verifier session. An agent failure becomes an inconclusive verdict. */
-async function verifier(
-  input: { scope: ReviewScope; finding: NormalizedFinding },
-  ctx: FlowContext,
-): Promise<Verdict> {
-  const { scope, finding } = input;
-  const result = await runRole(ctx, scope, "verifier", {
-    taskId: verifierTaskId(finding),
-    prompt: buildVerifierPrompt(finding, scope.change),
-    schema: Verdict,
-  });
-  if (result.status === "failure") {
-    ctx.warn(`${finding.id}: verifier failed (${result.reason}); marked inconclusive.`);
-    return failedVerdict(finding, result);
-  }
-  return applyVerdictRules(result.output);
 }
 
 /**
@@ -87,3 +43,47 @@ export async function verify(
   }
   return result;
 }
+
+/** One fresh verifier session. An agent failure becomes an inconclusive verdict. */
+async function verifier(
+  input: { scope: ReviewScope; finding: NormalizedFinding },
+  ctx: FlowContext,
+): Promise<Verdict> {
+  const { scope, finding } = input;
+  const result = await runRole(ctx, scope, "verifier", {
+    taskId: verifierTaskId(finding),
+    prompt: buildVerifierPrompt(finding, scope.change),
+    schema: Verdict,
+  });
+  if (result.status === "failure") {
+    ctx.warn(`${finding.id}: verifier failed (${result.reason}); marked inconclusive.`);
+    return failedVerdict(finding, result);
+  }
+  return applyVerdictRules(result.output);
+}
+
+/**
+ * Stand-in verdict for a verifier that produced no valid output, so every finding still has a
+ * verdict. Inconclusive is the honest state: nobody checked the claim.
+ */
+export function failedVerdict(
+  finding: NormalizedFinding,
+  failure: { reason: AgentFailureReason; error: string },
+): Verdict {
+  return {
+    verdict: "inconclusive",
+    // Unverified, so the reviewer's own severity is all there is to rank by.
+    severity: finding.severity,
+    confidence: "low",
+    fixCost: "small",
+    evidence: [],
+    summary: `Verification failed (${failure.reason}): ${failure.error}`,
+    fix: {
+      assessment: "not_applicable",
+      detail: "Not assessed; verification failed.",
+      betterFix: null,
+    },
+  };
+}
+
+export const VERIFIER_CONCURRENCY = 3;

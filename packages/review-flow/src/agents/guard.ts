@@ -2,60 +2,10 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
-
-/** `claude --json-schema` delivers the result through this internal tool; it has no side effects. */
-export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
-
-const GUARD_ALLOWED_TOOLS = new Set([...READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL]);
-
-/** Tool-input keys that carry a filesystem path, across Read/Grep/Glob. */
-const PATH_KEYS = ["file_path", "path"];
-
-/** Tool-input keys that carry a glob, which resolves against `path` and can escape it. */
-const GLOB_KEYS: Record<string, string> = { Glob: "pattern", Grep: "glob" };
-
 /** The part of a `PreToolUse` hook input the guard looks at. */
 export interface ToolCall {
   tool_name: string;
   tool_input?: unknown;
-}
-
-/** Resolves symlinks; for a path that doesn't exist, resolves its nearest existing ancestor. */
-async function realpathOfNearest(target: string): Promise<string> {
-  let existing = target;
-  for (;;) {
-    try {
-      return path.join(await realpath(existing), path.relative(existing, target));
-    } catch {
-      const parent = path.dirname(existing);
-      if (parent === existing) return target;
-      existing = parent;
-    }
-  }
-}
-
-/** Claude Code expands a leading `~` in tool paths, so `~/x` means the home directory. */
-function expandHome(candidate: string): string {
-  return candidate === "~" || /^~[\\/]/.test(candidate)
-    ? path.join(homedir(), candidate.slice(1))
-    : candidate;
-}
-
-async function isInside(realRoot: string, root: string, candidate: string): Promise<boolean> {
-  const real = await realpathOfNearest(path.resolve(root, expandHome(candidate)));
-  const relative = path.relative(realRoot, real);
-  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`);
-  return !escapes && !path.isAbsolute(relative);
-}
-
-/** Whether a path, relative to `root` or absolute, is inside `root`, following symlinks. */
-export async function isInsideRoot(root: string, candidate: string): Promise<boolean> {
-  return isInside(await realpathOfNearest(path.resolve(root)), root, candidate);
-}
-
-export function globEscapes(glob: string): boolean {
-  return path.isAbsolute(glob) || glob.startsWith("~") || glob.split(/[\\/]/).includes("..");
 }
 
 /**
@@ -80,4 +30,54 @@ export async function guardToolCall(cwd: string, call: ToolCall): Promise<string
     return `${glob} must be a relative pattern without "..".`;
   }
   return null;
+}
+
+export const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"];
+
+/** `claude --json-schema` delivers the result through this internal tool; it has no side effects. */
+export const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
+
+const GUARD_ALLOWED_TOOLS = new Set([...READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL]);
+
+/** Resolves symlinks; for a path that doesn't exist, resolves its nearest existing ancestor. */
+async function realpathOfNearest(target: string): Promise<string> {
+  let existing = target;
+  for (;;) {
+    try {
+      return path.join(await realpath(existing), path.relative(existing, target));
+    } catch {
+      const parent = path.dirname(existing);
+      if (parent === existing) return target;
+      existing = parent;
+    }
+  }
+}
+
+/** Tool-input keys that carry a filesystem path, across Read/Grep/Glob. */
+const PATH_KEYS = ["file_path", "path"];
+
+async function isInside(realRoot: string, root: string, candidate: string): Promise<boolean> {
+  const real = await realpathOfNearest(path.resolve(root, expandHome(candidate)));
+  const relative = path.relative(realRoot, real);
+  const escapes = relative === ".." || relative.startsWith(`..${path.sep}`);
+  return !escapes && !path.isAbsolute(relative);
+}
+
+/** Claude Code expands a leading `~` in tool paths, so `~/x` means the home directory. */
+function expandHome(candidate: string): string {
+  return candidate === "~" || /^~[\\/]/.test(candidate)
+    ? path.join(homedir(), candidate.slice(1))
+    : candidate;
+}
+
+/** Tool-input keys that carry a glob, which resolves against `path` and can escape it. */
+const GLOB_KEYS: Record<string, string> = { Glob: "pattern", Grep: "glob" };
+
+export function globEscapes(glob: string): boolean {
+  return path.isAbsolute(glob) || glob.startsWith("~") || glob.split(/[\\/]/).includes("..");
+}
+
+/** Whether a path, relative to `root` or absolute, is inside `root`, following symlinks. */
+export async function isInsideRoot(root: string, candidate: string): Promise<boolean> {
+  return isInside(await realpathOfNearest(path.resolve(root)), root, candidate);
 }

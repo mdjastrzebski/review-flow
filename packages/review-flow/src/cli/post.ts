@@ -24,16 +24,6 @@ import { confirm, interactive, note, pick, type Choice } from "./prompt.ts";
 
 type Paint = (style: Parameters<typeof styleText>[0], text: string) => string;
 
-/** Short classification after the id, such as `high confirmed`, and an optional note. */
-function itemLabel(item: PostableItem): { tag: string; hint: string | null } {
-  return item.kind === "finding"
-    ? { tag: `${item.verdict.severity} ${item.verdict.verdict}`, hint: null }
-    : { tag: `${item.edge.lens} rough edge`, hint: "not a defect" };
-}
-
-/** The picker entry for the run's summary; finding ids look like `F-001`. */
-const SUMMARY = "summary";
-
 /**
  * Posts the summary and selected findings of a PR run as one COMMENT review: select, check the
  * PR head, preview, confirm, send. Needs a TTY; nothing is posted without an explicit yes.
@@ -148,3 +138,13 @@ export async function postRun(runRoot: string, options: { color: boolean }): Pro
     note.warn("Couldn't read back the inline comments; their ids aren't in posted.json.");
   }
 }
+
+/** Short classification after the id, such as `high confirmed`, and an optional note. */
+function itemLabel(item: PostableItem): { tag: string; hint: string | null } {
+  return item.kind === "finding"
+    ? { tag: `${item.verdict.severity} ${item.verdict.verdict}`, hint: null }
+    : { tag: `${item.edge.lens} rough edge`, hint: "not a defect" };
+}
+
+/** The picker entry for the run's summary; finding ids look like `F-001`. */
+const SUMMARY = "summary";

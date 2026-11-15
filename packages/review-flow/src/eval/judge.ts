@@ -7,21 +7,6 @@ import { codeFence } from "../runtime/prompts.ts";
 import { renderPrompt } from "../review/prompts.ts";
 import type { NormalizedFinding } from "../review/schemas.ts";
 
-const JUDGE_TIMEOUT_MS = 5 * 60_000;
-/** Keeps a long rationale from dominating the prompt; the claim says what the finding asserts. */
-const MAX_RATIONALE_CHARS = 1200;
-
-export const JudgeOutput = z.strictObject({
-  bugs: z.array(
-    z.strictObject({
-      /** Position in the case's `bugs`, from 0. */
-      bug: z.int().nonnegative(),
-      matches: z.array(z.strictObject({ finding: z.string(), reason: z.string() })),
-    }),
-  ),
-});
-export type JudgeOutput = z.infer<typeof JudgeOutput>;
-
 export type JudgeResult =
   | {
       status: "ok";
@@ -33,64 +18,17 @@ export type JudgeResult =
     }
   | { status: "failed"; error: string; costUsd: number | null; durationMs: number };
 
-function describeBugs(bugs: EvalCase["bugs"], fixDiffs: readonly (string | null)[]): string {
-  return bugs
-    .map((bug, index) => {
-      const where = bug.locations.map((l) => `${l.file}:${l.start}-${l.end}`).join(", ");
-      const head = `${index}. ${bug.description}\n   Where: ${where}\n   Fix: ${bug.fix}`;
-      const diff = fixDiffs[index];
-      if (diff === null || diff === undefined) return head;
-      const shown =
-        diff.length > MAX_FIX_DIFF_CHARS
-          ? `${diff.slice(0, MAX_FIX_DIFF_CHARS)}\n… [truncated]`
-          : diff;
-      return `${head}\n   What the fix changed (the defect is the flaw it removes or corrects):\n\n${codeFence(shown, "diff")}`;
-    })
-    .join("\n\n");
-}
+export const JudgeOutput = z.strictObject({
+  bugs: z.array(
+    z.strictObject({
+      /** Position in the case's `bugs`, from 0. */
+      bug: z.int().nonnegative(),
+      matches: z.array(z.strictObject({ finding: z.string(), reason: z.string() })),
+    }),
+  ),
+});
 
-function describeFindings(findings: readonly NormalizedFinding[]): string {
-  const items = findings.map((f) => ({
-    id: f.id,
-    location: `${f.file}:${f.lineStart}-${f.lineEnd}`,
-    title: f.title,
-    claim: f.claim,
-    rationale:
-      f.rationale.length > MAX_RATIONALE_CHARS
-        ? `${f.rationale.slice(0, MAX_RATIONALE_CHARS)}…`
-        : f.rationale,
-  }));
-  return codeFence(JSON.stringify(items, null, 2), "json");
-}
-
-export function buildJudgePrompt(
-  evalCase: Pick<EvalCase, "title" | "bugs">,
-  findings: readonly NormalizedFinding[],
-  fixDiffs: readonly (string | null)[] = [],
-): string {
-  return renderPrompt("judge", {
-    case: evalCase.title,
-    bugs: describeBugs(evalCase.bugs, fixDiffs),
-    findings: describeFindings(findings),
-  });
-}
-
-/** Unknown bug indexes and finding ids are dropped: the judge can only match what exists. */
-export function matchesOf(
-  output: JudgeOutput,
-  bugCount: number,
-  findings: readonly NormalizedFinding[],
-): Map<number, Set<string>> {
-  const known = new Set(findings.map((f) => f.id));
-  const matches = new Map<number, Set<string>>();
-  for (const entry of output.bugs) {
-    if (entry.bug >= bugCount) continue;
-    const ids = matches.get(entry.bug) ?? new Set<string>();
-    for (const match of entry.matches) if (known.has(match.finding)) ids.add(match.finding);
-    matches.set(entry.bug, ids);
-  }
-  return matches;
-}
+export type JudgeOutput = z.infer<typeof JudgeOutput>;
 
 /**
  * Asks the judge which findings describe each known bug of a case. It reads `diff.patch` in
@@ -146,4 +84,68 @@ export async function judgeCase(options: {
     costUsd: result.costUsd,
     durationMs: result.durationMs,
   };
+}
+
+export function buildJudgePrompt(
+  evalCase: Pick<EvalCase, "title" | "bugs">,
+  findings: readonly NormalizedFinding[],
+  fixDiffs: readonly (string | null)[] = [],
+): string {
+  return renderPrompt("judge", {
+    case: evalCase.title,
+    bugs: describeBugs(evalCase.bugs, fixDiffs),
+    findings: describeFindings(findings),
+  });
+}
+
+function describeBugs(bugs: EvalCase["bugs"], fixDiffs: readonly (string | null)[]): string {
+  return bugs
+    .map((bug, index) => {
+      const where = bug.locations.map((l) => `${l.file}:${l.start}-${l.end}`).join(", ");
+      const head = `${index}. ${bug.description}\n   Where: ${where}\n   Fix: ${bug.fix}`;
+      const diff = fixDiffs[index];
+      if (diff === null || diff === undefined) return head;
+      const shown =
+        diff.length > MAX_FIX_DIFF_CHARS
+          ? `${diff.slice(0, MAX_FIX_DIFF_CHARS)}\n… [truncated]`
+          : diff;
+      return `${head}\n   What the fix changed (the defect is the flaw it removes or corrects):\n\n${codeFence(shown, "diff")}`;
+    })
+    .join("\n\n");
+}
+
+function describeFindings(findings: readonly NormalizedFinding[]): string {
+  const items = findings.map((f) => ({
+    id: f.id,
+    location: `${f.file}:${f.lineStart}-${f.lineEnd}`,
+    title: f.title,
+    claim: f.claim,
+    rationale:
+      f.rationale.length > MAX_RATIONALE_CHARS
+        ? `${f.rationale.slice(0, MAX_RATIONALE_CHARS)}…`
+        : f.rationale,
+  }));
+  return codeFence(JSON.stringify(items, null, 2), "json");
+}
+
+/** Keeps a long rationale from dominating the prompt; the claim says what the finding asserts. */
+const MAX_RATIONALE_CHARS = 1200;
+
+const JUDGE_TIMEOUT_MS = 5 * 60_000;
+
+/** Unknown bug indexes and finding ids are dropped: the judge can only match what exists. */
+export function matchesOf(
+  output: JudgeOutput,
+  bugCount: number,
+  findings: readonly NormalizedFinding[],
+): Map<number, Set<string>> {
+  const known = new Set(findings.map((f) => f.id));
+  const matches = new Map<number, Set<string>>();
+  for (const entry of output.bugs) {
+    if (entry.bug >= bugCount) continue;
+    const ids = matches.get(entry.bug) ?? new Set<string>();
+    for (const match of entry.matches) if (known.has(match.finding)) ids.add(match.finding);
+    matches.set(entry.bug, ids);
+  }
+  return matches;
 }

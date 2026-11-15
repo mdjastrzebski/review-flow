@@ -14,13 +14,28 @@ import { runDirPaths } from "../review/run-dir.ts";
 import type { CheckedRoughEdge } from "../review/schemas.ts";
 import { buildChangeContext, changeRangeOf, type ChangeRange } from "../review/verify.ts";
 
-const PAIRWISE_TIMEOUT_MS = 10 * 60_000;
+export interface PairwiseOptions {
+  a: { root: string; cases: readonly CaseResult[] };
+  b: { root: string; cases: readonly CaseResult[] };
+  /** The dataset's cases, for each case's repo and commits. */
+  dataset: readonly EvalCase[];
+  checkoutsDir: string;
+  model: ModelChoice;
+  runAgent: RunAgent;
+  log: (message: string) => void;
+  warn?: (message: string) => void;
+  random?: () => number;
+}
 
-export const PairwiseOutput = z.strictObject({
-  reason: z.string(),
-  preferred: z.enum(["1", "2", "tie"]),
-});
-export type PairwiseOutput = z.infer<typeof PairwiseOutput>;
+/** pairwise-<B's id>.json in eval A's run dir. */
+export interface PairwiseRecord {
+  judgedAt: string;
+  a: string;
+  b: string;
+  judge: ModelChoice;
+  cases: PairwiseCase[];
+  scores: PairwiseScores;
+}
 
 /** One case judged pairwise; `winner` is null when the judge failed. */
 export interface PairwiseCase {
@@ -47,110 +62,6 @@ export interface PairwiseScores {
   bWinRate: number | null;
   /** Sum of the judge calls; null when none has a cost. */
   costUsd: number | null;
-}
-
-/** pairwise-<B's id>.json in eval A's run dir. */
-export interface PairwiseRecord {
-  judgedAt: string;
-  a: string;
-  b: string;
-  judge: ModelChoice;
-  cases: PairwiseCase[];
-  scores: PairwiseScores;
-}
-
-const emptySet = "(no rough edges)";
-const describeSet = (edges: readonly CheckedRoughEdge[]) =>
-  edges.length === 0 ? emptySet : describeRoughEdges(edges);
-
-/**
- * Asks which of two sets of rough edges the judge would rather post, blind: the sets are shown in
- * a random order, under neutral names. Two empty sets are a tie without a call.
- */
-export async function judgePair(options: {
-  caseId: string;
-  a: readonly CheckedRoughEdge[];
-  b: readonly CheckedRoughEdge[];
-  change: ChangeRange;
-  diff: string;
-  cwd: string;
-  model: ModelChoice;
-  runAgent: RunAgent;
-  random?: () => number;
-}): Promise<PairwiseCase> {
-  const { a, b } = options;
-  const aFirst = (options.random ?? Math.random)() < 0.5;
-  const base = { id: options.caseId, aFirst, kept: { a: a.length, b: b.length } };
-  if (a.length === 0 && b.length === 0) {
-    return {
-      ...base,
-      winner: "tie",
-      reason: "Both sets are empty.",
-      error: null,
-      costUsd: 0,
-      durationMs: 0,
-    };
-  }
-  const [first, second] = aFirst ? [a, b] : [b, a];
-  const result = await options.runAgent({
-    taskId: `judge-pairwise-${options.caseId}`,
-    role: "judge",
-    prompt: renderPrompt("rough-edge-pairwise", {
-      ...options.change,
-      set1: describeSet(first),
-      set2: describeSet(second),
-    }),
-    sharedContext: buildChangeContext(options.change, options.diff),
-    cwd: options.cwd,
-    schema: PairwiseOutput,
-    model: options.model.model,
-    effort: options.model.effort,
-    timeoutMs: PAIRWISE_TIMEOUT_MS,
-    onProgress: () => {},
-  });
-  const call = { costUsd: result.costUsd, durationMs: result.durationMs };
-  if (result.status === "failure") {
-    return { ...base, ...call, winner: null, reason: null, error: result.error };
-  }
-  const { preferred, reason } = result.output;
-  const winner = preferred === "tie" ? "tie" : (preferred === "1") === aFirst ? "a" : "b";
-  return { ...base, ...call, winner, reason, error: null };
-}
-
-export function summarizePairwise(cases: readonly PairwiseCase[]): PairwiseScores {
-  const judged = cases.filter((c) => c.winner !== null);
-  const count = (winner: PairwiseCase["winner"]) =>
-    judged.filter((c) => c.winner === winner).length;
-  const [aWins, bWins, ties] = [count("a"), count("b"), count("tie")];
-  const costs = cases.flatMap((c) => (c.costUsd === null ? [] : [c.costUsd]));
-  return {
-    cases: judged.length,
-    failed: cases.length - judged.length,
-    aWins,
-    bWins,
-    ties,
-    bWinRate: judged.length === 0 ? null : (bWins + ties / 2) / judged.length,
-    costUsd: costs.length === 0 ? null : costs.reduce((x, y) => x + y, 0),
-  };
-}
-
-/** Rough edges a case kept, from its run dir; null when it has none saved. */
-async function keptOf(caseRoot: string): Promise<CheckedRoughEdge[] | null> {
-  const edges = await readJsonOrNull<CheckedRoughEdge[]>(runDirPaths(caseRoot).roughEdgesPath);
-  return edges === null ? null : keptRoughEdges(edges);
-}
-
-export interface PairwiseOptions {
-  a: { root: string; cases: readonly CaseResult[] };
-  b: { root: string; cases: readonly CaseResult[] };
-  /** The dataset's cases, for each case's repo and commits. */
-  dataset: readonly EvalCase[];
-  checkoutsDir: string;
-  model: ModelChoice;
-  runAgent: RunAgent;
-  log: (message: string) => void;
-  warn?: (message: string) => void;
-  random?: () => number;
 }
 
 /**
@@ -230,4 +141,95 @@ export async function pairwiseEvals(options: PairwiseOptions): Promise<PairwiseR
     record,
   );
   return record;
+}
+
+/** Rough edges a case kept, from its run dir; null when it has none saved. */
+async function keptOf(caseRoot: string): Promise<CheckedRoughEdge[] | null> {
+  const edges = await readJsonOrNull<CheckedRoughEdge[]>(runDirPaths(caseRoot).roughEdgesPath);
+  return edges === null ? null : keptRoughEdges(edges);
+}
+
+/**
+ * Asks which of two sets of rough edges the judge would rather post, blind: the sets are shown in
+ * a random order, under neutral names. Two empty sets are a tie without a call.
+ */
+export async function judgePair(options: {
+  caseId: string;
+  a: readonly CheckedRoughEdge[];
+  b: readonly CheckedRoughEdge[];
+  change: ChangeRange;
+  diff: string;
+  cwd: string;
+  model: ModelChoice;
+  runAgent: RunAgent;
+  random?: () => number;
+}): Promise<PairwiseCase> {
+  const { a, b } = options;
+  const aFirst = (options.random ?? Math.random)() < 0.5;
+  const base = { id: options.caseId, aFirst, kept: { a: a.length, b: b.length } };
+  if (a.length === 0 && b.length === 0) {
+    return {
+      ...base,
+      winner: "tie",
+      reason: "Both sets are empty.",
+      error: null,
+      costUsd: 0,
+      durationMs: 0,
+    };
+  }
+  const [first, second] = aFirst ? [a, b] : [b, a];
+  const result = await options.runAgent({
+    taskId: `judge-pairwise-${options.caseId}`,
+    role: "judge",
+    prompt: renderPrompt("rough-edge-pairwise", {
+      ...options.change,
+      set1: describeSet(first),
+      set2: describeSet(second),
+    }),
+    sharedContext: buildChangeContext(options.change, options.diff),
+    cwd: options.cwd,
+    schema: PairwiseOutput,
+    model: options.model.model,
+    effort: options.model.effort,
+    timeoutMs: PAIRWISE_TIMEOUT_MS,
+    onProgress: () => {},
+  });
+  const call = { costUsd: result.costUsd, durationMs: result.durationMs };
+  if (result.status === "failure") {
+    return { ...base, ...call, winner: null, reason: null, error: result.error };
+  }
+  const { preferred, reason } = result.output;
+  const winner = preferred === "tie" ? "tie" : (preferred === "1") === aFirst ? "a" : "b";
+  return { ...base, ...call, winner, reason, error: null };
+}
+
+const describeSet = (edges: readonly CheckedRoughEdge[]) =>
+  edges.length === 0 ? emptySet : describeRoughEdges(edges);
+
+const emptySet = "(no rough edges)";
+
+export const PairwiseOutput = z.strictObject({
+  reason: z.string(),
+  preferred: z.enum(["1", "2", "tie"]),
+});
+
+export type PairwiseOutput = z.infer<typeof PairwiseOutput>;
+
+const PAIRWISE_TIMEOUT_MS = 10 * 60_000;
+
+export function summarizePairwise(cases: readonly PairwiseCase[]): PairwiseScores {
+  const judged = cases.filter((c) => c.winner !== null);
+  const count = (winner: PairwiseCase["winner"]) =>
+    judged.filter((c) => c.winner === winner).length;
+  const [aWins, bWins, ties] = [count("a"), count("b"), count("tie")];
+  const costs = cases.flatMap((c) => (c.costUsd === null ? [] : [c.costUsd]));
+  return {
+    cases: judged.length,
+    failed: cases.length - judged.length,
+    aWins,
+    bWins,
+    ties,
+    bWinRate: judged.length === 0 ? null : (bWins + ties / 2) / judged.length,
+    costUsd: costs.length === 0 ? null : costs.reduce((x, y) => x + y, 0),
+  };
 }

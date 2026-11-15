@@ -45,35 +45,6 @@ import {
   type JudgeCall,
 } from "./score.ts";
 
-export interface EvalRunOptions {
-  /** Any directory inside the repository the eval run is saved in. */
-  cwd: string;
-  cases: readonly EvalCase[];
-  /** Recorded in run.json. */
-  dataset: string;
-  subset?: EvalSubset | undefined;
-  /** Run Summarize on each case (default: true). */
-  summarize?: boolean;
-  /** Ask for rough edges and score them apart from findings (default: false). */
-  roughEdges?: boolean;
-  /** One clone per case repo, reused across evals. */
-  checkoutsDir: string;
-  /** Model of the judge that matches findings to known bugs; absent: match by location alone. */
-  judge?: ModelChoice | undefined;
-  /** Where fix diffs are cached; the judge reads each bug's fix diff. Absent: description only. */
-  fixesDir?: string | undefined;
-  /** Grades rough edges with the rubric, with `roughEdges` on; absent: not graded. */
-  edgeJudge?: EdgeJudge | undefined;
-  harness: Harness;
-  models: RoleModels;
-  runAgent: RunAgent;
-  log: (message: string) => void;
-  warn?: (message: string) => void;
-  logTable?: ReviewRunOptions["logTable"];
-  onActivity?: (activity: TaskActivity) => void;
-  verbose?: boolean;
-}
-
 /** run.json of an eval run; its flow tree has a `case:<id>` node per case. */
 export interface EvalRunRecord extends RunRecordBase {
   kind: "eval";
@@ -88,10 +59,93 @@ export interface EvalRunRecord extends RunRecordBase {
   scores: EvalScores;
 }
 
+export interface RescoreOptions {
+  /** The eval run dir to score again. */
+  root: string;
+  /** Its cases, from the dataset. */
+  cases: readonly EvalCase[];
+  judge: ModelChoice;
+  /** Where fix diffs are cached; absent: the judge gets the bug's description only. */
+  fixesDir?: string | undefined;
+  runAgent: RunAgent;
+  log: (message: string) => void;
+  warn?: (message: string) => void;
+}
+
 export interface EvalRunResult {
   root: string;
   cases: CaseResult[];
   scores: EvalScores;
+}
+
+/** rescore.json of an eval run. */
+export interface RescoreRecord {
+  rescoredAt: string;
+  judge: ModelChoice;
+  cases: CaseResult[];
+  scores: EvalScores;
+}
+
+/**
+ * Scores a finished eval again with the judge, from the findings and verdicts its case run dirs
+ * kept; no checkout, reviewer, or verifier runs. The eval's own files stay as they were, and the
+ * result goes in `rescore.json` beside them.
+ */
+export async function rescoreEval(options: RescoreOptions): Promise<EvalRunResult> {
+  const paths = evalRunPaths(options.root);
+  const previous = (await readJsonOrNull<CaseResult[]>(paths.casesPath)) ?? [];
+  const dataset = new Map(options.cases.map((c) => [c.id, c]));
+  const results: CaseResult[] = [...previous];
+
+  const rescoreOne = async (old: CaseResult, index: number): Promise<void> => {
+    const evalCase = dataset.get(old.id);
+    if (old.status !== "ok" || evalCase === undefined || evalCase.bugs.length === 0) return;
+    const caseRoot = paths.caseRoot(old.id);
+    const caseRun = runDirPaths(caseRoot);
+    const findings = await readJsonOrNull<NormalizedFinding[]>(caseRun.findingsPath);
+    const verdicts = await readJsonOrNull<Record<string, Verdict>>(caseRun.verdictsPath);
+    if (findings === null || verdicts === null) {
+      options.warn?.(`${old.id}: no findings or verdicts saved; kept its score.`);
+      return;
+    }
+    const judged = await judgeBugsOf(
+      evalCase,
+      findings,
+      verdicts,
+      caseRoot,
+      options.judge,
+      options.runAgent,
+      options.fixesDir,
+    );
+    if (judged.call.status === "failed") {
+      options.warn?.(
+        `${old.id}: the judge failed (${judged.call.error ?? "no result"}); kept its score.`,
+      );
+    }
+    results[index] = { ...old, bugs: judged.bugs ?? old.bugs, judge: judged.call };
+    options.log(`  ${old.id}: ${caseOutcome(old)} → ${caseOutcome(results[index])}`);
+  };
+
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(RESCORE_CONCURRENCY, previous.length) }, async () => {
+      while (next < previous.length) {
+        const index = next++;
+        const old = previous[index];
+        if (old !== undefined) await rescoreOne(old, index);
+      }
+    }),
+  );
+
+  const scores = summarizeCases(results);
+  const record: RescoreRecord = {
+    rescoredAt: new Date().toISOString(),
+    judge: options.judge,
+    cases: results,
+    scores,
+  };
+  await writeJson(path.join(options.root, "rescore.json"), record);
+  return { root: options.root, cases: results, scores };
 }
 
 export function evalRunPaths(root: string) {
@@ -101,34 +155,6 @@ export function evalRunPaths(root: string) {
     caseRoot: (id: string) => path.join(root, "cases", id),
   };
 }
-
-/** `found`, `refuted` (only refuted findings hit the bug), `missed`, `N findings`, or `failed`. */
-export function caseOutcome(result: CaseResult): string {
-  if (result.status === "failed" || result.bugs === null) return "failed";
-  if (result.kind === "clean")
-    return `${result.reported} finding${result.reported === 1 ? "" : "s"}`;
-  if (result.bugs.every((b) => b.found)) return "found";
-  if (result.bugs.some((b) => b.found)) {
-    return `found ${result.bugs.filter((b) => b.found).length}/${result.bugs.length}`;
-  }
-  return result.bugs.some((b) => b.foundByReviewer) ? "refuted" : "missed";
-}
-
-/** Outcome, rough edges when on, cost, and time; plus the error of a failed case. */
-export function describeCase(result: CaseResult): string {
-  const parts = [caseOutcome(result)];
-  const edges = roughEdgeOutcome(result);
-  if (edges !== null) parts.push(`rough edges ${edges}`);
-  if (result.costUsd !== null) {
-    parts.push(`${result.unknownCostCalls > 0 ? "≥" : ""}${formatCost(result.costUsd)}`);
-  }
-  parts.push(formatDuration(result.durationMs));
-  const text = parts.join(", ");
-  return result.error === null ? text : `${text}: ${result.error.split("\n")[0]}`;
-}
-
-/** Cases are merged PRs of public repos: third-party code, but reviewed by its maintainers. */
-const EVAL_CASE_TRUST: Trust = { level: "collaborator", reason: "eval case, a merged PR" };
 
 /** The judge's scoring of a case: the bugs it decided, or none when the judge failed. */
 async function judgeBugsOf(
@@ -159,22 +185,156 @@ async function judgeBugsOf(
   return { bugs: judgeBugs(evalCase.bugs, findings, verdicts, result.matches), call };
 }
 
+/** `found`, `refuted` (only refuted findings hit the bug), `missed`, `N findings`, or `failed`. */
+export function caseOutcome(result: CaseResult): string {
+  if (result.status === "failed" || result.bugs === null) return "failed";
+  if (result.kind === "clean")
+    return `${result.reported} finding${result.reported === 1 ? "" : "s"}`;
+  if (result.bugs.every((b) => b.found)) return "found";
+  if (result.bugs.some((b) => b.found)) {
+    return `found ${result.bugs.filter((b) => b.found).length}/${result.bugs.length}`;
+  }
+  return result.bugs.some((b) => b.foundByReviewer) ? "refuted" : "missed";
+}
+
+const RESCORE_CONCURRENCY = 4;
+
+export interface EvalRunOptions {
+  /** Any directory inside the repository the eval run is saved in. */
+  cwd: string;
+  cases: readonly EvalCase[];
+  /** Recorded in run.json. */
+  dataset: string;
+  subset?: EvalSubset | undefined;
+  /** Run Summarize on each case (default: true). */
+  summarize?: boolean;
+  /** Ask for rough edges and score them apart from findings (default: false). */
+  roughEdges?: boolean;
+  /** One clone per case repo, reused across evals. */
+  checkoutsDir: string;
+  /** Model of the judge that matches findings to known bugs; absent: match by location alone. */
+  judge?: ModelChoice | undefined;
+  /** Where fix diffs are cached; the judge reads each bug's fix diff. Absent: description only. */
+  fixesDir?: string | undefined;
+  /** Grades rough edges with the rubric, with `roughEdges` on; absent: not graded. */
+  edgeJudge?: EdgeJudge | undefined;
+  harness: Harness;
+  models: RoleModels;
+  runAgent: RunAgent;
+  log: (message: string) => void;
+  warn?: (message: string) => void;
+  logTable?: ReviewRunOptions["logTable"];
+  onActivity?: (activity: TaskActivity) => void;
+  verbose?: boolean;
+}
+
 /**
- * A judge's calls, each as a detached child flow named `name` of the case: recorded in the eval's
- * calls.jsonl, prompts/, and raw/, but kept out of its totals, so evals stay comparable by the
- * review's cost alone.
+ * Reviews each case in turn and scores the findings. The eval run goes in the repo's
+ * `.review-flow/runs/<timestamp>-eval/`, with a run dir per case under `cases/`, and is indexed.
+ * cases.json is rewritten after each case, so an interrupted eval keeps what it finished.
  */
-function judgeAgent(
+export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
+  const { harness, models, log } = options;
+  const startedAt = new Date();
+  const repo = await resolveRepoRoot(options.cwd);
+  await ensureStateDir(repo);
+
+  await mkdir(runsPath(repo), { recursive: true });
+  const root = path.join(runsPath(repo), `${formatRunTimestamp(startedAt)}-eval`);
+  // prompts/ and raw/ hold the judges' calls; each case's review has its own run dir.
+  const dir = await createRunDirAt(root);
+  await mkdir(path.join(root, "cases"));
+  const setup: [string, string][] = [["Harness", harness]];
+  if (options.summarize ?? true) setup.push(["Summarizer", describeModel(models.summarizer)]);
+  setup.push(
+    ["Reviewer", describeModel(models.reviewer)],
+    ["Verifier", describeModel(models.verifier)],
+    ["Rough edges", options.roughEdges ? "on" : "off"],
+    ...(options.roughEdges && options.edgeJudge !== undefined
+      ? [
+          [
+            "Rough-edge judge",
+            `${describeModel(options.edgeJudge.model)} (${options.edgeJudge.harness})`,
+          ] as [string, string],
+        ]
+      : []),
+    ["Cases", `${options.cases.length}${options.subset ? ` (${options.subset} set)` : ""}`],
+    ["Dataset", options.dataset],
+    ["Run dir", root],
+  );
+  if (options.logTable === undefined) {
+    for (const [label, value] of setup) log(`${label}: ${value}`);
+  } else {
+    options.logTable("Eval", setup);
+  }
+
+  const results: CaseResult[] = [];
+  return startRun(
+    evaluate,
+    { options, root, results },
+    {
+      name: "eval",
+      dir,
+      runAgent: options.runAgent,
+      harness,
+      log,
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+      ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
+      ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
+      meta: {
+        kind: "eval",
+        harness,
+        models,
+        roughEdges: options.roughEdges ?? false,
+        ...(options.roughEdges && options.edgeJudge !== undefined
+          ? { edgeJudge: { harness: options.edgeJudge.harness, model: options.edgeJudge.model } }
+          : {}),
+        dataset: {
+          dir: options.dataset,
+          subset: options.subset ?? null,
+          cases: options.cases.map((c) => c.id),
+        },
+        scores: summarizeCases(results),
+      },
+      onFinish: async (record) => {
+        await appendIndexEntry(repo, {
+          id: path.basename(root),
+          kind: "eval",
+          startedAt: record.startedAt,
+          durationMs: record.totals.durationMs,
+          status: record.status === "ok" ? "ok" : "failed",
+          harness,
+          models,
+          subset: options.subset ?? null,
+          cases: options.cases.length,
+          scores: summarizeCases(results),
+          costUsd: record.totals.costUsd,
+          unknownCostCalls: record.totals.unknownCostCalls,
+        });
+      },
+    },
+  );
+}
+
+/** Reviews each case in turn, one at a time; cases.json is rewritten after each. */
+async function evaluate(
+  { options, root, results }: { options: EvalRunOptions; root: string; results: CaseResult[] },
   ctx: FlowContext,
-  name: string,
-  agent?: { runAgent: RunAgent; harness: string },
-): RunAgent {
-  return <T>(task: AgentTask<T>): Promise<AgentResult<T>> =>
-    ctx.run(
-      (t: AgentTask<T>, c: FlowContext) => c.agent(t),
-      task,
-      agent === undefined ? { name, detached: true } : { name, agent, detached: true },
+): Promise<EvalRunResult> {
+  const paths = evalRunPaths(root);
+  for (const [index, evalCase] of options.cases.entries()) {
+    ctx.log(`[${index + 1}/${options.cases.length}] ${evalCase.id} (${evalCase.kind})`);
+    const result = await ctx.run(
+      reviewCase,
+      { evalCase, caseRoot: paths.caseRoot(evalCase.id), options },
+      { name: `case:${evalCase.id}` },
     );
+    results.push(result);
+    ctx.annotate({ scores: summarizeCases(results) });
+    ctx.log(`  → ${evalCase.id}: ${describeCase(result)}`);
+    await writeJson(paths.casesPath, results);
+  }
+  return { root, cases: results, scores: summarizeCases(results) };
 }
 
 interface CaseInput {
@@ -293,196 +453,36 @@ async function reviewCase(
   };
 }
 
-/** Reviews each case in turn, one at a time; cases.json is rewritten after each. */
-async function evaluate(
-  { options, root, results }: { options: EvalRunOptions; root: string; results: CaseResult[] },
+/** Cases are merged PRs of public repos: third-party code, but reviewed by its maintainers. */
+const EVAL_CASE_TRUST: Trust = { level: "collaborator", reason: "eval case, a merged PR" };
+
+/**
+ * A judge's calls, each as a detached child flow named `name` of the case: recorded in the eval's
+ * calls.jsonl, prompts/, and raw/, but kept out of its totals, so evals stay comparable by the
+ * review's cost alone.
+ */
+function judgeAgent(
   ctx: FlowContext,
-): Promise<EvalRunResult> {
-  const paths = evalRunPaths(root);
-  for (const [index, evalCase] of options.cases.entries()) {
-    ctx.log(`[${index + 1}/${options.cases.length}] ${evalCase.id} (${evalCase.kind})`);
-    const result = await ctx.run(
-      reviewCase,
-      { evalCase, caseRoot: paths.caseRoot(evalCase.id), options },
-      { name: `case:${evalCase.id}` },
+  name: string,
+  agent?: { runAgent: RunAgent; harness: string },
+): RunAgent {
+  return <T>(task: AgentTask<T>): Promise<AgentResult<T>> =>
+    ctx.run(
+      (t: AgentTask<T>, c: FlowContext) => c.agent(t),
+      task,
+      agent === undefined ? { name, detached: true } : { name, agent, detached: true },
     );
-    results.push(result);
-    ctx.annotate({ scores: summarizeCases(results) });
-    ctx.log(`  → ${evalCase.id}: ${describeCase(result)}`);
-    await writeJson(paths.casesPath, results);
+}
+
+/** Outcome, rough edges when on, cost, and time; plus the error of a failed case. */
+export function describeCase(result: CaseResult): string {
+  const parts = [caseOutcome(result)];
+  const edges = roughEdgeOutcome(result);
+  if (edges !== null) parts.push(`rough edges ${edges}`);
+  if (result.costUsd !== null) {
+    parts.push(`${result.unknownCostCalls > 0 ? "≥" : ""}${formatCost(result.costUsd)}`);
   }
-  return { root, cases: results, scores: summarizeCases(results) };
-}
-
-/**
- * Reviews each case in turn and scores the findings. The eval run goes in the repo's
- * `.review-flow/runs/<timestamp>-eval/`, with a run dir per case under `cases/`, and is indexed.
- * cases.json is rewritten after each case, so an interrupted eval keeps what it finished.
- */
-export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
-  const { harness, models, log } = options;
-  const startedAt = new Date();
-  const repo = await resolveRepoRoot(options.cwd);
-  await ensureStateDir(repo);
-
-  await mkdir(runsPath(repo), { recursive: true });
-  const root = path.join(runsPath(repo), `${formatRunTimestamp(startedAt)}-eval`);
-  // prompts/ and raw/ hold the judges' calls; each case's review has its own run dir.
-  const dir = await createRunDirAt(root);
-  await mkdir(path.join(root, "cases"));
-  const setup: [string, string][] = [["Harness", harness]];
-  if (options.summarize ?? true) setup.push(["Summarizer", describeModel(models.summarizer)]);
-  setup.push(
-    ["Reviewer", describeModel(models.reviewer)],
-    ["Verifier", describeModel(models.verifier)],
-    ["Rough edges", options.roughEdges ? "on" : "off"],
-    ...(options.roughEdges && options.edgeJudge !== undefined
-      ? [
-          [
-            "Rough-edge judge",
-            `${describeModel(options.edgeJudge.model)} (${options.edgeJudge.harness})`,
-          ] as [string, string],
-        ]
-      : []),
-    ["Cases", `${options.cases.length}${options.subset ? ` (${options.subset} set)` : ""}`],
-    ["Dataset", options.dataset],
-    ["Run dir", root],
-  );
-  if (options.logTable === undefined) {
-    for (const [label, value] of setup) log(`${label}: ${value}`);
-  } else {
-    options.logTable("Eval", setup);
-  }
-
-  const results: CaseResult[] = [];
-  return startRun(
-    evaluate,
-    { options, root, results },
-    {
-      name: "eval",
-      dir,
-      runAgent: options.runAgent,
-      harness,
-      log,
-      ...(options.warn === undefined ? {} : { warn: options.warn }),
-      ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
-      ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
-      meta: {
-        kind: "eval",
-        harness,
-        models,
-        roughEdges: options.roughEdges ?? false,
-        ...(options.roughEdges && options.edgeJudge !== undefined
-          ? { edgeJudge: { harness: options.edgeJudge.harness, model: options.edgeJudge.model } }
-          : {}),
-        dataset: {
-          dir: options.dataset,
-          subset: options.subset ?? null,
-          cases: options.cases.map((c) => c.id),
-        },
-        scores: summarizeCases(results),
-      },
-      onFinish: async (record) => {
-        await appendIndexEntry(repo, {
-          id: path.basename(root),
-          kind: "eval",
-          startedAt: record.startedAt,
-          durationMs: record.totals.durationMs,
-          status: record.status === "ok" ? "ok" : "failed",
-          harness,
-          models,
-          subset: options.subset ?? null,
-          cases: options.cases.length,
-          scores: summarizeCases(results),
-          costUsd: record.totals.costUsd,
-          unknownCostCalls: record.totals.unknownCostCalls,
-        });
-      },
-    },
-  );
-}
-
-const RESCORE_CONCURRENCY = 4;
-
-export interface RescoreOptions {
-  /** The eval run dir to score again. */
-  root: string;
-  /** Its cases, from the dataset. */
-  cases: readonly EvalCase[];
-  judge: ModelChoice;
-  /** Where fix diffs are cached; absent: the judge gets the bug's description only. */
-  fixesDir?: string | undefined;
-  runAgent: RunAgent;
-  log: (message: string) => void;
-  warn?: (message: string) => void;
-}
-
-/** rescore.json of an eval run. */
-export interface RescoreRecord {
-  rescoredAt: string;
-  judge: ModelChoice;
-  cases: CaseResult[];
-  scores: EvalScores;
-}
-
-/**
- * Scores a finished eval again with the judge, from the findings and verdicts its case run dirs
- * kept; no checkout, reviewer, or verifier runs. The eval's own files stay as they were, and the
- * result goes in `rescore.json` beside them.
- */
-export async function rescoreEval(options: RescoreOptions): Promise<EvalRunResult> {
-  const paths = evalRunPaths(options.root);
-  const previous = (await readJsonOrNull<CaseResult[]>(paths.casesPath)) ?? [];
-  const dataset = new Map(options.cases.map((c) => [c.id, c]));
-  const results: CaseResult[] = [...previous];
-
-  const rescoreOne = async (old: CaseResult, index: number): Promise<void> => {
-    const evalCase = dataset.get(old.id);
-    if (old.status !== "ok" || evalCase === undefined || evalCase.bugs.length === 0) return;
-    const caseRoot = paths.caseRoot(old.id);
-    const caseRun = runDirPaths(caseRoot);
-    const findings = await readJsonOrNull<NormalizedFinding[]>(caseRun.findingsPath);
-    const verdicts = await readJsonOrNull<Record<string, Verdict>>(caseRun.verdictsPath);
-    if (findings === null || verdicts === null) {
-      options.warn?.(`${old.id}: no findings or verdicts saved; kept its score.`);
-      return;
-    }
-    const judged = await judgeBugsOf(
-      evalCase,
-      findings,
-      verdicts,
-      caseRoot,
-      options.judge,
-      options.runAgent,
-      options.fixesDir,
-    );
-    if (judged.call.status === "failed") {
-      options.warn?.(
-        `${old.id}: the judge failed (${judged.call.error ?? "no result"}); kept its score.`,
-      );
-    }
-    results[index] = { ...old, bugs: judged.bugs ?? old.bugs, judge: judged.call };
-    options.log(`  ${old.id}: ${caseOutcome(old)} → ${caseOutcome(results[index])}`);
-  };
-
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(RESCORE_CONCURRENCY, previous.length) }, async () => {
-      while (next < previous.length) {
-        const index = next++;
-        const old = previous[index];
-        if (old !== undefined) await rescoreOne(old, index);
-      }
-    }),
-  );
-
-  const scores = summarizeCases(results);
-  const record: RescoreRecord = {
-    rescoredAt: new Date().toISOString(),
-    judge: options.judge,
-    cases: results,
-    scores,
-  };
-  await writeJson(path.join(options.root, "rescore.json"), record);
-  return { root: options.root, cases: results, scores };
+  parts.push(formatDuration(result.durationMs));
+  const text = parts.join(", ");
+  return result.error === null ? text : `${text}: ${result.error.split("\n")[0]}`;
 }

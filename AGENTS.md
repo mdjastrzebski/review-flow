@@ -20,6 +20,10 @@ Read [contributing/principles.md](contributing/principles.md) before making desi
 
 [contributing/references.md](contributing/references.md) lists similar tools and useful material. Check it when designing. Add new sources with their takeaways.
 
+## Code layout
+
+Order each source file top-down: the main, highest-level code (e.g. the flow or exported entry point) comes first, followed by the helpers it calls, each lower level after the one that uses it.
+
 ## Documentation
 
 All docs you produce must be:

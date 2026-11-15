@@ -23,20 +23,6 @@ import { createRunDirAt, type RunDirBase } from "./run-dir.ts";
  */
 export type Flow<I, O> = (input: I, ctx: FlowContext) => Promise<O>;
 
-/** The node name: the caller's, else the function's; an anonymous flow must be given one. */
-function nodeName(flow: Flow<never, unknown>, name: string | undefined): string {
-  const resolved = name ?? flow.name;
-  if (resolved === "") throw new Error("An anonymous flow needs a name: pass `name` to run it.");
-  return resolved;
-}
-
-/** Work timed before a flow started, such as collecting inputs before its run dir could exist. */
-export interface TimedStep {
-  name: string;
-  startedAt: Date;
-  durationMs: number;
-}
-
 export interface FlowContext {
   /** Aborted when this scope or an ancestor is aborted. */
   readonly signal: AbortSignal;
@@ -113,6 +99,13 @@ export interface RunOptions {
   detached?: boolean;
 }
 
+/** Work timed before a flow started, such as collecting inputs before its run dir could exist. */
+export interface TimedStep {
+  name: string;
+  startedAt: Date;
+  durationMs: number;
+}
+
 export interface StartRunOptions {
   /** Already created. */
   dir: RunDirBase;
@@ -146,19 +139,6 @@ interface Run {
   finished: boolean;
 }
 
-/** A node being built. */
-interface Scope {
-  name: string;
-  kind: "flow" | "step";
-  path: string;
-  startedAt: number;
-  run: Run;
-  calls: CallRecord[];
-  children: (Scope | FlowNode)[];
-  end: { status: FlowNode["status"]; error: string | null; durationMs: number } | null;
-  detached: boolean;
-}
-
 /** What a scope passes down to its children. */
 interface Env {
   signal: AbortSignal;
@@ -173,38 +153,46 @@ interface Env {
   verbose: boolean;
 }
 
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-const isScope = (child: Scope | FlowNode): child is Scope => "calls" in child;
-
-function snapshot(scope: Scope): FlowNode {
-  const children = scope.children.map((c) => (isScope(c) ? snapshot(c) : c));
-  return {
-    name: scope.name,
-    kind: scope.kind,
-    status: scope.end?.status ?? "running",
-    error: scope.end?.error ?? null,
-    startedAt: new Date(scope.startedAt).toISOString(),
-    durationMs: scope.end?.durationMs ?? Date.now() - scope.startedAt,
-    totals: children
-      .filter((c) => c.detached !== true)
-      .reduce((sum, c) => addCallTotals(sum, c.totals), sumCalls(scope.calls)),
-    children,
-    ...(scope.detached ? { detached: true as const } : {}),
+/**
+ * Runs a flow as the root of a run: run.json is written as `running` (with the pid) at the
+ * start, and with the final status and flow tree at the end, also when the flow throws.
+ */
+export function startRun<I, O>(flow: Flow<I, O>, input: I, options: StartRunOptions): Promise<O> {
+  const { log } = options;
+  const run: Run = {
+    dir: options.dir,
+    meta: { ...options.meta },
+    startedAt: options.before?.[0]?.startedAt ?? new Date(),
+    writing: Promise.resolve(),
+    finished: false,
   };
+  const env: Env = {
+    signal: new AbortController().signal,
+    runAgent: options.runAgent,
+    harness: options.harness,
+    afterCall: options.afterCall === undefined ? [] : [options.afterCall],
+    onProgress: [],
+    log,
+    warn: options.warn ?? log,
+    onActivity:
+      options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
+    verbose: options.verbose ?? false,
+  };
+  const root = newScope(nodeName(flow, options.name), "flow", run, null, options.before);
+  return withRun(run, root, () => enter(root, env, (ctx) => flow(input, ctx)), options.onFinish);
 }
 
-function stepNode(step: TimedStep): FlowNode {
-  return {
-    name: step.name,
-    kind: "step",
-    status: "ok",
-    error: null,
-    startedAt: step.startedAt.toISOString(),
-    durationMs: step.durationMs,
-    totals: sumCalls([]),
-    children: [],
-  };
+/** A node being built. */
+interface Scope {
+  name: string;
+  kind: "flow" | "step";
+  path: string;
+  startedAt: number;
+  run: Run;
+  calls: CallRecord[];
+  children: (Scope | FlowNode)[];
+  end: { status: FlowNode["status"]; error: string | null; durationMs: number } | null;
+  detached: boolean;
 }
 
 function newScope(
@@ -231,41 +219,24 @@ function newScope(
   return scope;
 }
 
-/** Runs fn in the scope, then records how the scope ended. */
-async function enter<T>(scope: Scope, env: Env, fn: (ctx: FlowContext) => Promise<T>): Promise<T> {
-  try {
-    const result = await fn(contextOf(scope, env));
-    scope.end = { status: "ok", error: null, durationMs: Date.now() - scope.startedAt };
-    return result;
-  } catch (error) {
-    scope.end = {
-      status: env.signal.aborted ? "aborted" : "failed",
-      error: errorMessage(error),
-      durationMs: Date.now() - scope.startedAt,
-    };
-    throw error;
-  }
-}
-
-function writeRecord(run: Run, record: RunRecordBase): Promise<void> {
-  const write = run.writing.then(() => writeJson(run.dir.runJsonPath, record));
-  // A failed write doesn't block the next; the caller awaiting `write` sees it.
-  run.writing = write.catch(() => {});
-  return write;
-}
-
-function runningRecord(run: Run): RunRecordBase {
+function stepNode(step: TimedStep): FlowNode {
   return {
-    format: RECORD_FORMAT,
-    ...run.meta,
-    pid: process.pid,
-    startedAt: run.startedAt.toISOString(),
-    finishedAt: null,
-    status: "running",
+    name: step.name,
+    kind: "step",
+    status: "ok",
     error: null,
-    totals: EMPTY_TOTALS,
-    flow: null,
+    startedAt: step.startedAt.toISOString(),
+    durationMs: step.durationMs,
+    totals: sumCalls([]),
+    children: [],
   };
+}
+
+/** The node name: the caller's, else the function's; an anonymous flow must be given one. */
+function nodeName(flow: Flow<never, unknown>, name: string | undefined): string {
+  const resolved = name ?? flow.name;
+  if (resolved === "") throw new Error("An anonymous flow needs a name: pass `name` to run it.");
+  return resolved;
 }
 
 /** Writes run.json as `running`, runs body, then writes the final record, failed or not. */
@@ -301,36 +272,62 @@ async function withRun<T>(
   }
 }
 
-async function runChild<I, O>(
-  parent: Scope,
-  env: Env,
-  flow: Flow<I, O>,
-  input: I,
-  opts: RunOptions = {},
-): Promise<O> {
-  const childEnv: Env = {
-    ...env,
-    ...(opts.agent === undefined ? {} : opts.agent),
-    ...(opts.log === undefined ? {} : { log: opts.log }),
-    afterCall: opts.afterCall === undefined ? env.afterCall : [...env.afterCall, opts.afterCall],
+function writeRecord(run: Run, record: RunRecordBase): Promise<void> {
+  const write = run.writing.then(() => writeJson(run.dir.runJsonPath, record));
+  // A failed write doesn't block the next; the caller awaiting `write` sees it.
+  run.writing = write.catch(() => {});
+  return write;
+}
+
+function runningRecord(run: Run): RunRecordBase {
+  return {
+    format: RECORD_FORMAT,
+    ...run.meta,
+    pid: process.pid,
+    startedAt: run.startedAt.toISOString(),
+    finishedAt: null,
+    status: "running",
+    error: null,
+    totals: EMPTY_TOTALS,
+    flow: null,
   };
-  const name = nodeName(flow, opts.name);
-  const call = (ctx: FlowContext) => flow(input, ctx);
-  if (opts.dir === undefined) {
-    const scope = newScope(name, "flow", parent.run, parent, opts.before, opts.detached);
-    return enter(scope, childEnv, call);
+}
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+function snapshot(scope: Scope): FlowNode {
+  const children = scope.children.map((c) => (isScope(c) ? snapshot(c) : c));
+  return {
+    name: scope.name,
+    kind: scope.kind,
+    status: scope.end?.status ?? "running",
+    error: scope.end?.error ?? null,
+    startedAt: new Date(scope.startedAt).toISOString(),
+    durationMs: scope.end?.durationMs ?? Date.now() - scope.startedAt,
+    totals: children
+      .filter((c) => c.detached !== true)
+      .reduce((sum, c) => addCallTotals(sum, c.totals), sumCalls(scope.calls)),
+    children,
+    ...(scope.detached ? { detached: true as const } : {}),
+  };
+}
+
+const isScope = (child: Scope | FlowNode): child is Scope => "calls" in child;
+
+/** Runs fn in the scope, then records how the scope ended. */
+async function enter<T>(scope: Scope, env: Env, fn: (ctx: FlowContext) => Promise<T>): Promise<T> {
+  try {
+    const result = await fn(contextOf(scope, env));
+    scope.end = { status: "ok", error: null, durationMs: Date.now() - scope.startedAt };
+    return result;
+  } catch (error) {
+    scope.end = {
+      status: env.signal.aborted ? "aborted" : "failed",
+      error: errorMessage(error),
+      durationMs: Date.now() - scope.startedAt,
+    };
+    throw error;
   }
-  const { root, meta = {} } = typeof opts.dir === "string" ? { root: opts.dir } : opts.dir;
-  const dir = await createRunDirAt(path.resolve(parent.run.dir.root, root));
-  const run: Run = {
-    dir,
-    meta: { ...meta },
-    startedAt: opts.before?.[0]?.startedAt ?? new Date(),
-    writing: Promise.resolve(),
-    finished: false,
-  };
-  const scope = newScope(name, "flow", run, parent, opts.before, opts.detached);
-  return withRun(run, scope, () => enter(scope, childEnv, call));
 }
 
 function contextOf(scope: Scope, env: Env): FlowContext {
@@ -459,31 +456,34 @@ function contextOf(scope: Scope, env: Env): FlowContext {
   return ctx;
 }
 
-/**
- * Runs a flow as the root of a run: run.json is written as `running` (with the pid) at the
- * start, and with the final status and flow tree at the end, also when the flow throws.
- */
-export function startRun<I, O>(flow: Flow<I, O>, input: I, options: StartRunOptions): Promise<O> {
-  const { log } = options;
+async function runChild<I, O>(
+  parent: Scope,
+  env: Env,
+  flow: Flow<I, O>,
+  input: I,
+  opts: RunOptions = {},
+): Promise<O> {
+  const childEnv: Env = {
+    ...env,
+    ...(opts.agent === undefined ? {} : opts.agent),
+    ...(opts.log === undefined ? {} : { log: opts.log }),
+    afterCall: opts.afterCall === undefined ? env.afterCall : [...env.afterCall, opts.afterCall],
+  };
+  const name = nodeName(flow, opts.name);
+  const call = (ctx: FlowContext) => flow(input, ctx);
+  if (opts.dir === undefined) {
+    const scope = newScope(name, "flow", parent.run, parent, opts.before, opts.detached);
+    return enter(scope, childEnv, call);
+  }
+  const { root, meta = {} } = typeof opts.dir === "string" ? { root: opts.dir } : opts.dir;
+  const dir = await createRunDirAt(path.resolve(parent.run.dir.root, root));
   const run: Run = {
-    dir: options.dir,
-    meta: { ...options.meta },
-    startedAt: options.before?.[0]?.startedAt ?? new Date(),
+    dir,
+    meta: { ...meta },
+    startedAt: opts.before?.[0]?.startedAt ?? new Date(),
     writing: Promise.resolve(),
     finished: false,
   };
-  const env: Env = {
-    signal: new AbortController().signal,
-    runAgent: options.runAgent,
-    harness: options.harness,
-    afterCall: options.afterCall === undefined ? [] : [options.afterCall],
-    onProgress: [],
-    log,
-    warn: options.warn ?? log,
-    onActivity:
-      options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
-    verbose: options.verbose ?? false,
-  };
-  const root = newScope(nodeName(flow, options.name), "flow", run, null, options.before);
-  return withRun(run, root, () => enter(root, env, (ctx) => flow(input, ctx)), options.onFinish);
+  const scope = newScope(name, "flow", run, parent, opts.before, opts.detached);
+  return withRun(run, scope, () => enter(scope, childEnv, call));
 }

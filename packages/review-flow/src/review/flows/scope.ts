@@ -15,12 +15,6 @@ export interface ReviewScope {
   models: RoleModels;
 }
 
-const TIMEOUTS_MS: Record<ReviewRole, number> = {
-  summarizer: 10 * 60 * 1000,
-  reviewer: 20 * 60 * 1000,
-  verifier: 10 * 60 * 1000,
-};
-
 export interface RoleTask<T> {
   taskId: string;
   prompt: string;
@@ -47,3 +41,9 @@ export function runRole<T>(
     timeoutMs: TIMEOUTS_MS[role],
   });
 }
+
+const TIMEOUTS_MS: Record<ReviewRole, number> = {
+  summarizer: 10 * 60 * 1000,
+  reviewer: 20 * 60 * 1000,
+  verifier: 10 * 60 * 1000,
+};

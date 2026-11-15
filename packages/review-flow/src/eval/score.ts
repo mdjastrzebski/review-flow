@@ -7,20 +7,6 @@ import {
 } from "./rough-edge-score.ts";
 import type { NormalizedFinding, Verdict } from "../review/schemas.ts";
 
-export interface BugResult {
-  description: string;
-  /** A finding that wasn't refuted hits the bug. */
-  found: boolean;
-  /** Any finding hits the bug, refuted or not. */
-  foundByReviewer: boolean;
-  /** Findings that hit the bug, refuted ones included. */
-  findingIds: string[];
-  /** Set when the judge decided the match; `found` and `foundByReviewer` are then its verdicts. */
-  judged?: true;
-  /** What matching by location alone gave, kept for comparison; only with `judged`. */
-  byLocation?: { found: boolean; foundByReviewer: boolean };
-}
-
 /** One line of cases.json. */
 export interface CaseResult {
   id: string;
@@ -41,6 +27,20 @@ export interface CaseResult {
   judge?: JudgeCall | null;
   /** Absent when the eval ran without rough edges; null when the case failed before review. */
   roughEdges?: RoughEdgeResult | null;
+}
+
+export interface BugResult {
+  description: string;
+  /** A finding that wasn't refuted hits the bug. */
+  found: boolean;
+  /** Any finding hits the bug, refuted or not. */
+  foundByReviewer: boolean;
+  /** Findings that hit the bug, refuted ones included. */
+  findingIds: string[];
+  /** Set when the judge decided the match; `found` and `foundByReviewer` are then its verdicts. */
+  judged?: true;
+  /** What matching by location alone gave, kept for comparison; only with `judged`. */
+  byLocation?: { found: boolean; foundByReviewer: boolean };
 }
 
 export interface JudgeCall {
@@ -79,60 +79,6 @@ export interface EvalScores {
   roughEdges?: RoughEdgeScores;
 }
 
-/** Same file, and the line ranges overlap or are at most MATCH_TOLERANCE_LINES apart. */
-export function hitsLocation(finding: NormalizedFinding, location: BugLocation): boolean {
-  const gap = Math.max(0, finding.lineStart - location.end, location.start - finding.lineEnd);
-  return finding.file === location.file && gap <= MATCH_TOLERANCE_LINES;
-}
-
-export function scoreBugs(
-  bugs: readonly EvalBug[],
-  findings: readonly NormalizedFinding[],
-  verdicts: Readonly<Record<string, Verdict>>,
-): BugResult[] {
-  return bugs.map((bug) => {
-    const hits = findings.filter((f) => bug.locations.some((l) => hitsLocation(f, l)));
-    return {
-      description: bug.description,
-      found: hits.some((f) => verdicts[f.id]?.verdict !== "refuted"),
-      foundByReviewer: hits.length > 0,
-      findingIds: hits.map((f) => f.id),
-    };
-  });
-}
-
-/**
- * Scores bugs from the judge's matches instead of line numbers: a bug is found when the judge
- * matched a finding that wasn't refuted to it, wherever the finding points.
- */
-export function judgeBugs(
-  bugs: readonly EvalBug[],
-  findings: readonly NormalizedFinding[],
-  verdicts: Readonly<Record<string, Verdict>>,
-  matches: ReadonlyMap<number, ReadonlySet<string>>,
-): BugResult[] {
-  const byLocation = scoreBugs(bugs, findings, verdicts);
-  return bugs.map((bug, index) => {
-    const ids = findings.map((f) => f.id).filter((id) => matches.get(index)?.has(id));
-    const location = byLocation[index];
-    return {
-      description: bug.description,
-      found: ids.some((id) => verdicts[id]?.verdict !== "refuted"),
-      foundByReviewer: ids.length > 0,
-      findingIds: ids,
-      judged: true,
-      byLocation: {
-        found: location?.found ?? false,
-        foundByReviewer: location?.foundByReviewer ?? false,
-      },
-    };
-  });
-}
-
-export function countReported(verdicts: Readonly<Record<string, Verdict>>): number {
-  return Object.values(verdicts).filter((v) => v.verdict !== "refuted").length;
-}
-
 export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
   const ok = cases.filter((c) => c.status === "ok");
   const bugs = ok.flatMap((c) => c.bugs ?? []);
@@ -169,4 +115,58 @@ export function summarizeCases(cases: readonly CaseResult[]): EvalScores {
         }),
     ...(roughEdges === undefined ? {} : { roughEdges }),
   };
+}
+
+export function countReported(verdicts: Readonly<Record<string, Verdict>>): number {
+  return Object.values(verdicts).filter((v) => v.verdict !== "refuted").length;
+}
+
+/**
+ * Scores bugs from the judge's matches instead of line numbers: a bug is found when the judge
+ * matched a finding that wasn't refuted to it, wherever the finding points.
+ */
+export function judgeBugs(
+  bugs: readonly EvalBug[],
+  findings: readonly NormalizedFinding[],
+  verdicts: Readonly<Record<string, Verdict>>,
+  matches: ReadonlyMap<number, ReadonlySet<string>>,
+): BugResult[] {
+  const byLocation = scoreBugs(bugs, findings, verdicts);
+  return bugs.map((bug, index) => {
+    const ids = findings.map((f) => f.id).filter((id) => matches.get(index)?.has(id));
+    const location = byLocation[index];
+    return {
+      description: bug.description,
+      found: ids.some((id) => verdicts[id]?.verdict !== "refuted"),
+      foundByReviewer: ids.length > 0,
+      findingIds: ids,
+      judged: true,
+      byLocation: {
+        found: location?.found ?? false,
+        foundByReviewer: location?.foundByReviewer ?? false,
+      },
+    };
+  });
+}
+
+export function scoreBugs(
+  bugs: readonly EvalBug[],
+  findings: readonly NormalizedFinding[],
+  verdicts: Readonly<Record<string, Verdict>>,
+): BugResult[] {
+  return bugs.map((bug) => {
+    const hits = findings.filter((f) => bug.locations.some((l) => hitsLocation(f, l)));
+    return {
+      description: bug.description,
+      found: hits.some((f) => verdicts[f.id]?.verdict !== "refuted"),
+      foundByReviewer: hits.length > 0,
+      findingIds: hits.map((f) => f.id),
+    };
+  });
+}
+
+/** Same file, and the line ranges overlap or are at most MATCH_TOLERANCE_LINES apart. */
+export function hitsLocation(finding: NormalizedFinding, location: BugLocation): boolean {
+  const gap = Math.max(0, finding.lineStart - location.end, location.start - finding.lineEnd);
+  return finding.file === location.file && gap <= MATCH_TOLERANCE_LINES;
 }

@@ -17,13 +17,10 @@ export interface PullRequest {
   isCrossRepository: boolean;
 }
 
-const PR_URL = /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/;
-
-/** `123`, `#123`, or a PR URL; null for anything else (a branch, commit, or range). */
-export function parsePrTarget(target: string): string | null {
-  const number = /^#?(\d+)$/.exec(target);
-  if (number !== null) return number[1] as string;
-  return PR_URL.test(target) ? target : null;
+/** The PR's current head commit. */
+export async function currentPrHead(cwd: string, pr: PullRequest): Promise<string> {
+  const out = await gh(cwd, ["pr", "view", pr.url, "--json", "headRefOid", "-q", ".headRefOid"]);
+  return out.trim();
 }
 
 /** Runs `gh` and returns stdout; `input` goes to stdin. */
@@ -47,75 +44,6 @@ export async function gh(cwd: string, args: string[], input?: string): Promise<s
     );
     child.stdin?.end(input ?? "");
   });
-}
-
-interface PrView {
-  number: number;
-  url: string;
-  title: string;
-  body: string;
-  headRefOid: string;
-  baseRefName: string;
-  isCrossRepository: boolean;
-}
-
-/** The PR, and its description, which is kept out of run.json. */
-export async function viewPr(
-  cwd: string,
-  target: string,
-): Promise<{ pr: PullRequest; body: string }> {
-  const fields = "number,url,title,body,headRefOid,baseRefName,isCrossRepository";
-  const view = JSON.parse(await gh(cwd, ["pr", "view", target, "--json", fields])) as PrView;
-  const match = PR_URL.exec(view.url);
-  if (match === null) throw new Error(`Unexpected PR URL from gh: ${view.url}`);
-  const pr: PullRequest = {
-    number: view.number,
-    url: view.url,
-    title: view.title,
-    host: match[1] as string,
-    repo: match[2] as string,
-    baseBranch: view.baseRefName,
-    headSha: view.headRefOid,
-    isCrossRepository: view.isCrossRepository,
-  };
-  return { pr, body: view.body };
-}
-
-/** `host/owner/name` from a remote URL (https, ssh, or scp-like), lowercased, no `.git`. */
-function remoteSlug(url: string): string | null {
-  const match = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+?)(?:\.git)?\/?$/i.exec(
-    url.trim(),
-  );
-  return match === null ? null : `${match[1]}/${match[2]}`.toLowerCase();
-}
-
-/** The remote that points at the PR's base repo; `origin` wins a tie. */
-export function matchRemote(
-  remotes: ReadonlyMap<string, string>,
-  pr: Pick<PullRequest, "host" | "repo">,
-): string | null {
-  const want = `${pr.host}/${pr.repo}`.toLowerCase();
-  const names = [...remotes].filter(([, url]) => remoteSlug(url) === want).map(([name]) => name);
-  return names.includes("origin") ? "origin" : (names[0] ?? null);
-}
-
-export interface FetchedPr {
-  pr: PullRequest;
-  /** The PR description; untrusted text. */
-  body: string;
-  /** The PR's base branch on the matching remote, freshly fetched, such as `origin/main`. */
-  base: string;
-}
-
-/** Looks up a PR with gh and fetches its base branch and head commit from the matching remote. */
-export async function fetchPr(repo: string, target: string): Promise<FetchedPr> {
-  const { pr, body } = await viewPr(repo, target);
-  const remote = matchRemote(await remoteUrls(repo), pr);
-  if (remote === null) {
-    throw new Error(`No git remote points at ${pr.host}/${pr.repo}, the repo of PR #${pr.number}.`);
-  }
-  await fetchPullRequest(repo, remote, pr.number, pr.baseBranch, pr.headSha);
-  return { pr, body, base: `${remote}/${pr.baseBranch}` };
 }
 
 export interface PostedReview {
@@ -150,8 +78,80 @@ export async function postReview(
   return { id: review.id, url: review.html_url, comments };
 }
 
-/** The PR's current head commit. */
-export async function currentPrHead(cwd: string, pr: PullRequest): Promise<string> {
-  const out = await gh(cwd, ["pr", "view", pr.url, "--json", "headRefOid", "-q", ".headRefOid"]);
-  return out.trim();
+export interface FetchedPr {
+  pr: PullRequest;
+  /** The PR description; untrusted text. */
+  body: string;
+  /** The PR's base branch on the matching remote, freshly fetched, such as `origin/main`. */
+  base: string;
+}
+
+/** Looks up a PR with gh and fetches its base branch and head commit from the matching remote. */
+export async function fetchPr(repo: string, target: string): Promise<FetchedPr> {
+  const { pr, body } = await viewPr(repo, target);
+  const remote = matchRemote(await remoteUrls(repo), pr);
+  if (remote === null) {
+    throw new Error(`No git remote points at ${pr.host}/${pr.repo}, the repo of PR #${pr.number}.`);
+  }
+  await fetchPullRequest(repo, remote, pr.number, pr.baseBranch, pr.headSha);
+  return { pr, body, base: `${remote}/${pr.baseBranch}` };
+}
+
+interface PrView {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  headRefOid: string;
+  baseRefName: string;
+  isCrossRepository: boolean;
+}
+
+/** The PR, and its description, which is kept out of run.json. */
+export async function viewPr(
+  cwd: string,
+  target: string,
+): Promise<{ pr: PullRequest; body: string }> {
+  const fields = "number,url,title,body,headRefOid,baseRefName,isCrossRepository";
+  const view = JSON.parse(await gh(cwd, ["pr", "view", target, "--json", fields])) as PrView;
+  const match = PR_URL.exec(view.url);
+  if (match === null) throw new Error(`Unexpected PR URL from gh: ${view.url}`);
+  const pr: PullRequest = {
+    number: view.number,
+    url: view.url,
+    title: view.title,
+    host: match[1] as string,
+    repo: match[2] as string,
+    baseBranch: view.baseRefName,
+    headSha: view.headRefOid,
+    isCrossRepository: view.isCrossRepository,
+  };
+  return { pr, body: view.body };
+}
+
+const PR_URL = /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/;
+
+/** The remote that points at the PR's base repo; `origin` wins a tie. */
+export function matchRemote(
+  remotes: ReadonlyMap<string, string>,
+  pr: Pick<PullRequest, "host" | "repo">,
+): string | null {
+  const want = `${pr.host}/${pr.repo}`.toLowerCase();
+  const names = [...remotes].filter(([, url]) => remoteSlug(url) === want).map(([name]) => name);
+  return names.includes("origin") ? "origin" : (names[0] ?? null);
+}
+
+/** `host/owner/name` from a remote URL (https, ssh, or scp-like), lowercased, no `.git`. */
+function remoteSlug(url: string): string | null {
+  const match = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+?)(?:\.git)?\/?$/i.exec(
+    url.trim(),
+  );
+  return match === null ? null : `${match[1]}/${match[2]}`.toLowerCase();
+}
+
+/** `123`, `#123`, or a PR URL; null for anything else (a branch, commit, or range). */
+export function parsePrTarget(target: string): string | null {
+  const number = /^#?(\d+)$/.exec(target);
+  if (number !== null) return number[1] as string;
+  return PR_URL.test(target) ? target : null;
 }

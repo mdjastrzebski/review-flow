@@ -1,5 +1,7 @@
 import type { z } from "zod";
 
+export type RunAgent = <T>(task: AgentTask<T>) => Promise<AgentResult<T>>;
+
 /** The only harness-specific seam: each harness implements RunAgent. */
 export interface AgentTask<T> {
   taskId: string;
@@ -35,21 +37,15 @@ export interface AgentProgress {
   detail: string | null;
 }
 
-/** Tokens for one task, summed over all its model requests. */
-export interface TokenUsage {
-  input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
-}
-
-/** Why a task has no output. */
-export type AgentFailureReason = "invalid_output" | "error" | "timeout";
+export type AgentResult<T> = AgentOutcome<T> & AgentRunInfo;
 
 /** How a task ended: schema-valid output, or why there is none. */
 export type AgentOutcome<T> =
   | { status: "success"; output: T }
   | { status: "failure"; reason: AgentFailureReason; error: string };
+
+/** Why a task has no output. */
+export type AgentFailureReason = "invalid_output" | "error" | "timeout";
 
 /** What every task reports, whatever its outcome. */
 export interface AgentRunInfo {
@@ -68,14 +64,18 @@ export interface AgentRunInfo {
   outsideReads?: string[];
 }
 
-export type AgentResult<T> = AgentOutcome<T> & AgentRunInfo;
+/** Tokens for one task, summed over all its model requests. */
+export interface TokenUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}
+
+/** A task as a flow hands it to the runtime, which adds the progress callbacks. */
+export type AgentCallTask<T> = Omit<AgentTask<T>, "onProgress" | "onDetail">;
 
 /** A failure as one line, e.g. `timeout: Timed out after 600000 ms`. */
 export function describeFailure(failure: { reason: AgentFailureReason; error: string }): string {
   return `${failure.reason}: ${failure.error}`;
 }
-
-export type RunAgent = <T>(task: AgentTask<T>) => Promise<AgentResult<T>>;
-
-/** A task as a flow hands it to the runtime, which adds the progress callbacks. */
-export type AgentCallTask<T> = Omit<AgentTask<T>, "onProgress" | "onDetail">;

@@ -1,5 +1,35 @@
 import type { TokenUsage } from "./agent.ts";
 
+/**
+ * Tokens × the price table (cost source `computed`, spec 9). Returns null for a model not in the
+ * table. Long-context surcharges (Grok above 256k input tokens) are not applied.
+ */
+export function computeCostUsd(model: string | null, usage: TokenUsage | null): number | null {
+  if (model === null || usage === null) return null;
+  const key = priceKey(model);
+  const price = key === null ? undefined : PRICES[key];
+  if (price === undefined) return null;
+  const perToken = (tokens: number, usdPerMillion: number) => (tokens * usdPerMillion) / 1e6;
+  return (
+    perToken(usage.input, price.input) +
+    perToken(usage.cacheRead, price.cacheRead) +
+    perToken(usage.cacheWrite, price.cacheWrite) +
+    perToken(usage.output, price.output)
+  );
+}
+
+/** The price-table key for a model id, or null when the id names a fast (premium) variant. */
+function priceKey(model: string): string | null {
+  // Bracketed parameters: `claude-opus-5-5[effort=high]`.
+  const params = /\[(.*)\]$/.exec(model)?.[1] ?? "";
+  const id = model.replace(/\[.*\]$/, "");
+  if (/\bfast=true\b/.test(params) || id.endsWith("-fast")) return null;
+  return id.replace(EFFORT_SUFFIX, "");
+}
+
+/** Effort suffixes in Cursor model ids, e.g. `grok-4.7-high`; effort doesn't change the price. */
+const EFFORT_SUFFIX = /-(?:low|medium|high|xhigh|max)$/;
+
 /** USD per million tokens. */
 export interface Price {
   input: number;
@@ -23,33 +53,3 @@ export const PRICES: Record<string, Price> = {
   "grok-4.7": { input: 2, cacheRead: 0.5, cacheWrite: 2, output: 6 },
   "composer-2.5": { input: 0.5, cacheRead: 0.2, cacheWrite: 0.5, output: 2.5 },
 };
-
-/** Effort suffixes in Cursor model ids, e.g. `grok-4.7-high`; effort doesn't change the price. */
-const EFFORT_SUFFIX = /-(?:low|medium|high|xhigh|max)$/;
-
-/** The price-table key for a model id, or null when the id names a fast (premium) variant. */
-function priceKey(model: string): string | null {
-  // Bracketed parameters: `claude-opus-5-5[effort=high]`.
-  const params = /\[(.*)\]$/.exec(model)?.[1] ?? "";
-  const id = model.replace(/\[.*\]$/, "");
-  if (/\bfast=true\b/.test(params) || id.endsWith("-fast")) return null;
-  return id.replace(EFFORT_SUFFIX, "");
-}
-
-/**
- * Tokens × the price table (cost source `computed`, spec 9). Returns null for a model not in the
- * table. Long-context surcharges (Grok above 256k input tokens) are not applied.
- */
-export function computeCostUsd(model: string | null, usage: TokenUsage | null): number | null {
-  if (model === null || usage === null) return null;
-  const key = priceKey(model);
-  const price = key === null ? undefined : PRICES[key];
-  if (price === undefined) return null;
-  const perToken = (tokens: number, usdPerMillion: number) => (tokens * usdPerMillion) / 1e6;
-  return (
-    perToken(usage.input, price.input) +
-    perToken(usage.cacheRead, price.cacheRead) +
-    perToken(usage.cacheWrite, price.cacheWrite) +
-    perToken(usage.output, price.output)
-  );
-}

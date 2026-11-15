@@ -1,9 +1,50 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
-/** After SIGTERM, how long the CLI gets to exit before SIGKILL. */
-const KILL_GRACE_MS = 5_000;
-const STDERR_TAIL_CHARS = 4_000;
+export interface CliRun {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  /** Set when the CLI could not be started. */
+  error?: Error;
+  timedOut: boolean;
+  stderr: string;
+}
+
+/** Why a CLI ended without a result, e.g. `agent ended without a result (exit code 3): boom`. */
+export function noResultError(bin: string, run: CliRun): string {
+  const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;
+  const detail = run.stderr.trim();
+  return `${bin} ended without a result (${how})${detail === "" ? "" : `: ${detail}`}`;
+}
+
+/** How the CLI ended, e.g. `exit code 0` or `signal SIGTERM (timed out)`, plus its stderr. */
+export function describeExit(run: CliRun): string {
+  if (run.error !== undefined) return `could not start: ${run.error.message}`;
+  const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;
+  const stderr = run.stderr.trim();
+  return [
+    `exited: ${how}${run.timedOut ? " (timed out)" : ""}`,
+    ...(stderr === "" ? [] : [`stderr: ${oneLine(stderr)}`]),
+  ].join("; ");
+}
+
+/** Text squeezed onto one line and cut to `max` characters. */
+export function oneLine(text: string, max = 200): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** The command line for `--verbose`, with long arguments (schemas, settings) cut short. */
+export function describeCommand(bin: string, args: readonly string[]): string {
+  const shown = args.map((arg) =>
+    arg.length > MAX_ARG_CHARS ? `${arg.slice(0, MAX_ARG_CHARS)}…(${arg.length} chars)` : arg,
+  );
+  return [bin, ...shown]
+    .map((arg) => (/^[\w./:=,@+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
+    .join(" ");
+}
+
+const MAX_ARG_CHARS = 80;
 
 export interface CliRunOptions {
   bin: string;
@@ -18,15 +59,6 @@ export interface CliRunOptions {
   onMessage: (message: unknown) => void;
   /** Called with a function that stops the CLI, e.g. when a message shows a forbidden action. */
   onStart?: (stop: () => void) => void;
-}
-
-export interface CliRun {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  /** Set when the CLI could not be started. */
-  error?: Error;
-  timedOut: boolean;
-  stderr: string;
 }
 
 /**
@@ -82,38 +114,7 @@ export async function runCli(options: CliRunOptions): Promise<CliRun> {
   return { ...exit, timedOut, stderr };
 }
 
-const MAX_ARG_CHARS = 80;
+/** After SIGTERM, how long the CLI gets to exit before SIGKILL. */
+const KILL_GRACE_MS = 5_000;
 
-/** The command line for `--verbose`, with long arguments (schemas, settings) cut short. */
-export function describeCommand(bin: string, args: readonly string[]): string {
-  const shown = args.map((arg) =>
-    arg.length > MAX_ARG_CHARS ? `${arg.slice(0, MAX_ARG_CHARS)}…(${arg.length} chars)` : arg,
-  );
-  return [bin, ...shown]
-    .map((arg) => (/^[\w./:=,@+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
-    .join(" ");
-}
-
-/** How the CLI ended, e.g. `exit code 0` or `signal SIGTERM (timed out)`, plus its stderr. */
-export function describeExit(run: CliRun): string {
-  if (run.error !== undefined) return `could not start: ${run.error.message}`;
-  const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;
-  const stderr = run.stderr.trim();
-  return [
-    `exited: ${how}${run.timedOut ? " (timed out)" : ""}`,
-    ...(stderr === "" ? [] : [`stderr: ${oneLine(stderr)}`]),
-  ].join("; ");
-}
-
-/** Text squeezed onto one line and cut to `max` characters. */
-export function oneLine(text: string, max = 200): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-}
-
-/** Why a CLI ended without a result, e.g. `agent ended without a result (exit code 3): boom`. */
-export function noResultError(bin: string, run: CliRun): string {
-  const how = run.signal === null ? `exit code ${run.code}` : `signal ${run.signal}`;
-  const detail = run.stderr.trim();
-  return `${bin} ended without a result (${how})${detail === "" ? "" : `: ${detail}`}`;
-}
+const STDERR_TAIL_CHARS = 4_000;

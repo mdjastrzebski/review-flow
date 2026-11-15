@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 
-export type PromptVars = Record<string, string>;
+/**
+ * Wraps text in a Markdown code fence longer than any backtick run inside it, so the content
+ * can't close the fence early.
+ */
+export function codeFence(text: string, lang = ""): string {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `${fence}${lang}\n${text}\n${fence}`;
+}
 
 export interface PromptLibrary<Name extends string> {
   /** The raw template, read on first use and kept for the process. */
@@ -8,6 +16,8 @@ export interface PromptLibrary<Name extends string> {
   /** The template with its placeholders filled, as `fillTemplate` does. */
   render(name: Name, vars: PromptVars): string;
 }
+
+export type PromptVars = Record<string, string>;
 
 /**
  * Prompt templates stored as `<name>.md` in `dir`. Reads are sync: prompt files are small and
@@ -41,14 +51,4 @@ export function fillTemplate(template: string, vars: PromptVars): string {
   const unused = Object.keys(vars).filter((key) => !used.has(key));
   if (unused.length > 0) throw new Error(`Prompt has no placeholder for: ${unused.join(", ")}`);
   return rendered;
-}
-
-/**
- * Wraps text in a Markdown code fence longer than any backtick run inside it, so the content
- * can't close the fence early.
- */
-export function codeFence(text: string, lang = ""): string {
-  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}${lang}\n${text}\n${fence}`;
 }

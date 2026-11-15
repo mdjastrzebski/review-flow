@@ -6,6 +6,23 @@ import { addWorktree, removeWorktree } from "./git.ts";
 import { STATE_DIR } from "./run-dir.ts";
 import { runsPath } from "./run-index.ts";
 
+export interface Lease {
+  /** Drops the lease. Removing the worktree, if no one else needs it, is the caller's call. */
+  release(): Promise<void>;
+  releaseSync(): void;
+}
+
+/** Holds `checkout` for this process until released, so the review leaves it in place. */
+export async function takeLease(leasesDir: string, checkout: string): Promise<Lease> {
+  await mkdir(leasesDir, { recursive: true });
+  const file = path.join(leasesDir, String(process.pid));
+  await writeFile(file, `${checkout}\n`);
+  return {
+    release: () => rm(file, { force: true }),
+    releaseSync: () => rmSync(file, { force: true }),
+  };
+}
+
 export interface ReviewWorktree {
   dir: string;
   /** Removes the worktree, unless a running `ask` holds a lease on it. */
@@ -14,18 +31,39 @@ export interface ReviewWorktree {
   removeSync(): void;
 }
 
-export function worktreesDir(repo: string): string {
-  return path.join(repo, STATE_DIR, "worktrees");
+/**
+ * A detached worktree at `sha` under `.review-flow/worktrees/<name>` (default `<pid>-<sha>`), so
+ * agents read the reviewed code without touching the developer's checkout. `.review-flow/` must
+ * exist.
+ */
+export async function createReviewWorktree(
+  repo: string,
+  sha: string,
+  name = `${process.pid}-${sha.slice(0, 12)}`,
+): Promise<ReviewWorktree> {
+  await removeStale(repo);
+  await mkdir(worktreesDir(repo), { recursive: true });
+  const dir = path.join(worktreesDir(repo), name);
+  await rm(dir, { recursive: true, force: true });
+  await addWorktree(repo, dir, sha);
+  return reviewWorktree(repo, dir);
 }
 
-export function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: alive, but owned by another user.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+/** Removes worktrees left by runs whose process is gone (a crash or a kill), unless leased. */
+async function removeStale(repo: string): Promise<void> {
+  const dir = worktreesDir(repo);
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  const leased = leasedWorktrees(repo);
+  for (const name of entries) {
+    const pid = Number(name.split("-")[0]);
+    if (Number.isInteger(pid) && pid !== process.pid && isAlive(pid)) continue;
+    if (leased.has(path.join(dir, name))) continue;
+    await removeWorktree(repo, path.join(dir, name));
   }
+}
+
+export function worktreesDir(repo: string): string {
+  return path.join(repo, STATE_DIR, "worktrees");
 }
 
 /**
@@ -59,35 +97,14 @@ export function leasedWorktrees(repo: string): Set<string> {
   return held;
 }
 
-/** Removes worktrees left by runs whose process is gone (a crash or a kill), unless leased. */
-async function removeStale(repo: string): Promise<void> {
-  const dir = worktreesDir(repo);
-  const entries = await readdir(dir).catch(() => [] as string[]);
-  const leased = leasedWorktrees(repo);
-  for (const name of entries) {
-    const pid = Number(name.split("-")[0]);
-    if (Number.isInteger(pid) && pid !== process.pid && isAlive(pid)) continue;
-    if (leased.has(path.join(dir, name))) continue;
-    await removeWorktree(repo, path.join(dir, name));
+export function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: alive, but owned by another user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-}
-
-/**
- * A detached worktree at `sha` under `.review-flow/worktrees/<name>` (default `<pid>-<sha>`), so
- * agents read the reviewed code without touching the developer's checkout. `.review-flow/` must
- * exist.
- */
-export async function createReviewWorktree(
-  repo: string,
-  sha: string,
-  name = `${process.pid}-${sha.slice(0, 12)}`,
-): Promise<ReviewWorktree> {
-  await removeStale(repo);
-  await mkdir(worktreesDir(repo), { recursive: true });
-  const dir = path.join(worktreesDir(repo), name);
-  await rm(dir, { recursive: true, force: true });
-  await addWorktree(repo, dir, sha);
-  return reviewWorktree(repo, dir);
 }
 
 /** Handle to an existing worktree under `.review-flow/worktrees/`. */
@@ -105,22 +122,5 @@ export function reviewWorktree(repo: string, dir: string): ReviewWorktree {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-  };
-}
-
-export interface Lease {
-  /** Drops the lease. Removing the worktree, if no one else needs it, is the caller's call. */
-  release(): Promise<void>;
-  releaseSync(): void;
-}
-
-/** Holds `checkout` for this process until released, so the review leaves it in place. */
-export async function takeLease(leasesDir: string, checkout: string): Promise<Lease> {
-  await mkdir(leasesDir, { recursive: true });
-  const file = path.join(leasesDir, String(process.pid));
-  await writeFile(file, `${checkout}\n`);
-  return {
-    release: () => rm(file, { force: true }),
-    releaseSync: () => rmSync(file, { force: true }),
   };
 }
