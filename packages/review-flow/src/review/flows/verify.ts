@@ -50,7 +50,7 @@ async function verifier(
   ctx: FlowContext,
 ): Promise<Verdict> {
   const { scope, finding } = input;
-  const result = await runRole(ctx, scope, "verifier", {
+  const result = await runRole("verifier", ctx, scope, {
     taskId: verifierTaskId(finding),
     prompt: buildVerifierPrompt(finding, scope.change),
     schema: Verdict,

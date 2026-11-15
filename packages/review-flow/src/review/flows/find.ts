@@ -49,7 +49,7 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
     const prompt = buildReviewerPrompt(scope.change, input.diff, input.roughEdges);
     c.log("Reviewing…");
     const lenient = input.roughEdges ? lenientReviewOutput() : null;
-    const review = await runRole<FindingsOutput | ReviewOutput>(c, scope, "reviewer", {
+    const review = await runRole<FindingsOutput | ReviewOutput>("reviewer", c, scope, {
       taskId: "reviewer",
       prompt,
       // The diff is in the prompt: the reviewer is the only task of its role.

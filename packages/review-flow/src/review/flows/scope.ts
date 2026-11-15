@@ -25,9 +25,9 @@ export interface RoleTask<T> {
 
 /** One agent call for `role`, on the scope's checkout with the role's model and timeout. */
 export function runRole<T>(
+  role: ReviewRole,
   ctx: FlowContext,
   scope: ReviewScope,
-  role: ReviewRole,
   task: RoleTask<T>,
 ): Promise<AgentResult<T> & { call: CallRecord }> {
   const { model, effort } = scope.models[role];

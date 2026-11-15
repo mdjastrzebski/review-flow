@@ -20,7 +20,7 @@ export async function checkRoughEdges(
   ctx: FlowContext,
 ): Promise<CheckedRoughEdge[]> {
   const { scope, edges } = input;
-  const result = await runRole(ctx, scope, "verifier", {
+  const result = await runRole("verifier", ctx, scope, {
     taskId: ROUGH_EDGE_CHECKER_TASK_ID,
     prompt: renderPrompt("rough-edge-checker", {
       ...scope.change,

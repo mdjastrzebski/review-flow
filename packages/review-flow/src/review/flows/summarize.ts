@@ -20,7 +20,7 @@ export interface SummarizeInput {
 export async function summarize(input: SummarizeInput, ctx: FlowContext): Promise<SummaryOutcome> {
   const { scope } = input;
   ctx.log("Summarizing…");
-  const result = await runRole(ctx, scope, "summarizer", {
+  const result = await runRole("summarizer", ctx, scope, {
     taskId: "summarizer",
     prompt: renderPrompt("summarizer", { ...scope.change, intent: describeIntent(input.intent) }),
     schema: Summary,
