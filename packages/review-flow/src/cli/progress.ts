@@ -1,6 +1,7 @@
 import { styleText } from "node:util";
 import * as clack from "@clack/prompts";
-import { formatElapsed, type Summary, type TaskActivity, type TrustLevel } from "../core/index.ts";
+import { formatElapsed, type TaskActivity } from "../runtime/index.ts";
+import type { Summary, TrustLevel } from "../review/index.ts";
 import { formatSummaryFields } from "./format.ts";
 
 /** Where review and eval report progress. Call `end` before printing results. */

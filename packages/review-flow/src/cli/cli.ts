@@ -2,8 +2,6 @@
 import { Command, Option } from "commander";
 import { getAgent } from "../agents/index.ts";
 import {
-  DEFAULT_DATASET_DIR,
-  defaultFixesDir,
   EFFORTS,
   HARNESSES,
   HARNESS_ENFORCEMENT,
@@ -22,9 +20,6 @@ import {
   parsePrTarget,
   postableItems,
   postableRoughEdges,
-  defaultCheckoutsDir,
-  loadDataset,
-  loadRun,
   readIndex,
   readUserConfig,
   resolveEdgeJudge,
@@ -32,20 +27,27 @@ import {
   resolveModels,
   resolveRepoRoot,
   resolveRun,
-  pairwiseEvals,
-  rescoreEval,
-  runEval,
   runReview,
   saveUserHarness,
   userConfigPath,
-  type EdgeJudge,
   type Effort,
-  type EvalSubset,
   type Harness,
   type Preflight,
   type Trust,
   type TrustLevel,
-} from "../core/index.ts";
+} from "../review/index.ts";
+import {
+  DEFAULT_DATASET_DIR,
+  defaultFixesDir,
+  defaultCheckoutsDir,
+  loadDataset,
+  loadRun,
+  pairwiseEvals,
+  rescoreEval,
+  runEval,
+  type EdgeJudge,
+  type EvalSubset,
+} from "../eval/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { askCommand, type AskOptions } from "./ask.ts";

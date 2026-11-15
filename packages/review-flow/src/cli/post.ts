@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { styleText } from "node:util";
+import { readJsonOrNull, writeJson } from "../runtime/index.ts";
 import {
   buildReview,
   currentPrHead,
@@ -10,9 +11,7 @@ import {
   postableRoughEdges,
   postReview,
   prTrust,
-  readJsonOrNull,
   runDirPaths,
-  writeJson,
   type CheckedRoughEdge,
   type NormalizedFinding,
   type PostableItem,
@@ -20,7 +19,7 @@ import {
   type RunRecord,
   type Summary,
   type Verdict,
-} from "../core/index.ts";
+} from "../review/index.ts";
 import { confirm, interactive, note, pick, type Choice } from "./prompt.ts";
 
 type Paint = (style: Parameters<typeof styleText>[0], text: string) => string;

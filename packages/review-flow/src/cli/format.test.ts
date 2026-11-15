@@ -1,4 +1,4 @@
-import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "../core/index.ts";
+import type { CheckedRoughEdge, NormalizedFinding, Verdict } from "../review/index.ts";
 import { describe, expect, it } from "vitest";
 import { formatFindings, formatSummary, wrap } from "./format.ts";
 

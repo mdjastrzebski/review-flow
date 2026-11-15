@@ -2,6 +2,7 @@ import * as clack from "@clack/prompts";
 import path from "node:path";
 import { styleText } from "node:util";
 import { getAgent, openInteractive } from "../agents/index.ts";
+import { formatDuration, type RunAgent } from "../runtime/index.ts";
 import {
   HARNESS_ENFORCEMENT,
   buildOpenContext,
@@ -9,7 +10,6 @@ import {
   createAskSession,
   describeFindings,
   formatCost,
-  formatDuration,
   isRunning,
   listReviewRuns,
   loadAnswererInput,
@@ -27,9 +27,8 @@ import {
   type Effort,
   type Harness,
   type ModelChoice,
-  type RunAgent,
   type Trust,
-} from "../core/index.ts";
+} from "../review/index.ts";
 import { formatSummary } from "./format.ts";
 import { choose, interactive, note } from "./prompt.ts";
 

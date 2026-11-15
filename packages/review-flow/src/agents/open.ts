@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Harness, ModelChoice } from "../core/index.ts";
+import type { Harness, ModelChoice } from "../review/index.ts";
 import { claudeOpenArgs, guardSettings } from "./claude.ts";
 import { cursorOpenArgs } from "./cursor.ts";
 import type { AgentOptions } from "./index.ts";

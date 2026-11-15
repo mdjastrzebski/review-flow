@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentProgress, AgentTask } from "../core/index.ts";
+import type { AgentProgress, AgentTask } from "../runtime/index.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { claudeArgs, createClaudeAgent, describeMessage, interpretResult } from "./claude.ts";

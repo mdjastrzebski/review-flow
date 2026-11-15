@@ -1,8 +1,8 @@
 import { styleText } from "node:util";
+import { formatDuration } from "../runtime/index.ts";
 import {
   formatCodeRef,
   formatCost,
-  formatDuration,
   formatLocation,
   goalNote,
   finalPriority,
@@ -17,7 +17,7 @@ import {
   type SummaryOutcome,
   type TrustLevel,
   type Verdict,
-} from "../core/index.ts";
+} from "../review/index.ts";
 
 type Style = Parameters<typeof styleText>[0];
 

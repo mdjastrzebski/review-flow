@@ -5,10 +5,9 @@ import type {
   AgentProgress,
   AgentResult,
   AgentTask,
-  Effort,
   RunAgent,
   TokenUsage,
-} from "../core/index.ts";
+} from "../runtime/index.ts";
 import { z } from "zod";
 import { toOutputSchema } from "./claude.ts";
 import { globEscapes, isInsideRoot } from "./guard.ts";
@@ -133,7 +132,7 @@ function repairPrompt(error: string): string {
  */
 export function cursorArgs(
   model: string | null,
-  effort: Effort | null,
+  effort: string | null,
   resume: string | null,
 ): string[] {
   const modelArg = model === null ? null : effort === null ? model : `${model}[effort=${effort}]`;
@@ -157,7 +156,7 @@ export function cursorOpenArgs({
   effort,
 }: {
   model: string | null;
-  effort: Effort | null;
+  effort: string | null;
 }): string[] {
   const modelArg = model === null ? null : effort === null ? model : `${model}[effort=${effort}]`;
   return [

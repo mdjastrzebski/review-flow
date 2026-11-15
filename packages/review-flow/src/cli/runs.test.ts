@@ -1,13 +1,12 @@
-import {
-  summarizeCases,
-  type CaseResult,
-  type EvalIndexEntry,
-  type LoadedEval,
-  type LoadedRun,
-  type NormalizedFinding,
-  type ReviewIndexEntry,
-  type Verdict,
-} from "../core/index.ts";
+import type {
+  EvalIndexEntry,
+  LoadedRun,
+  NormalizedFinding,
+  ReviewIndexEntry,
+  Verdict,
+} from "../review/index.ts";
+import { summarizeCases, type CaseResult, type LoadedEval } from "../eval/index.ts";
+import type { FlowNode } from "../runtime/index.ts";
 import { describe, expect, it } from "vitest";
 import {
   formatCompare,
@@ -137,6 +136,26 @@ function timed(costUsd: number | null, durationMs: number, calls = 1) {
   };
 }
 
+/** A finished flow node with the given totals. */
+function node(
+  name: string,
+  totals: ReturnType<typeof timed>,
+  children: FlowNode[] = [],
+  kind: FlowNode["kind"] = "flow",
+): FlowNode {
+  const { durationMs, ...callTotals } = totals;
+  return {
+    name,
+    kind,
+    status: "ok",
+    error: null,
+    startedAt: "",
+    durationMs,
+    totals: callTotals,
+    children,
+  };
+}
+
 function loaded(
   id: string,
   model: string,
@@ -160,11 +179,14 @@ function loaded(
       finishedAt: "",
       status: "ok",
       error: null,
-      steps: {
-        collect: timed(null, 100, 0),
-        review: timed(steps.review, 60_000),
-        verify: timed(steps.verify, 30_000),
-      },
+      format: 2,
+      flow: node("review", timed(steps.review + steps.verify, 90_100, 2), [
+        node("collect", timed(null, 100, 0), [], "step"),
+        node("find", timed(steps.review + steps.verify, 90_000, 2), [
+          node("review", timed(steps.review, 60_000), [], "step"),
+          node("verify", timed(steps.verify, 30_000)),
+        ]),
+      ]),
       totals: timed(steps.review + steps.verify, 90_100, 2),
     },
     findings,
@@ -193,7 +215,8 @@ describe("formatCompare", () => {
     expect(text).toMatch(/Reviewer\s+claude-opus-5-5 high\s+claude-sonnet-5-5 high/);
     expect(text).toMatch(/Diff\s+main aaaaaaa\.\.bbbbbbb/);
     expect(text).toMatch(/collect\s+-\s+-\s+-\s+0s\s+0s\s+0s\s+0 \/ 0/);
-    expect(text).toMatch(/review\s+\$0.74\s+\$0.34\s+-\$0.40\s+1m 0s\s+1m 0s\s+0s\s+1 \/ 1/);
+    expect(text).toMatch(/\nfind\s+\$1.22\s+\$0.65\s+-\$0.57/);
+    expect(text).toMatch(/find\/review\s+\$0.74\s+\$0.34\s+-\$0.40\s+1m 0s\s+1m 0s\s+0s\s+1 \/ 1/);
     expect(text).toMatch(/total\s+\$1.22\s+\$0.65\s+-\$0.57\s+1m 30s\s+1m 30s\s+0s\s+2 \/ 2/);
   });
 
@@ -268,7 +291,10 @@ function loadedEval(id: string, cases: CaseResult[], subset: "baseline" | null =
       finishedAt: "",
       status: "ok",
       error: null,
-      steps: { review: totals },
+      format: 2,
+      flow: node("eval", totals, [
+        node(`case:${cases[0]?.id ?? "x"}`, totals, [node("review", totals)]),
+      ]),
       totals,
       scores,
     },

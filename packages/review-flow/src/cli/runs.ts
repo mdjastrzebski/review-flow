@@ -1,31 +1,32 @@
 import path from "node:path";
 import { styleText } from "node:util";
+import { flattenTree, formatDuration, type FlowNode, type TimedTotals } from "../runtime/index.ts";
 import {
   formatCost,
-  formatDuration,
   formatLocation,
   matchFindings,
   rankFindings,
   compareSteps,
-  caseOutcome,
   describeModel,
+  type IndexEntry,
+  type StepTotals,
+  type LoadedRun,
+  type ModelChoice,
+  type NormalizedFinding,
+  type Verdict,
+} from "../review/index.ts";
+import {
+  caseOutcome,
   type CaseResult,
   type RoughEdgeJudgeScores,
   type RoughEdgeScores,
   type EvalRunResult,
   type EvalScores,
-  type IndexEntry,
   type LoadedEval,
-  type LoadedRun,
-  type ModelChoice,
-  type NormalizedFinding,
   type PairwiseRecord,
-  type TimedTotals,
-  type Verdict,
-} from "../core/index.ts";
+} from "../eval/index.ts";
 
 type Style = Parameters<typeof styleText>[0];
-type StepTotals = Parameters<typeof compareSteps>[0];
 
 export interface TableOptions {
   color: boolean;
@@ -53,10 +54,16 @@ export function shortModel({ model, effort }: ModelChoice): string {
   return effort === null ? name : `${name} ${effort}`;
 }
 
-/** `-` when the run had no summary, or predates the summarizer. */
-function summarizerOf(run: { models: { summarizer?: ModelChoice }; steps: object }): string {
+/** `-` when the run had no summary (no `summarize` node in its tree), or predates the summarizer. */
+function summarizerOf(run: {
+  models: { summarizer?: ModelChoice };
+  flow?: FlowNode | null;
+}): string {
   const { summarizer } = run.models;
-  return summarizer === undefined || !("summarize" in run.steps) ? "-" : shortModel(summarizer);
+  const summarized = [...flattenTree(run.flow ?? null).keys()].some(
+    (step) => step.split("/").at(-1) === "summarize",
+  );
+  return summarizer === undefined || !summarized ? "-" : shortModel(summarizer);
 }
 
 function describeModels(models: { reviewer: ModelChoice; verifier: ModelChoice }): string {

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "../core/index.ts";
+import type { AgentResult, AgentTask, RunAgent, TokenUsage } from "../runtime/index.ts";
 import { z } from "zod";
 import { READ_ONLY_TOOLS, STRUCTURED_OUTPUT_TOOL } from "./guard.ts";
 import {
