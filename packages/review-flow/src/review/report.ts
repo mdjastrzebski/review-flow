@@ -2,7 +2,7 @@ import { formatDuration } from "../runtime/format.ts";
 import { describeModel, formatCost, formatLocation } from "./format.ts";
 import type { PullRequest } from "./github.ts";
 import type { Harness, RoleModels } from "./models.ts";
-import { codeFence } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import { finalPriority, keptRoughEdges } from "./rough-edges.ts";
 import type {

@@ -1,11 +1,7 @@
 import { describeFailure } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import { loadPrompt } from "../prompts.ts";
-import {
-  ROUGH_EDGE_CHECKER_TASK_ID,
-  applyChecks,
-  buildRoughEdgeCheckerPrompt,
-} from "../rough-edges.ts";
+import { renderPrompt } from "../prompts.ts";
+import { ROUGH_EDGE_CHECKER_TASK_ID, applyChecks, describeRoughEdges } from "../rough-edges.ts";
 import { RoughEdgeChecks, type CheckedRoughEdge, type NormalizedRoughEdge } from "../schemas.ts";
 import { runRole, type ReviewScope } from "./scope.ts";
 
@@ -24,10 +20,12 @@ export async function checkRoughEdges(
   ctx: FlowContext,
 ): Promise<CheckedRoughEdge[]> {
   const { scope, edges } = input;
-  const template = await loadPrompt("rough-edge-checker");
   const result = await runRole(ctx, scope, "verifier", {
     taskId: ROUGH_EDGE_CHECKER_TASK_ID,
-    prompt: buildRoughEdgeCheckerPrompt(template, edges, scope.change),
+    prompt: renderPrompt("rough-edge-checker", {
+      ...scope.change,
+      items: describeRoughEdges(edges),
+    }),
     schema: RoughEdgeChecks,
   });
   if (result.status === "failure") {

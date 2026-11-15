@@ -33,9 +33,7 @@ const evalCase = {
 
 describe("buildJudgePrompt", () => {
   it("lists the bugs with their location and the findings as fenced data", () => {
-    const prompt = buildJudgePrompt("{{case}}\n{{bugs}}\n{{findings}}", evalCase, [
-      finding("F-001"),
-    ]);
+    const prompt = buildJudgePrompt(evalCase, [finding("F-001")]);
     expect(prompt).toContain("feat: a thing");
     expect(prompt).toContain("0. fix: copy the bytes");
     expect(prompt).toContain("src/a.py:20-22");
@@ -47,20 +45,18 @@ describe("buildJudgePrompt", () => {
 });
 
 describe("buildJudgePrompt with a fix diff", () => {
-  const template = "{{case}}\n{{bugs}}\n{{findings}}";
-
   it("shows the fix diff under its bug, and cuts a long one", () => {
-    const short = buildJudgePrompt(template, evalCase, [finding("F-001")], ["-old\n+new"]);
+    const short = buildJudgePrompt(evalCase, [finding("F-001")], ["-old\n+new"]);
     expect(short).toContain("What the fix changed");
     expect(short).toContain("+new");
-    const long = buildJudgePrompt(template, evalCase, [finding("F-001")], ["x".repeat(50_000)]);
+    const long = buildJudgePrompt(evalCase, [finding("F-001")], ["x".repeat(50_000)]);
     expect(long).toContain("[truncated]");
     expect(long.length).toBeLessThan(20_000);
   });
 
   it("leaves the prompt as it was when the fix couldn't be fetched", () => {
-    const without = buildJudgePrompt(template, evalCase, [finding("F-001")]);
-    expect(buildJudgePrompt(template, evalCase, [finding("F-001")], [null])).toBe(without);
+    const without = buildJudgePrompt(evalCase, [finding("F-001")]);
+    expect(buildJudgePrompt(evalCase, [finding("F-001")], [null])).toBe(without);
   });
 });
 

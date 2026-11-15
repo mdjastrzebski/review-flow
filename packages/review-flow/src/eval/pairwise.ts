@@ -8,7 +8,7 @@ import type { CaseResult } from "./score.ts";
 import { checkoutDetached, ensureClone } from "../review/git.ts";
 import { readJsonOrNull, writeJson } from "../runtime/json.ts";
 import type { ModelChoice } from "../review/models.ts";
-import { loadPrompt, renderPrompt } from "../review/prompts.ts";
+import { renderPrompt } from "../review/prompts.ts";
 import { describeRoughEdges, keptRoughEdges } from "../review/rough-edges.ts";
 import { runDirPaths } from "../review/run-dir.ts";
 import type { CheckedRoughEdge } from "../review/schemas.ts";
@@ -92,19 +92,15 @@ export async function judgePair(options: {
     };
   }
   const [first, second] = aFirst ? [a, b] : [b, a];
-  const [template, changeTemplate] = await Promise.all([
-    loadPrompt("rough-edge-pairwise"),
-    loadPrompt("change"),
-  ]);
   const result = await options.runAgent({
     taskId: `judge-pairwise-${options.caseId}`,
     role: "judge",
-    prompt: renderPrompt(template, {
+    prompt: renderPrompt("rough-edge-pairwise", {
       ...options.change,
       set1: describeSet(first),
       set2: describeSet(second),
     }),
-    sharedContext: buildChangeContext(changeTemplate, options.change, options.diff),
+    sharedContext: buildChangeContext(options.change, options.diff),
     cwd: options.cwd,
     schema: PairwiseOutput,
     model: options.model.model,

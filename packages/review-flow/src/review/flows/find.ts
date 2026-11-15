@@ -1,7 +1,8 @@
 import { describeFailure } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
 import { normalizeFindings, normalizeRoughEdges } from "../normalize.ts";
-import { codeFence, loadPrompt, renderPrompt } from "../prompts.ts";
+import { codeFence } from "../../runtime/prompts.ts";
+import { loadPrompt, renderPrompt } from "../prompts.ts";
 import { RUN_FILES } from "../run-dir.ts";
 import { countVerdicts, type VerdictCounts } from "../run-index.ts";
 import {
@@ -13,6 +14,7 @@ import {
   type Verdict,
 } from "../schemas.ts";
 import { checkRoughEdges } from "./check-rough-edges.ts";
+import type { ChangeRange } from "../verify.ts";
 import { runRole, type ReviewScope } from "./scope.ts";
 import { verify } from "./verify.ts";
 
@@ -35,6 +37,19 @@ export interface FindResult {
   roughEdges: CheckedRoughEdge[];
 }
 
+/** The reviewer prompt; the rough edge section only when they are asked for. */
+export function buildReviewerPrompt(
+  change: ChangeRange,
+  diff: string,
+  roughEdges: boolean,
+): string {
+  return renderPrompt("reviewer", {
+    ...change,
+    diffBlock: codeFence(diff, "diff"),
+    roughEdges: roughEdges ? loadPrompt("rough-edges") : "",
+  });
+}
+
 /**
  * Find: the reviewer (step `review`; a failure stops the run), then a verifier per finding, then
  * the batched rough edge check (its own node, so its cost shows apart). rough-edges.json is
@@ -44,11 +59,7 @@ export async function find(input: FindInput, ctx: FlowContext): Promise<FindResu
   const { scope } = input;
   const { repo } = scope;
   const { findings, edges } = await ctx.step("review", async (c) => {
-    const prompt = renderPrompt(await loadPrompt("reviewer"), {
-      ...scope.change,
-      diffBlock: codeFence(input.diff, "diff"),
-      roughEdges: input.roughEdges ? await loadPrompt("rough-edges") : "",
-    });
+    const prompt = buildReviewerPrompt(scope.change, input.diff, input.roughEdges);
     c.log("Reviewing…");
     const lenient = input.roughEdges ? lenientReviewOutput() : null;
     const review = await runRole<FindingsOutput | ReviewOutput>(c, scope, "reviewer", {

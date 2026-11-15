@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeRoughEdges, MAX_ROUGH_EDGES } from "./normalize.ts";
-import {
-  applyChecks,
-  buildRoughEdgeCheckerPrompt,
-  describeRoughEdges,
-  keptRoughEdges,
-} from "./rough-edges.ts";
+import { applyChecks, describeRoughEdges, keptRoughEdges } from "./rough-edges.ts";
 import type { NormalizedRoughEdge, RoughEdge } from "./schemas.ts";
 
 const repo = "/repo";
@@ -43,20 +38,6 @@ describe("normalizeRoughEdges", () => {
     const { roughEdges, notes } = normalizeRoughEdges(many, repo);
     expect(roughEdges).toHaveLength(MAX_ROUGH_EDGES);
     expect(notes).toHaveLength(1);
-  });
-});
-
-describe("buildRoughEdgeCheckerPrompt", () => {
-  it("lists each edge with its id, location, observation and suggestion", () => {
-    const prompt = buildRoughEdgeCheckerPrompt(
-      "{{base}} {{head}}\n{{items}}",
-      [normalized("R-001")],
-      { base: "main", head: "`HEAD`" },
-    );
-    expect(prompt).toContain("R-001: Hidden ordering");
-    expect(prompt).toContain("`src/a.ts:3-9` · lens: design · reviewer priority: medium");
-    expect(prompt).toContain("Reads state set two calls earlier.");
-    expect(prompt).toContain("Pass it as an argument.");
   });
 });
 
@@ -130,6 +111,14 @@ describe("keptRoughEdges order", () => {
 });
 
 describe("describeRoughEdges", () => {
+  it("lists each edge with its id, location, observation and suggestion", () => {
+    const text = describeRoughEdges([normalized("R-001")]);
+    expect(text).toContain("R-001: Hidden ordering");
+    expect(text).toContain("`src/a.ts:3-9` · lens: design · reviewer priority: medium");
+    expect(text).toContain("Reads state set two calls earlier.");
+    expect(text).toContain("Pass it as an argument.");
+  });
+
   it("shows the reviewer's priority", () => {
     expect(describeRoughEdges([{ ...normalized("R-001"), priority: "high" }])).toContain(
       "reviewer priority: high",

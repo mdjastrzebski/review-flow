@@ -15,7 +15,8 @@ import {
 import { readJsonOrNull } from "../runtime/json.ts";
 import type { Harness, ModelChoice } from "./models.ts";
 import type { RunRecord } from "./flows/review.ts";
-import { codeFence, loadPrompt, renderPrompt } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
+import { renderPrompt } from "./prompts.ts";
 import { rankFindings } from "./rank.ts";
 import { renderSummary } from "./report.ts";
 import { ensureStateDir, runDirPaths, type RunDir } from "./run-dir.ts";
@@ -275,24 +276,16 @@ function answererVars(input: AnswererInput): Record<string, string> {
   };
 }
 
-export function buildAnswererPrompt(
-  template: string,
-  input: AnswererInput,
-  question: string,
-): string {
+export function buildAnswererPrompt(input: AnswererInput, question: string): string {
   return (
-    renderPrompt(template, { ...answererVars(input), question }).trimEnd() +
+    renderPrompt("answerer", { ...answererVars(input), question }).trimEnd() +
     "\n\nYour final answer must be a single JSON object matching the required schema, with the Markdown answer in `answer`.\n"
   );
 }
 
 /** The context for `ask --open`: the diff, then the answerer's instructions with no question yet. */
-export function buildOpenContext(
-  template: string,
-  sharedContext: string,
-  input: AnswererInput,
-): string {
-  const prompt = renderPrompt(template, {
+export function buildOpenContext(sharedContext: string, input: AnswererInput): string {
+  const prompt = renderPrompt("answerer", {
     ...answererVars(input),
     question: "The developer asks their questions in this chat. Answer each one as below.",
   });
@@ -343,8 +336,7 @@ export async function loadAnswererInput(ask: AskRun, drift: string | null) {
   const change = runChange(run);
   const diff = await readFile(ask.paths.diffPath, "utf8");
   return {
-    template: await loadPrompt("answerer"),
-    sharedContext: buildChangeContext(await loadPrompt("change"), change, diff),
+    sharedContext: buildChangeContext(change, diff),
     input: async (history: readonly Exchange[]): Promise<AnswererInput> => ({
       change,
       intent: await readJsonOrNull<Intent>(ask.paths.intentPath),
@@ -382,7 +374,7 @@ export async function createAskSession(options: AskSessionOptions) {
         {
           taskId,
           role: "answerer",
-          prompt: buildAnswererPrompt(loaded.template, input, question),
+          prompt: buildAnswererPrompt(input, question),
           sharedContext: loaded.sharedContext,
           cwd: checkout.dir,
           schema: Answer,

@@ -1,14 +1,9 @@
 import { describeFailure } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import { loadPrompt } from "../prompts.ts";
 import { RUN_FILES } from "../run-dir.ts";
 import { Summary } from "../schemas.ts";
-import {
-  buildSummarizerPrompt,
-  normalizeSummary,
-  type Intent,
-  type SummaryOutcome,
-} from "../summary.ts";
+import { renderPrompt } from "../prompts.ts";
+import { describeIntent, normalizeSummary, type Intent, type SummaryOutcome } from "../summary.ts";
 import { runRole, type ReviewScope } from "./scope.ts";
 
 export interface SummarizeInput {
@@ -27,7 +22,7 @@ export async function summarize(input: SummarizeInput, ctx: FlowContext): Promis
   ctx.log("Summarizing…");
   const result = await runRole(ctx, scope, "summarizer", {
     taskId: "summarizer",
-    prompt: buildSummarizerPrompt(await loadPrompt("summarizer"), scope.change, input.intent),
+    prompt: renderPrompt("summarizer", { ...scope.change, intent: describeIntent(input.intent) }),
     schema: Summary,
   });
   if (result.status === "failure") {

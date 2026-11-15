@@ -17,7 +17,6 @@ import {
 } from "../git.ts";
 import type { PullRequest } from "../github.ts";
 import type { Harness, RoleModels } from "../models.ts";
-import { loadPrompt } from "../prompts.ts";
 import { renderReport, type ReportMeta } from "../report.ts";
 import { createRunDir, ensureStateDir, RUN_FILES, runDirPaths, type RunDir } from "../run-dir.ts";
 import { createRunDirAt } from "../../runtime/run-dir.ts";
@@ -378,7 +377,7 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
   await ctx.writeFile(RUN_FILES.diff, diff);
   await ctx.writeFile(RUN_FILES.intent, input.intent);
 
-  const sharedContext = buildChangeContext(await loadPrompt("change"), change, diff);
+  const sharedContext = buildChangeContext(change, diff);
   const scope: ReviewScope = { repo, change, sharedContext, models };
   const { summary, found } = await ctx.parallel({
     summary: steps.summarize

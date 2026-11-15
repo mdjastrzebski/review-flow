@@ -259,7 +259,7 @@ async function openSession(
 ): Promise<void> {
   const loaded = await loadAnswererInput(ask, checkout.drift);
   const input = await loaded.input([]);
-  const context = buildOpenContext(loaded.template, loaded.sharedContext, input);
+  const context = buildOpenContext(loaded.sharedContext, input);
   note.info(`Opening ${agent.harness} in ${checkout.dir}. Its cost isn't recorded.`);
   const startedAt = new Date();
   // The child gets Ctrl-C itself; this process waits for it to exit.

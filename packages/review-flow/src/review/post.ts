@@ -1,5 +1,5 @@
 import { formatLocation } from "./format.ts";
-import { codeFence } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
 import { rankFindings, type RankedItem } from "./rank.ts";
 import { renderSummary } from "./report.ts";
 import { finalPriority, keptRoughEdges } from "./rough-edges.ts";

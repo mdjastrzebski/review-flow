@@ -3,7 +3,8 @@ import type { RunAgent } from "../runtime/agent.ts";
 import type { EvalCase } from "./dataset.ts";
 import type { ModelChoice } from "../review/models.ts";
 import { MAX_FIX_DIFF_CHARS } from "./fixes.ts";
-import { codeFence, loadPrompt, renderPrompt } from "../review/prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
+import { renderPrompt } from "../review/prompts.ts";
 import type { NormalizedFinding } from "../review/schemas.ts";
 
 const JUDGE_TIMEOUT_MS = 5 * 60_000;
@@ -63,12 +64,11 @@ function describeFindings(findings: readonly NormalizedFinding[]): string {
 }
 
 export function buildJudgePrompt(
-  template: string,
   evalCase: Pick<EvalCase, "title" | "bugs">,
   findings: readonly NormalizedFinding[],
   fixDiffs: readonly (string | null)[] = [],
 ): string {
-  return renderPrompt(template, {
+  return renderPrompt("judge", {
     case: evalCase.title,
     bugs: describeBugs(evalCase.bugs, fixDiffs),
     findings: describeFindings(findings),
@@ -117,7 +117,7 @@ export async function judgeCase(options: {
       durationMs: 0,
     };
   }
-  const prompt = buildJudgePrompt(await loadPrompt("judge"), evalCase, findings, options.fixDiffs);
+  const prompt = buildJudgePrompt(evalCase, findings, options.fixDiffs);
   const result = await options.runAgent({
     taskId: `judge-${evalCase.id}`,
     role: "judge",

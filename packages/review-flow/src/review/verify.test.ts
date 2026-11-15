@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { loadPrompt } from "./prompts.ts";
 import { applyVerdictRules } from "./rank.ts";
 import type { NormalizedFinding, Verdict } from "./schemas.ts";
 import {
@@ -27,10 +26,8 @@ function makeFinding(overrides: Partial<NormalizedFinding> = {}): NormalizedFind
   };
 }
 
-const template = await loadPrompt("verifier");
-const changeTemplate = await loadPrompt("change");
 const change = { base: "main", head: "`HEAD`" };
-const build = (finding: NormalizedFinding) => buildVerifierPrompt(template, finding, change);
+const build = (finding: NormalizedFinding) => buildVerifierPrompt(finding, change);
 
 describe("buildVerifierPrompt", () => {
   it("includes title, location, claim, fix and base", () => {
@@ -80,20 +77,20 @@ describe("buildVerifierPrompt", () => {
 
 describe("buildChangeContext", () => {
   it("includes the base and the diff", () => {
-    const context = buildChangeContext(changeTemplate, change, "DIFF_SENTINEL");
+    const context = buildChangeContext(change, "DIFF_SENTINEL");
     expect(context).toContain("between `main` and `HEAD`.");
     expect(context).toContain("DIFF_SENTINEL");
   });
 
   it("says when uncommitted changes are included", () => {
     const head = "`HEAD` plus uncommitted changes";
-    const context = buildChangeContext(changeTemplate, { base: "main", head }, "DIFF");
+    const context = buildChangeContext({ base: "main", head }, "DIFF");
     expect(context).toContain("between `main` and `HEAD` plus uncommitted changes.");
   });
 
   it("fences a diff containing a closing fence so it can't end early", () => {
     const diff = " ```\n+added";
-    const context = buildChangeContext(changeTemplate, change, diff);
+    const context = buildChangeContext(change, diff);
     expect(context).toContain(`\`\`\`\`diff\n${diff}\n\`\`\`\``);
   });
 });

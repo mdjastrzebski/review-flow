@@ -1,8 +1,7 @@
 import { normalizeFile } from "./normalize.ts";
-import { codeFence, renderPrompt } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
 import type { CodeRef, Summary } from "./schemas.ts";
 import type { TrustLevel } from "./trust.ts";
-import type { ChangeRange } from "./verify.ts";
 
 export const MAX_CHANGES = 6;
 export const MAX_LOOK_AT = 3;
@@ -42,14 +41,6 @@ export function describeIntent(intent: Intent): string {
   if (intent.uncommitted)
     parts.push("The change also includes uncommitted changes, which have no message.");
   return parts.join("\n\n");
-}
-
-export function buildSummarizerPrompt(
-  template: string,
-  change: ChangeRange,
-  intent: Intent,
-): string {
-  return renderPrompt(template, { ...change, intent: describeIntent(intent) });
 }
 
 /** Caps the lists the prompt bounds, and makes paths repo-relative. */

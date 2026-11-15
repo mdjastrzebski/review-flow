@@ -1,6 +1,5 @@
 import type { AgentFailureReason } from "../../runtime/agent.ts";
 import type { FlowContext } from "../../runtime/flow.ts";
-import { loadPrompt } from "../prompts.ts";
 import { applyVerdictRules } from "../rank.ts";
 import { RUN_FILES } from "../run-dir.ts";
 import { countVerdicts } from "../run-index.ts";
@@ -45,10 +44,9 @@ async function verifier(
   ctx: FlowContext,
 ): Promise<Verdict> {
   const { scope, finding } = input;
-  const template = await loadPrompt("verifier");
   const result = await runRole(ctx, scope, "verifier", {
     taskId: verifierTaskId(finding),
-    prompt: buildVerifierPrompt(template, finding, scope.change),
+    prompt: buildVerifierPrompt(finding, scope.change),
     schema: Verdict,
   });
   if (result.status === "failure") {

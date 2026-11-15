@@ -1,5 +1,5 @@
 import { formatLocation } from "./format.ts";
-import { codeFence, renderPrompt } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
 import type {
   CheckedRoughEdge,
   NormalizedRoughEdge,
@@ -7,23 +7,14 @@ import type {
   RoughEdgeCheck,
   RoughEdgeChecks,
 } from "./schemas.ts";
-import type { ChangeRange } from "./verify.ts";
 
 export const ROUGH_EDGE_CHECKER_TASK_ID = "verifier-rough-edges";
 
 /**
- * The checker sees what the reviewer wrote, suggestion included: it judges whether the
- * observation holds, which can't be done without it. Fenced, since it is agent text.
+ * Each rough edge as the reviewer wrote it, for a prompt; shared by the checker and eval judge.
+ * The suggestion is included: judging whether the observation holds can't be done without it.
+ * Fenced, since it is agent text.
  */
-export function buildRoughEdgeCheckerPrompt(
-  template: string,
-  edges: readonly NormalizedRoughEdge[],
-  change: ChangeRange,
-): string {
-  return renderPrompt(template, { ...change, items: describeRoughEdges(edges) });
-}
-
-/** Each rough edge as the reviewer wrote it, for a prompt; shared by the checker and eval judge. */
 export function describeRoughEdges(edges: readonly NormalizedRoughEdge[]): string {
   return edges
     .map((edge) =>

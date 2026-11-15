@@ -1,7 +1,4 @@
-import { readFile } from "node:fs/promises";
-
-// prompts/ at the package root, from both src/review/ and dist/review/.
-const PROMPTS_DIR = new URL("../../prompts/", import.meta.url);
+import { promptLibrary } from "../runtime/prompts.ts";
 
 export type PromptName =
   | "summarizer"
@@ -15,41 +12,11 @@ export type PromptName =
   | "rough-edge-judge"
   | "rough-edge-pairwise";
 
-const loaded = new Map<PromptName, Promise<string>>();
+// prompts/ at the package root, from both src/review/ and dist/review/.
+const prompts = promptLibrary<PromptName>(new URL("../../prompts/", import.meta.url));
 
-/** A prompt template; each is read once per process. */
-export function loadPrompt(name: PromptName): Promise<string> {
-  let prompt = loaded.get(name);
-  if (prompt === undefined) {
-    prompt = readFile(new URL(`${name}.md`, PROMPTS_DIR), "utf8");
-    loaded.set(name, prompt);
-  }
-  return prompt;
-}
+/** A raw prompt template, e.g. to include in another prompt. Prefer `renderPrompt`. */
+export const loadPrompt = prompts.load;
 
-/**
- * Replaces `{{name}}` placeholders. Throws on a placeholder without a value, and on a value
- * without a placeholder, so template and caller can't drift apart silently.
- */
-export function renderPrompt(template: string, vars: Record<string, string>): string {
-  const used = new Set<string>();
-  const rendered = template.replaceAll(/\{\{(\w+)\}\}/g, (_, key: string) => {
-    const value = vars[key];
-    if (value === undefined) throw new Error(`Prompt placeholder {{${key}}} has no value`);
-    used.add(key);
-    return value;
-  });
-  const unused = Object.keys(vars).filter((key) => !used.has(key));
-  if (unused.length > 0) throw new Error(`Prompt has no placeholder for: ${unused.join(", ")}`);
-  return rendered;
-}
-
-/**
- * Wraps text in a Markdown code fence longer than any backtick run inside it, so the content
- * can't close the fence early.
- */
-export function codeFence(text: string, lang = ""): string {
-  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}${lang}\n${text}\n${fence}`;
-}
+/** Loads the named prompt and fills in its placeholders. */
+export const renderPrompt = prompts.render;

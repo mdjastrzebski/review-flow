@@ -1,5 +1,6 @@
 import { formatLocation } from "./format.ts";
-import { codeFence, renderPrompt } from "./prompts.ts";
+import { codeFence } from "../runtime/prompts.ts";
+import { renderPrompt } from "./prompts.ts";
 import type { NormalizedFinding } from "./schemas.ts";
 
 /** The reviewer is asked for ≤ 3 sentences or a ≤ 10-line snippet; this is the enforced cap. */
@@ -59,12 +60,8 @@ export function changeRangeOf(
  * fix. The reviewer's rationale, severity and category are deliberately left out so they can't
  * anchor the verdict. The diff is not included; it goes in the shared context.
  */
-export function buildVerifierPrompt(
-  template: string,
-  finding: NormalizedFinding,
-  change: ChangeRange,
-): string {
-  return renderPrompt(template, {
+export function buildVerifierPrompt(finding: NormalizedFinding, change: ChangeRange): string {
+  return renderPrompt("verifier", {
     ...change,
     title: finding.title,
     location: formatLocation(finding),
@@ -77,6 +74,6 @@ export function buildVerifierPrompt(
  * The diff, as context shared by all verifiers. It is identical for every finding, so the harness
  * can cache it once per run instead of once per verifier.
  */
-export function buildChangeContext(template: string, change: ChangeRange, diff: string): string {
-  return renderPrompt(template, { ...change, diffBlock: codeFence(diff, "diff") });
+export function buildChangeContext(change: ChangeRange, diff: string): string {
+  return renderPrompt("change", { ...change, diffBlock: codeFence(diff, "diff") });
 }

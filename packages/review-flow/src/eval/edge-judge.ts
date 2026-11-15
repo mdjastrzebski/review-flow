@@ -14,7 +14,7 @@ import { writeJson } from "../runtime/json.ts";
 import { findNode } from "../runtime/records.ts";
 import type { Harness, ModelChoice } from "../review/models.ts";
 import type { ReviewRunResult, RunRecord } from "../review/flows/review.ts";
-import { loadPrompt, renderPrompt } from "../review/prompts.ts";
+import { renderPrompt } from "../review/prompts.ts";
 import { describeRoughEdges } from "../review/rough-edges.ts";
 import { runDirPaths } from "../review/run-dir.ts";
 import type { CheckedRoughEdge, NormalizedRoughEdge } from "../review/schemas.ts";
@@ -76,15 +76,11 @@ export async function judgeRoughEdges(options: {
 }): Promise<EdgeJudgeResult> {
   const { edges, change } = options;
   if (edges.length === 0) return { status: "ok", grades: new Map(), costUsd: 0, durationMs: 0 };
-  const [template, changeTemplate] = await Promise.all([
-    loadPrompt("rough-edge-judge"),
-    loadPrompt("change"),
-  ]);
   const result = await options.runAgent({
     taskId: `judge-rough-edges-${options.caseId}`,
     role: "judge",
-    prompt: renderPrompt(template, { ...change, items: describeRoughEdges(edges) }),
-    sharedContext: buildChangeContext(changeTemplate, change, options.diff),
+    prompt: renderPrompt("rough-edge-judge", { ...change, items: describeRoughEdges(edges) }),
+    sharedContext: buildChangeContext(change, options.diff),
     cwd: options.cwd,
     schema: EdgeJudgeOutput,
     model: options.model.model,
