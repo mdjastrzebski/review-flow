@@ -34,10 +34,12 @@ import type { Intent, SummaryOutcome } from "../summary.ts";
 import { estimateCost, type CostEstimate, type Trust, type TrustLevel } from "../trust.ts";
 import { buildChangeContext, changeRangeOf, type ChangeRange } from "../verify.ts";
 import { find, type FindResult } from "./find.ts";
+import { REVIEW_PATH } from "./paths.ts";
 import { type ReviewScope } from "./scope.ts";
 import { summarize } from "./summarize.ts";
 
 export { failedVerdict, VERIFIER_CONCURRENCY } from "./verify.ts";
+export { REVIEW_PATH } from "./paths.ts";
 
 /**
  * run.json of a review, written as `running` when the run dir is made and again when the run
@@ -497,4 +499,11 @@ export function savedRows(
 }
 
 /** Nodes listed in the verbose `Steps` row, by path below the review node. */
-const STEP_ROW = ["collect", "summarize", "find/review", "find/verify", "find/check", "report"];
+const STEP_ROW = [
+  REVIEW_PATH.collect,
+  REVIEW_PATH.summarize,
+  REVIEW_PATH.review,
+  REVIEW_PATH.verify,
+  REVIEW_PATH.check,
+  REVIEW_PATH.report,
+];

@@ -80,6 +80,11 @@ export interface RunOptions {
   /** Node name; default: the flow function's name. E.g. `verifier:F-001`. */
   name?: string;
   /**
+   * One of many runs of the same flow, such as a verifier per finding: per-path views skip this
+   * node and sum its children under the parent's path. Only instance names may contain `:`.
+   */
+  instance?: boolean;
+  /**
    * Opens a nested run in this dir (relative to the current run dir, or absolute), whose parent
    * must exist: its own run.json, calls.jsonl, prompts/, and raw/. `meta` goes in its run.json.
    */
@@ -178,7 +183,7 @@ export function startRun<I, O>(flow: Flow<I, O>, input: I, options: StartRunOpti
       options.onActivity ?? ((a) => log(`  [${a.taskId} ${formatElapsed(a.elapsedMs)}] ${a.text}`)),
     verbose: options.verbose ?? false,
   };
-  const root = newScope(nodeName(flow, options.name), "flow", run, null, options.before);
+  const root = newScope(nodeName(flow, options.name, false), "flow", run, null, options.before);
   return withRun(run, root, () => enter(root, env, (ctx) => flow(input, ctx)), options.onFinish);
 }
 
@@ -193,6 +198,7 @@ interface Scope {
   children: (Scope | FlowNode)[];
   end: { status: FlowNode["status"]; error: string | null; durationMs: number } | null;
   detached: boolean;
+  instance: boolean;
 }
 
 function newScope(
@@ -201,7 +207,7 @@ function newScope(
   run: Run,
   parent: Scope | null,
   before: readonly TimedStep[] = [],
-  detached = false,
+  { detached = false, instance = false }: { detached?: boolean; instance?: boolean } = {},
 ): Scope {
   const scope: Scope = {
     name,
@@ -214,6 +220,7 @@ function newScope(
     children: before.map(stepNode),
     end: null,
     detached,
+    instance,
   };
   parent?.children.push(scope);
   return scope;
@@ -232,11 +239,20 @@ function stepNode(step: TimedStep): FlowNode {
   };
 }
 
-/** The node name: the caller's, else the function's; an anonymous flow must be given one. */
-function nodeName(flow: Flow<never, unknown>, name: string | undefined): string {
+/**
+ * The node name: the caller's, else the function's; an anonymous flow must be given one. A colon
+ * is kept for instances, since older records mark instances by it.
+ */
+function nodeName(flow: Flow<never, unknown>, name: string | undefined, instance: boolean): string {
   const resolved = name ?? flow.name;
   if (resolved === "") throw new Error("An anonymous flow needs a name: pass `name` to run it.");
-  return resolved;
+  return checkName(resolved, instance);
+}
+
+function checkName(name: string, instance: boolean): string {
+  if (!instance && name.includes(":"))
+    throw new Error(`Node name "${name}" has a colon; only instance nodes may.`);
+  return name;
 }
 
 /** Writes run.json as `running`, runs body, then writes the final record, failed or not. */
@@ -309,6 +325,7 @@ function snapshot(scope: Scope): FlowNode {
       .reduce((sum, c) => addCallTotals(sum, c.totals), sumCalls(scope.calls)),
     children,
     ...(scope.detached ? { detached: true as const } : {}),
+    ...(scope.instance ? { instance: true as const } : {}),
   };
 }
 
@@ -370,7 +387,7 @@ function contextOf(scope: Scope, env: Env): FlowContext {
 
     run: (flow, input, opts) => runChild(scope, env, flow, input, opts),
 
-    step: (name, fn) => enter(newScope(name, "step", scope.run, scope), env, fn),
+    step: (name, fn) => enter(newScope(checkName(name, false), "step", scope.run, scope), env, fn),
 
     async parallel(branches) {
       const own = new AbortController();
@@ -469,10 +486,11 @@ async function runChild<I, O>(
     ...(opts.log === undefined ? {} : { log: opts.log }),
     afterCall: opts.afterCall === undefined ? env.afterCall : [...env.afterCall, opts.afterCall],
   };
-  const name = nodeName(flow, opts.name);
+  const name = nodeName(flow, opts.name, opts.instance === true);
   const call = (ctx: FlowContext) => flow(input, ctx);
+  const marks = { detached: opts.detached === true, instance: opts.instance === true };
   if (opts.dir === undefined) {
-    const scope = newScope(name, "flow", parent.run, parent, opts.before, opts.detached);
+    const scope = newScope(name, "flow", parent.run, parent, opts.before, marks);
     return enter(scope, childEnv, call);
   }
   const { root, meta = {} } = typeof opts.dir === "string" ? { root: opts.dir } : opts.dir;
@@ -484,6 +502,6 @@ async function runChild<I, O>(
     writing: Promise.resolve(),
     finished: false,
   };
-  const scope = newScope(name, "flow", run, parent, opts.before, opts.detached);
+  const scope = newScope(name, "flow", run, parent, opts.before, marks);
   return withRun(run, scope, () => enter(scope, childEnv, call));
 }

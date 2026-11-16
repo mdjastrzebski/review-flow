@@ -9,6 +9,7 @@ import { findNode, flattenTree, type CallRecord, type FlowNode } from "../../run
 import { WorkingTreeChangedError } from "../git.ts";
 import type { PullRequest } from "../github.ts";
 import { DEFAULT_MODELS } from "../models.ts";
+import { REVIEW_PATH } from "./paths.ts";
 import { DeclinedError, NoChangesError, runReview, type Preflight } from "./review.ts";
 import { ensureStateDir } from "../run-dir.ts";
 import { readIndex } from "../run-index.ts";
@@ -899,6 +900,17 @@ describe("runReview trust", () => {
       const report = await readFile(result.runDir.reportPath, "utf8");
       expect(report).toContain("## Rough edges (2)");
       expect(report).not.toContain("R-002");
+    });
+
+    it("records every step at its REVIEW_PATH", async () => {
+      const { runAgent } = stubAgent({
+        review: withEdges,
+        verdict: checks({ checks: ["R-001", "R-002", "R-003"].map((id) => check(id, "accurate")) }),
+      });
+      const result = await runReview({ ...baseOptions, summarize: true, cwd: repo, runAgent });
+
+      const run = JSON.parse(await readFile(result.runDir.runJsonPath, "utf8"));
+      expect(new Set(flattenTree(run.flow).keys())).toEqual(new Set(Object.values(REVIEW_PATH)));
     });
 
     it("marks every edge unclear when the checker fails, without failing the run", async () => {

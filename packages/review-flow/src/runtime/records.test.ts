@@ -76,12 +76,20 @@ describe("flattenTree", () => {
 
   it("sums the children of instance nodes across instances", () => {
     const tree = node("eval", 3, [
-      node("case:a", 1, [node("review", 1, [node("find", 1)])]),
-      node("case:b", 2, [node("review", 2, [node("find", 2)])]),
+      { ...node("a", 1, [node("review", 1, [node("find", 1)])]), instance: true },
+      { ...node("b", 2, [node("review", 2, [node("find", 2)])]), instance: true },
     ]);
     const flat = flattenTree(tree);
     expect([...flat.keys()]).toEqual(["review", "review/find"]);
     expect(flat.get("review/find")).toMatchObject({ calls: 2, costUsd: 3, durationMs: 20 });
+  });
+
+  it("treats a colon in the name as an instance in older records", () => {
+    const tree = node("eval", 3, [
+      node("case:a", 1, [node("review", 1)]),
+      node("case:b", 2, [node("review", 2)]),
+    ]);
+    expect([...flattenTree(tree).keys()]).toEqual(["review"]);
   });
 
   it("is empty without a tree", () => {

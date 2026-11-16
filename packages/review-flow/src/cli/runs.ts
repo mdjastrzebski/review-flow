@@ -14,6 +14,7 @@ import {
   type ModelChoice,
   type NormalizedFinding,
   type Verdict,
+  REVIEW_PATH,
 } from "../review/index.ts";
 import {
   caseOutcome,
@@ -169,14 +170,17 @@ export function formatEvalCompare(a: LoadedEval, b: LoadedEval, options: TableOp
   return out.join("\n");
 }
 
-/** `-` when the run had no summary (no `summarize` node in its tree), or predates the summarizer. */
+/**
+ * `-` when the run had no summary (no `summarize` node in its tree, at the root of a review's or
+ * below an eval's case reviews), or predates the summarizer.
+ */
 function summarizerOf(run: {
   models: { summarizer?: ModelChoice };
   flow?: FlowNode | null;
 }): string {
   const { summarizer } = run.models;
   const summarized = [...flattenTree(run.flow ?? null).keys()].some(
-    (step) => step.split("/").at(-1) === "summarize",
+    (step) => step === REVIEW_PATH.summarize || step.endsWith(`/${REVIEW_PATH.summarize}`),
   );
   return summarizer === undefined || !summarized ? "-" : shortModel(summarizer);
 }

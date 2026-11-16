@@ -327,7 +327,7 @@ async function evaluate(
     const result = await ctx.run(
       reviewCase,
       { evalCase, caseRoot: paths.caseRoot(evalCase.id), options },
-      { name: `case:${evalCase.id}` },
+      { name: `case:${evalCase.id}`, instance: true },
     );
     results.push(result);
     ctx.annotate({ scores: summarizeCases(results) });
@@ -382,13 +382,13 @@ async function reviewCase(
     };
     logRows(reviewRows(prepared, runDirPaths(caseRoot)));
     review = await ctx.run(reviewFlow, prepared.input, {
-      name: "review",
+      name: CASE_REVIEW,
       dir: { root: caseRoot, meta: { ...prepared.meta } },
       before: [collectStep(prepared)],
       afterCall: prepared.afterCall,
       log,
     });
-    logRows(savedRows(review, prepared.input.steps, findNode(ctx.snapshot(), "review") ?? null));
+    logRows(savedRows(review, prepared.input.steps, findNode(ctx.snapshot(), CASE_REVIEW) ?? null));
   } catch (caught) {
     // Agents wrote to the checkout despite read-only settings: stop rather than carry on.
     if (caught instanceof WorkingTreeChangedError) throw caught;
@@ -452,6 +452,9 @@ async function reviewCase(
     ...(roughEdges === undefined ? {} : { roughEdges }),
   };
 }
+
+/** The node name of a case's review, below its `case:<id>` node. */
+const CASE_REVIEW = "review";
 
 /** Cases are merged PRs of public repos: third-party code, but reviewed by its maintainers. */
 const EVAL_CASE_TRUST: Trust = { level: "collaborator", reason: "eval case, a merged PR" };

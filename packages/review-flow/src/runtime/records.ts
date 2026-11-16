@@ -50,20 +50,22 @@ export interface FlowNode {
   children: FlowNode[];
   /** Recorded but not counted in the parent's totals or per-path views (`ctx.run` option). */
   detached?: true;
+  /** One of many runs of the same flow, such as `verifier:F-001` (`ctx.run` option). */
+  instance?: true;
 }
 
 /**
  * Totals per slash-joined path below `root`, in start order, e.g. `find` and `find/verify`.
- * Instance nodes (a colon in the name, such as `verifier:F-001`) are not listed; their children
- * count under the instance's parent path, summed across instances. So an eval's cases add up
- * per step. Detached nodes are left out.
+ * Instance nodes (such as `verifier:F-001`) are not listed; their children count under the
+ * instance's parent path, summed across instances. So an eval's cases add up per step. Detached
+ * nodes are left out.
  */
 export function flattenTree(root: FlowNode | null): Map<string, TimedTotals> {
   const out = new Map<string, TimedTotals>();
   const visit = (node: FlowNode, prefix: string) => {
     for (const child of node.children) {
       if (child.detached === true) continue;
-      if (isInstance(child.name)) {
+      if (isInstance(child)) {
         visit(child, prefix);
         continue;
       }
@@ -78,8 +80,11 @@ export function flattenTree(root: FlowNode | null): Map<string, TimedTotals> {
   return out;
 }
 
-/** A name like `verifier:F-001` or `case:x`: one of many runs of the same flow. */
-const isInstance = (name: string) => name.includes(":");
+/**
+ * Marked `instance`; older records mark it by a colon in the name, which only instance names may
+ * have (see `nodeName` in flow.ts).
+ */
+const isInstance = (node: FlowNode) => node.instance === true || node.name.includes(":");
 
 /** A node's totals with its wall time. */
 export function timedTotals(node: FlowNode): TimedTotals {

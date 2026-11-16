@@ -172,7 +172,7 @@ describe("tree", () => {
       await ctx.agent(task("own"));
       await ctx.step("group", async (c) => {
         await c.run(leaf, "a");
-        await c.run(leaf, "b", { name: "leaf:b" });
+        await c.run(leaf, "b", { name: "leaf:b", instance: true });
       });
       return ctx.snapshot();
     };
@@ -353,10 +353,14 @@ describe("ctx.map", () => {
       await ctx.agent(task(id));
     };
     const root = async (_: null, ctx: FlowContext) =>
-      ctx.map(items.slice(0, 3), (id, _i, c) => c.run(item, id, { name: `item:${id}` }), {
-        concurrency: 3,
-        warmFirst: true,
-      });
+      ctx.map(
+        items.slice(0, 3),
+        (id, _i, c) => c.run(item, id, { name: `item:${id}`, instance: true }),
+        {
+          concurrency: 3,
+          warmFirst: true,
+        },
+      );
     await startRun(root, null, options(runAgent));
     expect(events.slice(0, 2)).toEqual(["start a", "activity"]);
     expect(events).toHaveLength(4);
@@ -397,7 +401,11 @@ describe("nested runs", () => {
     };
     const root = async (_: null, ctx: FlowContext) => {
       await ctx.agent(task("own"));
-      await ctx.run(child, "x", { name: "case:x", dir: { root: "x", meta: { kind: "case" } } });
+      await ctx.run(child, "x", {
+        name: "case:x",
+        instance: true,
+        dir: { root: "x", meta: { kind: "case" } },
+      });
     };
     await startRun(root, null, options(runAgent));
 
@@ -449,6 +457,33 @@ describe("nested runs", () => {
       }),
     ]);
     expect([...flattenTree(run.flow).keys()]).toEqual(["main"]);
+  });
+
+  it("marks instance nodes and sums their children under the parent's path", async () => {
+    const { runAgent } = fakeAgent();
+    const item = async (id: string, ctx: FlowContext) => {
+      await ctx.step("work", (c) => c.agent(task(id)));
+    };
+    const root = async (_: null, ctx: FlowContext) => {
+      for (const id of ["a", "b"]) await ctx.run(item, id, { name: `item:${id}`, instance: true });
+    };
+    await startRun(root, null, options(runAgent));
+
+    const run = await readJson<RunRecordBase>(dir.runJsonPath);
+    expect(run.flow?.children.map((c) => [c.name, c.instance])).toEqual([
+      ["item:a", true],
+      ["item:b", true],
+    ]);
+    expect(flattenTree(run.flow).get("work")).toMatchObject({ calls: 2 });
+  });
+
+  it("rejects a colon in the name of a node that is not an instance", async () => {
+    const { runAgent } = fakeAgent();
+    const child = async () => {};
+    const viaRun = async (_: null, ctx: FlowContext) => ctx.run(child, null, { name: "a:b" });
+    const viaStep = async (_: null, ctx: FlowContext) => ctx.step("a:b", async () => {});
+    await expect(startRun(viaRun, null, options(runAgent))).rejects.toThrow(/colon/);
+    await expect(startRun(viaStep, null, options(runAgent))).rejects.toThrow(/colon/);
   });
 
   it("runs a subtree on another harness and with its own afterCall", async () => {

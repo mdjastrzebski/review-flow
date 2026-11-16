@@ -29,7 +29,7 @@ export async function verify(
     findings,
     async (finding, _, c): Promise<[string, Verdict]> => [
       finding.id,
-      await c.run(verifier, { scope, finding }, { name: `verifier:${finding.id}` }),
+      await c.run(verifier, { scope, finding }, { name: `verifier:${finding.id}`, instance: true }),
     ],
     { concurrency: VERIFIER_CONCURRENCY, warmFirst: true },
   );

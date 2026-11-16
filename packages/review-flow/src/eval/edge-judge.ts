@@ -13,6 +13,7 @@ import {
 import { writeJson } from "../runtime/json.ts";
 import { findNode } from "../runtime/records.ts";
 import type { Harness, ModelChoice } from "../review/models.ts";
+import { REVIEW_PATH } from "../review/flows/paths.ts";
 import type { ReviewRunResult, RunRecord } from "../review/flows/review.ts";
 import { renderPrompt } from "../review/prompts.ts";
 import { describeRoughEdges } from "../review/rough-edges.ts";
@@ -42,7 +43,7 @@ export async function scoreRoughEdges(options: {
 }): Promise<RoughEdgeResult | null> {
   const { evalCase, review, caseRoot, judge } = options;
   if (review === null) return null;
-  const check = findNode(options.run?.flow ?? null, "find/check")?.totals;
+  const check = findNode(options.run?.flow ?? null, REVIEW_PATH.check)?.totals;
   // No check node: the reviewer returned none, so nothing was spent.
   const checkCost = check === undefined ? 0 : check.unknownCostCalls > 0 ? null : check.costUsd;
   const roughEdges = countRoughEdges(review.roughEdges, checkCost);
