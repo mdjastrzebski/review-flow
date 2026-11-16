@@ -155,7 +155,8 @@ export interface ReviewRunResult {
 /** collect → (summarize ‖ review → normalize → verify → rank) → report. */
 export async function runReview(options: ReviewRunOptions): Promise<ReviewRunResult> {
   const prepared = await prepareReview(options);
-  const { input, meta } = prepared;
+  const { input } = prepared;
+  const { meta } = input;
   const { runRoot } = options;
   const stateRepo = options.stateRepo ?? input.repo;
   const runDir =
@@ -165,68 +166,116 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
   // Before the Ask hint and the `running` run.json, so an `ask` that finds the run can read them.
   await writeFile(runDir.diffPath, input.diff);
   await writeJson(runDir.intentPath, input.intent);
-  const logTable: LogTable =
-    options.logTable ??
-    ((_, rows) => {
-      for (const [label, value] of rows) options.log(`${label}: ${value}`);
-    });
-  logTable("Review", reviewRows(prepared, runDir, options.askCommand));
-  // Outside the flow, so a failed run still indexes what it got to.
-  let findings: number | null = null;
-  let verdicts: VerdictCounts | null = null;
-  let flow: FlowNode | null = null;
-  const result = await startRun(
-    review,
-    {
-      ...input,
-      hooks: {
-        ...input.hooks,
-        onFindings: (n) => (findings = n),
-        onVerdicts: (v) => (verdicts = v),
-      },
-    },
-    {
-      dir: runDir,
-      runAgent: options.runAgent,
-      harness: input.meta.harness,
-      log: options.log,
-      ...(options.warn === undefined ? {} : { warn: options.warn }),
-      ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
-      verbose: options.verbose ?? false,
-      meta: { ...meta },
-      before: [collectStep(prepared)],
-      afterCall: prepared.afterCall,
-      onFinish: async (run) => {
-        flow = run.flow;
-        if (runRoot !== undefined) return;
-        await appendIndexEntry(stateRepo, {
-          id: path.basename(runDir.root),
-          kind: "review",
-          startedAt: run.startedAt,
-          durationMs: run.totals.durationMs,
-          status: run.status === "ok" ? "ok" : "failed",
+  return runPreparedReview(prepared, {
+    runDir,
+    logTable:
+      options.logTable ??
+      ((_, rows) => {
+        for (const [label, value] of rows) options.log(`${label}: ${value}`);
+      }),
+    ...(options.askCommand === undefined ? {} : { askCommand: options.askCommand }),
+    verbose: options.verbose ?? false,
+    launch: async (flow, flowInput, run) => {
+      // Outside the flow, so a failed run still indexes what it got to.
+      let findings: number | null = null;
+      let verdicts: VerdictCounts | null = null;
+      let node: FlowNode | null = null;
+      const hooks = flowInput.hooks;
+      const result = await startRun(
+        flow,
+        {
+          ...flowInput,
+          hooks: { ...hooks, onFindings: (n) => (findings = n), onVerdicts: (v) => (verdicts = v) },
+        },
+        {
+          dir: runDir,
+          runAgent: options.runAgent,
           harness: meta.harness,
-          models: meta.models,
-          base: meta.base,
-          head: meta.head,
-          ...(meta.pr === undefined ? {} : { pr: meta.pr.number }),
-          diff: prepared.stats,
-          findings,
-          verdicts,
-          costUsd: run.totals.costUsd,
-          unknownCostCalls: run.totals.unknownCostCalls,
-        });
-      },
+          log: options.log,
+          ...(options.warn === undefined ? {} : { warn: options.warn }),
+          ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
+          verbose: options.verbose ?? false,
+          ...run,
+          onFinish: async (record) => {
+            node = record.flow;
+            if (runRoot !== undefined) return;
+            await appendIndexEntry(stateRepo, {
+              id: path.basename(runDir.root),
+              kind: "review",
+              startedAt: record.startedAt,
+              durationMs: record.totals.durationMs,
+              status: record.status === "ok" ? "ok" : "failed",
+              harness: meta.harness,
+              models: meta.models,
+              base: meta.base,
+              head: meta.head,
+              ...(meta.pr === undefined ? {} : { pr: meta.pr.number }),
+              diff: prepared.stats,
+              findings,
+              verdicts,
+              costUsd: record.totals.costUsd,
+              unknownCostCalls: record.totals.unknownCostCalls,
+            });
+          },
+        },
+      );
+      return { result, node };
     },
-  );
-  logTable("Saved", savedRows(result, input.steps, options.verbose ? flow : null));
+  });
+}
+
+/** Where and how `runPreparedReview` runs a prepared review. */
+export interface PreparedReviewRun {
+  /** The run dir the review writes to; `launch` creates it if it doesn't exist yet. */
+  runDir: RunDir;
+  /** Shows the review box before the run and the saved files after it. */
+  logTable: LogTable;
+  askCommand?: ReviewRunOptions["askCommand"];
+  /** Adds step times to the saved files. */
+  verbose: boolean;
+  /**
+   * Runs `flow` on `input` with `run`'s options, as a top-level run (`startRun`) or nested in
+   * another flow (`ctx.run`); returns the result and the review's flow node.
+   */
+  launch: (
+    flow: typeof review,
+    input: ReviewInput,
+    run: ReviewLaunch,
+  ) => Promise<{ result: ReviewRunResult; node: FlowNode | null }>;
+}
+
+/** The run options every review is started with, for `startRun` or `ctx.run`. */
+export interface ReviewLaunch {
+  /** run.json's review fields. */
+  meta: Record<string, unknown>;
+  /** Collect, timed up to the run's start. */
+  before: TimedStep[];
+  /** Fails the call when an agent changed the checkout. */
+  afterCall: () => Promise<void>;
+}
+
+/**
+ * Runs a prepared review into `runDir`: shows the review box, runs the review flow through
+ * `launch` with collect as its first step and the checkout guard after each call, then lists the
+ * saved files.
+ */
+export async function runPreparedReview(
+  prepared: PreparedReview,
+  { runDir, logTable, askCommand, verbose, launch }: PreparedReviewRun,
+): Promise<ReviewRunResult> {
+  logTable("Review", reviewRows(prepared, runDir, askCommand));
+  const { result, node } = await launch(review, prepared.input, {
+    meta: { ...prepared.input.meta },
+    before: [collectStep(prepared)],
+    afterCall: prepared.afterCall,
+  });
+  logTable("Saved", savedRows(result, prepared.input.steps, verbose ? node : null));
   return result;
 }
 
-/** A collected review: the flow's input, run.json's fields, and the checkout guard. */
+/** A collected review: the flow's input and the checkout guard; run with `runPreparedReview`. */
 export interface PreparedReview {
   input: ReviewInput;
-  meta: ReviewMeta;
   /** The review box's rows up to the checkout. */
   setup: [string, string][];
   /** When collect started: the run's start. */
@@ -244,8 +293,8 @@ export interface ReviewInput {
   change: ChangeRange;
   intent: Intent;
   models: RoleModels;
-  /** What the report's header shows. */
-  meta: ReportMeta;
+  /** run.json's review fields; the report's header shows some of them. */
+  meta: ReviewMeta & { trust: Trust };
   steps: { summarize: boolean; find: boolean; roughEdges: boolean };
   hooks?: ReviewHooks;
 }
@@ -332,7 +381,6 @@ export async function prepareReview(options: ReviewRunOptions): Promise<Prepared
   // Taken after .review-flow/ exists; agents must leave the tree exactly like this.
   const status = await snapshotStatus(repo);
 
-  const baseRef = { ref: base, sha: baseSha };
   const { onSummary } = options;
   return {
     input: {
@@ -343,27 +391,20 @@ export async function prepareReview(options: ReviewRunOptions): Promise<Prepared
       models,
       meta: {
         harness,
-        trust: trust.level,
-        base: baseRef,
+        models,
+        base: { ref: base, sha: baseSha },
         head,
         ...(pr === undefined ? {} : { pr }),
+        trust,
+        checkout: repo,
+        summarize: runSummarize,
+        find: runFind,
+        roughEdges,
       },
       steps: { summarize: runSummarize, find: runFind, roughEdges },
       hooks: { onSummary: onSummary && ((summary) => onSummary(summary, trust.level)) },
     },
     setup,
-    meta: {
-      harness,
-      models,
-      base: baseRef,
-      head,
-      ...(pr === undefined ? {} : { pr }),
-      trust,
-      checkout: repo,
-      summarize: runSummarize,
-      find: runFind,
-      roughEdges,
-    },
     startedAt,
     stats,
     afterCall: () => assertStatusUnchanged(repo, status),
@@ -392,7 +433,7 @@ export class DeclinedError extends Error {
 }
 
 /** The review box: collect's rows, then the checkout, the run dir, and how to ask about the run. */
-export function reviewRows(
+function reviewRows(
   prepared: PreparedReview,
   runDir: RunDir,
   askCommand?: ReviewRunOptions["askCommand"],
@@ -449,7 +490,7 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
     c.writeFile(
       RUN_FILES.report,
       renderReport({
-        ...input.meta,
+        ...reportMeta(input.meta),
         models,
         durationMs,
         costUsd,
@@ -470,15 +511,20 @@ export async function review(input: ReviewInput, ctx: FlowContext): Promise<Revi
 
 const skipped = async () => null;
 
+/** The review's facts the report's header shows. */
+function reportMeta({ harness, base, head, pr, trust }: ReviewInput["meta"]): ReportMeta {
+  return { harness, base, head, ...(pr === undefined ? {} : { pr }), trust: trust.level };
+}
+
 const NOTHING_FOUND: FindResult = { findings: [], verdicts: {}, roughEdges: [] };
 
 /** Collect's step, timed up to now; recorded as the run's first step. */
-export function collectStep({ startedAt }: PreparedReview): TimedStep {
+function collectStep({ startedAt }: PreparedReview): TimedStep {
   return { name: "collect", startedAt, durationMs: Date.now() - startedAt.getTime() };
 }
 
 /** The files a finished review wrote; with its flow node, also the step times. */
-export function savedRows(
+function savedRows(
   { runDir, summary }: ReviewRunResult,
   steps: ReviewInput["steps"],
   node: FlowNode | null,

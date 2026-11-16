@@ -7,11 +7,8 @@ import { readJsonOrNull, writeJson } from "../runtime/json.ts";
 import { findNode, type RunRecordBase } from "../runtime/records.ts";
 import { createRunDirAt } from "../runtime/run-dir.ts";
 import {
-  collectStep,
   prepareReview,
-  reviewRows,
-  savedRows,
-  review as reviewFlow,
+  runPreparedReview,
   type ReviewRunOptions,
   type ReviewRunResult,
   type RunRecord,
@@ -376,19 +373,24 @@ async function reviewCase(
       // The checkout is clean; this also keeps a stray file out of the scored diff.
       committedOnly: true,
     });
-    // The eval's own table covers the setup; per case, only --verbose keeps the details.
-    const logRows = (rows: [string, string][]) => {
-      if (options.verbose) for (const [label, value] of rows) log(`${label}: ${value}`);
-    };
-    logRows(reviewRows(prepared, runDirPaths(caseRoot)));
-    review = await ctx.run(reviewFlow, prepared.input, {
-      name: CASE_REVIEW,
-      dir: { root: caseRoot, meta: { ...prepared.meta } },
-      before: [collectStep(prepared)],
-      afterCall: prepared.afterCall,
-      log,
+    review = await runPreparedReview(prepared, {
+      runDir: runDirPaths(caseRoot),
+      // The eval's own table covers the setup; per case, only --verbose keeps the details.
+      logTable: (_, rows) => {
+        if (options.verbose) for (const [label, value] of rows) log(`${label}: ${value}`);
+      },
+      verbose: options.verbose ?? false,
+      launch: async (flow, input, run) => {
+        const result = await ctx.run(flow, input, {
+          name: CASE_REVIEW,
+          dir: { root: caseRoot, meta: run.meta },
+          before: run.before,
+          afterCall: run.afterCall,
+          log,
+        });
+        return { result, node: findNode(ctx.snapshot(), CASE_REVIEW) ?? null };
+      },
     });
-    logRows(savedRows(review, prepared.input.steps, findNode(ctx.snapshot(), CASE_REVIEW) ?? null));
   } catch (caught) {
     // Agents wrote to the checkout despite read-only settings: stop rather than carry on.
     if (caught instanceof WorkingTreeChangedError) throw caught;
