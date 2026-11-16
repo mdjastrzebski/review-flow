@@ -1,8 +1,8 @@
 import { writeFile as fsWriteFile } from "node:fs/promises";
 import path from "node:path";
-import pLimit from "p-limit";
 import type { AgentCallTask, AgentResult, RunAgent } from "./agent.ts";
 import { runAgentCall, type TaskActivity } from "./call.ts";
+import { map, parallel, type Fork } from "./combinators.ts";
 import { formatElapsed } from "./format.ts";
 import { writeJson } from "./json.ts";
 import {
@@ -36,10 +36,7 @@ export interface FlowContext {
   warn(message: string): void;
 
   /** One agent call with bookkeeping. Task ids must be unique per run dir. */
-  agent<T>(
-    task: AgentCallTask<T>,
-    opts?: { onFirstActivity?: () => void },
-  ): Promise<AgentResult<T> & { call: CallRecord }>;
+  agent<T>(task: AgentCallTask<T>): Promise<AgentResult<T> & { call: CallRecord }>;
 
   /** Runs a child flow in its own scope (a `flow` node). */
   run<I, O>(flow: Flow<I, O>, input: I, opts?: RunOptions): Promise<O>;
@@ -85,10 +82,10 @@ export interface RunOptions {
    */
   instance?: boolean;
   /**
-   * Opens a nested run in this dir (relative to the current run dir, or absolute), whose parent
+   * Opens a nested run in dir `root` (relative to the current run dir, or absolute), whose parent
    * must exist: its own run.json, calls.jsonl, prompts/, and raw/. `meta` goes in its run.json.
    */
-  dir?: string | { root: string; meta?: Record<string, unknown> };
+  dir?: { root: string; meta?: Record<string, unknown> };
   /** Recorded as this flow's first steps; its start is the first one's. */
   before?: readonly TimedStep[];
   /** Runs after each agent call in this subtree, after inherited ones. */
@@ -348,7 +345,13 @@ async function enter<T>(scope: Scope, env: Env, fn: (ctx: FlowContext) => Promis
 }
 
 function contextOf(scope: Scope, env: Env): FlowContext {
-  const ctx: FlowContext = {
+  const fork: Fork<FlowContext> = (signal, onActivity) =>
+    contextOf(scope, {
+      ...env,
+      signal,
+      ...(onActivity === undefined ? {} : { onProgress: [...env.onProgress, onActivity] }),
+    });
+  return {
     signal: env.signal,
     path: scope.path,
     runDir: scope.run.dir,
@@ -356,8 +359,7 @@ function contextOf(scope: Scope, env: Env): FlowContext {
     log: env.log,
     warn: env.warn,
 
-    agent(task, opts) {
-      let active = false;
+    agent(task) {
       return runAgentCall(
         { ...task, signal: task.signal ?? env.signal },
         {
@@ -378,8 +380,6 @@ function contextOf(scope: Scope, env: Env): FlowContext {
               }),
         },
         () => {
-          if (!active) opts?.onFirstActivity?.();
-          active = true;
           for (const listener of env.onProgress) listener();
         },
       );
@@ -389,72 +389,9 @@ function contextOf(scope: Scope, env: Env): FlowContext {
 
     step: (name, fn) => enter(newScope(checkName(name, false), "step", scope.run, scope), env, fn),
 
-    async parallel(branches) {
-      const own = new AbortController();
-      const branchCtx = contextOf(scope, {
-        ...env,
-        signal: AbortSignal.any([env.signal, own.signal]),
-      });
-      // The first error thrown, which stops the other branches.
-      const errors: unknown[] = [];
-      const entries = Object.entries(branches);
-      const settled = await Promise.allSettled(
-        entries.map(([, fn]) =>
-          fn(branchCtx).catch((error: unknown) => {
-            errors.push(error);
-            own.abort(error);
-            throw error;
-          }),
-        ),
-      );
-      if (errors.length > 0) throw errors[0];
-      return Object.fromEntries(
-        entries.map(([key], i) => [key, (settled[i] as PromiseFulfilledResult<unknown>).value]),
-      ) as never;
-    },
+    parallel: (branches) => parallel(env.signal, fork, branches),
 
-    async map(items, fn, { concurrency, warmFirst = false }) {
-      const warm = Promise.withResolvers<void>();
-      if (!warmFirst) warm.resolve();
-      // rejectOnClear: otherwise cleared items never settle and allSettled hangs.
-      const limit = pLimit({ concurrency, rejectOnClear: true });
-      const own = new AbortController();
-      const signal = AbortSignal.any([env.signal, own.signal]);
-      const itemEnv: Env = { ...env, signal };
-      const firstEnv: Env = { ...itemEnv, onProgress: [...env.onProgress, warm.resolve] };
-      // The first thrown error, in the order thrown; cleared items reject later with AbortErrors.
-      const errors: unknown[] = [];
-      const settled = await Promise.allSettled(
-        items.map((item, index) =>
-          limit(async () => {
-            try {
-              if (index > 0) {
-                await warm.promise;
-                if (signal.aborted) throw signal.reason;
-              }
-              const result = await fn(
-                item,
-                index,
-                contextOf(scope, index === 0 ? firstEnv : itemEnv),
-              );
-              warm.resolve();
-              return result;
-            } catch (error) {
-              errors.push(error);
-              limit.clearQueue();
-              own.abort();
-              // After the abort, so waiting items see it and don't start.
-              warm.resolve();
-              throw error;
-            }
-          }),
-        ),
-      );
-      if (errors.length > 0) throw errors[0];
-      return settled.map(
-        (s) => (s as PromiseFulfilledResult<Awaited<ReturnType<typeof fn>>>).value,
-      );
-    },
+    map: (items, fn, opts) => map(env.signal, fork, items, fn, opts),
 
     async writeFile(name, data) {
       const file = scope.run.dir.path(name);
@@ -470,7 +407,6 @@ function contextOf(scope: Scope, env: Env): FlowContext {
 
     snapshot: () => snapshot(scope),
   };
-  return ctx;
 }
 
 async function runChild<I, O>(
@@ -493,7 +429,7 @@ async function runChild<I, O>(
     const scope = newScope(name, "flow", parent.run, parent, opts.before, marks);
     return enter(scope, childEnv, call);
   }
-  const { root, meta = {} } = typeof opts.dir === "string" ? { root: opts.dir } : opts.dir;
+  const { root, meta = {} } = opts.dir;
   const dir = await createRunDirAt(path.resolve(parent.run.dir.root, root));
   const run: Run = {
     dir,
