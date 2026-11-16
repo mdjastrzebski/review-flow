@@ -95,6 +95,8 @@ collect ─┬→ summarize ─────────────────�
 
 Each step records its own cost and time and can be skipped in config. Values marked _(eval)_ are set by measurement (see 13).
 
+**Structure.** A generic runtime runs _flows_: async functions `(input, ctx)` that compose by running child flows through `ctx` (`ctx.run`), so a flow is built like the steps it is made of. `ctx` also gives one agent call with its records (see 10), logical steps inside a flow, parallel branches where the first error stops the others, bounded fan-out, and the abort signal. The review layer implements the pipeline as flows on top of it (summarize, find, verify, check); eval runs the review flow per case, then the judges. The CLI assembles both. The runtime knows nothing about reviews.
+
 1. **Collect.** Resolve the target, base, and trust level, pick the checkout agents work in, and produce the diff. Exit cleanly when the diff is empty.
    - **Current branch** (no target): the developer's own checkout, since it holds the code under review, uncommitted changes included.
    - **Any other target** (PR, branch, commit, range): a temporary detached worktree at the target SHA under `.review-flow/worktrees/`, so the developer's checkout is never touched. It is removed when the run ends, including on failure or Ctrl-C, unless an `ask` holds it (see 7). Stale worktrees are removed at the start of the next run.
@@ -206,7 +208,7 @@ After reading the summary or findings, the developer may have follow-up question
 - **Loop.** Each question is one headless call (see 9), with the same read-only flags, guard hook, and worktree check as the review. Follow-ups get the earlier questions and answers in the prompt, so no saved agent session is needed. An empty line or Ctrl-D ends the session. `ask [run] "<question>"` answers one question and exits; a single argument with a space is the question, for the latest run.
 - **Answers.** Short Markdown, with a code reference (`file:line`) for each claim about the code. The answerer says when it doesn't know, and never recommends merging. Each answer prints its cost and time; the session total prints at the end.
 - **Trust.** The run's trust level applies (see 3). The questions are the developer's own input, so they are trusted.
-- **Records.** Questions and answers go to `asks.jsonl`, and each call to `calls.jsonl` under step `ask`. Ask cost is kept out of the review totals and the index line, so `compare` and `eval` stay comparable.
+- **Records.** Questions and answers go to `asks.jsonl`, and each call to `calls.jsonl` with path `ask`. Ask cost is kept out of the review totals and the index line, so `compare` and `eval` stay comparable.
 - **Role.** `answerer`, set under `roles`. It defaults to the verifier's harness, model, and effort, since both read code to check claims.
 
 **During the review.** Find and Verify take much longer than Summarize, so the developer can ask questions from a second terminal while they run:
@@ -350,26 +352,28 @@ Safety is layered, so it doesn't depend on any one CLI:
 
 Always on. Everything goes in `.review-flow/`, which contains its own `.gitignore` (`*`). The repo's `.gitignore` is never edited.
 
-Each call records: role, step, harness, model, effort, tokens (input, cache read, cache write, output), cost and cost source, wall time, status, and reads outside the worktree that ran. Steps and runs are rolled up from these records.
+Each call records: role, path (the scope that made it, such as `review/find/verify/verifier:F-001`), harness, model, effort, tokens (input, cache read, cache write, output), cost and cost source, wall time, status, and reads outside the worktree that ran. Steps and runs are rolled up from these records.
+
+`run.json` (`format: 2`) holds the run's inputs, its status and totals, and a **flow tree**: one node per flow or step, with its name, kind (`flow` or `step`), status (`ok`, `failed`, or `aborted` when another's failure stopped it), error, start, wall time, and totals of its own and its children's calls. A flow is any async function of an input and a context; its node takes the function's name unless the caller gives one, so renaming a flow function renames its saved paths; code reads the review's paths from one shared list, which a test checks against a real run. Per-step views, such as `compare`, read the tree by path (`find/verify`); _instance_ nodes, repeated runs of one flow such as `verifier:F-001` or an eval's `case:<id>`, are marked `instance` and summed under their parent's path. Only instance names may contain a colon, which older records use as the mark. A flow can open a nested run dir with its own `run.json` and `calls.jsonl`, such as an eval case; its totals roll up into the parent. A _detached_ subtree, such as an eval's judges, is recorded (node, calls, prompts, raw output) but left out of its ancestors' totals and per-path views. Runs in the older flat `steps` format can't be compared.
 
 Each run writes `.review-flow/runs/<timestamp>-<sha>/`:
 
-| File                | Content                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `run.json`          | Resolved config, target, base and head SHAs (and snapshot SHA), checkout path, trust level, status, per-step and total cost and time |
-| `calls.jsonl`       | One record per model call                                                                                                            |
-| `diff.patch`        | Reviewed diff                                                                                                                        |
-| `prompts/<task>.md` | Exact prompt per task                                                                                                                |
-| `raw/<task>.json`   | Raw harness output                                                                                                                   |
-| `summary.json`      | Summary (see 7)                                                                                                                      |
-| `findings.json`     | Findings (see 5)                                                                                                                     |
-| `pre-existing.json` | Pre-existing findings                                                                                                                |
-| `rough-edges.json`  | Rough edges with their check (see 5)                                                                                                 |
-| `report.md`         | Report                                                                                                                               |
-| `posted.json`       | What was posted, with comment ids                                                                                                    |
-| `intent.json`       | PR title and description, or commit messages, for `ask`                                                                              |
-| `asks.jsonl`        | Questions and answers from `ask` (see 7)                                                                                             |
-| `leases/<pid>`      | One per running `ask` that holds the run's worktree                                                                                  |
+| File                | Content                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `run.json`          | Resolved config, target, base and head SHAs (and snapshot SHA), checkout path, trust level, status, total cost and time, flow tree |
+| `calls.jsonl`       | One record per model call                                                                                                          |
+| `diff.patch`        | Reviewed diff                                                                                                                      |
+| `prompts/<task>.md` | Exact prompt per task                                                                                                              |
+| `raw/<task>.json`   | Raw harness output                                                                                                                 |
+| `summary.json`      | Summary (see 7)                                                                                                                    |
+| `findings.json`     | Findings (see 5)                                                                                                                   |
+| `pre-existing.json` | Pre-existing findings                                                                                                              |
+| `rough-edges.json`  | Rough edges with their check (see 5)                                                                                               |
+| `report.md`         | Report                                                                                                                             |
+| `posted.json`       | What was posted, with comment ids                                                                                                  |
+| `intent.json`       | PR title and description, or commit messages, for `ask`                                                                            |
+| `asks.jsonl`        | Questions and answers from `ask` (see 7)                                                                                           |
+| `leases/<pid>`      | One per running `ask` that holds the run's worktree                                                                                |
 
 Each run also appends one summary line to `.review-flow/index.jsonl`: preset, config hash, `REVIEW.md` hash, diff size, finding counts, cost, and time. Eval runs are included and marked as evals. `runs` and `compare` read from it.
 
@@ -385,7 +389,7 @@ Each run also appends one summary line to `.review-flow/index.jsonl`: preset, co
   - **Counts and cost.** Rough edges per case, the checker's verdicts (accurate, unclear, inaccurate), and the `check` step's cost. Recall and findings per clean case, compared with an eval with rough edges off, show whether they distract the reviewer.
   - **Rubric judge.** A judge on a different model from the reviewer, ideally another model family, answers yes or no for each rough edge: the code is as described, the fix is more than a small edit in one file, the suggestion says what moves where, and a maintainer of the repo would act on it. It reads the case's checkout and doesn't see the checker's verdicts. Gives the share that passes all four (postable) and the checker's calibration: how often it kept edges the judge rejects, and dropped edges the judge accepts. Its cost is reported apart. A **pairwise judge** (`compare --judge-rough-edges`) is for prompt changes: per case, it sees the two evals' kept rough edges, blind and in random order, in the case's checkout, and says which set it would rather post, or a tie. An empty set may win over weak ones. Gives each eval's wins and B's win rate, ties counting half.
   - **Known rough edges.** Mined like bug cases: a later refactor of lines the case wrote, or a maintainer's design comment on the case's PR that led to a change (then the case's head is the commented commit). The bug judge matches rough edges to them, with the refactor diff in place of the fix diff. This gives recall only: no later refactor doesn't mean no rough edge.
-- **Eval run.** A run dir with `run.json` (config, per-step totals summed over cases, scores), `cases.json` (result per case), and `cases/<id>/`, a full run dir per case.
+- **Eval run.** A run dir with `run.json` (config, scores, and a flow tree with a `case:<id>` node per case), `cases.json` (result per case), `cases/<id>/`, a full run dir per case, and the judges' calls in its own `calls.jsonl`. Its totals count the case reviews only, so evals stay comparable; judges are recorded but detached.
 - **Size.** About 35 cases, with a baseline set of 12 (7 bug, 5 clean, the default) for measuring changes, and a smoke set of 5 for a quick end-to-end check. The dataset, its sources, and its format are in [eval/](eval/README.md).
 
 `compare` shows two evals side by side. Every change to prompts, models, presets, or pipeline values is checked with an eval before it becomes a default.

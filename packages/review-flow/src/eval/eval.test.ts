@@ -1,0 +1,622 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentResult, AgentTask, RunAgent } from "../runtime/agent.ts";
+import { loadRun } from "./compare.ts";
+import { flattenTree } from "../runtime/records.ts";
+import { evalRunPaths, runEval, type EvalRunOptions } from "./eval.ts";
+import { pairwiseEvals } from "./pairwise.ts";
+import type { EvalCase } from "./dataset.ts";
+import type { CaseResult } from "./score.ts";
+import { WorkingTreeChangedError } from "../review/git.ts";
+import { DEFAULT_MODELS } from "../review/models.ts";
+import { runDirPaths } from "../review/run-dir.ts";
+import { readIndex } from "../review/run-index.ts";
+import { ROUGH_EDGE_CHECKER_TASK_ID } from "../review/rough-edges.ts";
+import type { FindingsOutput, ReviewOutput, RoughEdgeChecks, Verdict } from "../review/schemas.ts";
+
+let tmp: string;
+let remote: string;
+let results: string;
+let checkouts: string;
+let base: string;
+let head: string;
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+async function initRepo(dir: string): Promise<void> {
+  execFileSync("mkdir", ["-p", dir]);
+  git(dir, "init", "-q", "-b", "main");
+  git(dir, "config", "user.email", "test@example.com");
+  git(dir, "config", "user.name", "Test");
+}
+
+beforeEach(async () => {
+  tmp = await mkdtemp(path.join(tmpdir(), "review-flow-eval-"));
+  remote = path.join(tmp, "upstream", "lib");
+  results = path.join(tmp, "results");
+  checkouts = path.join(tmp, "checkouts");
+  await initRepo(remote);
+  await writeFile(path.join(remote, "a.txt"), "a\n");
+  git(remote, "add", ".");
+  git(remote, "commit", "-qm", "init");
+  base = git(remote, "rev-parse", "HEAD");
+  await writeFile(path.join(remote, "a.txt"), "a\nb\n");
+  git(remote, "commit", "-qam", "change");
+  head = git(remote, "rev-parse", "HEAD");
+  await initRepo(results);
+});
+
+afterEach(async () => {
+  await rm(tmp, { recursive: true, force: true });
+});
+
+function evalCase(id: string, overrides: Partial<EvalCase> = {}): EvalCase {
+  return {
+    id,
+    kind: "clean",
+    preset: "full",
+    title: id,
+    repo: remote,
+    pr: "",
+    base,
+    head,
+    diff: { files: 1, additions: 1, deletions: 0 },
+    bugs: [],
+    ...overrides,
+  };
+}
+
+const bugCase = (id: string, line: number) =>
+  evalCase(id, {
+    kind: "bug",
+    bugs: [{ description: "d", fix: "f", locations: [{ file: "a.txt", start: line, end: line }] }],
+  });
+
+const review: FindingsOutput = {
+  findings: [
+    {
+      localId: "1",
+      title: "t",
+      file: "a.txt",
+      lineStart: 2,
+      lineEnd: 2,
+      category: "correctness",
+      severity: "low",
+      claim: "c",
+      rationale: "r",
+      suggestedFix: null,
+    },
+  ],
+};
+
+const confirmed: Verdict = {
+  verdict: "confirmed",
+  severity: "medium",
+  confidence: "high",
+  fixCost: "trivial",
+  evidence: [{ kind: "code_ref", file: "a.txt", line: 2, detail: "here" }],
+  summary: "s",
+  fix: { assessment: "not_applicable", detail: "d", betterFix: null },
+};
+
+function stubAgent(effect: (task: AgentTask<unknown>) => Promise<void> = async () => {}): RunAgent {
+  return async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+    await effect(task as AgentTask<unknown>);
+    const answer = task.role === "reviewer" ? review : confirmed;
+    return {
+      status: "success",
+      output: task.schema.parse(answer),
+      rawText: "",
+      raw: {},
+      costUsd: 0.25,
+      usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+      durationMs: 10,
+    };
+  };
+}
+
+function options(cases: EvalCase[], runAgent = stubAgent()): EvalRunOptions {
+  return {
+    cwd: results,
+    cases,
+    dataset: "eval/cases",
+    // Summaries are covered by the pipeline tests; here they would only add calls.
+    summarize: false,
+    checkoutsDir: checkouts,
+    harness: "claude",
+    models: DEFAULT_MODELS.claude,
+    runAgent,
+    log: () => {},
+  };
+}
+
+describe("runEval", () => {
+  it("reviews each case in its own checkout and saves a scored eval run", async () => {
+    const cases = [
+      bugCase("hit", 2),
+      bugCase("miss", 40),
+      evalCase("clean"),
+      evalCase("gone", { head: "f".repeat(40) }),
+    ];
+    const result = await runEval(options(cases));
+
+    expect(result.cases.map((c) => [c.id, c.status, c.bugs?.map((b) => b.found) ?? null])).toEqual([
+      ["hit", "ok", [true]],
+      ["miss", "ok", [false]],
+      ["clean", "ok", []],
+      ["gone", "failed", null],
+    ]);
+    expect(result.cases[3]?.error).toContain(`has no commit ${"f".repeat(40)}`);
+    expect(result.scores).toMatchObject({
+      cases: 4,
+      failed: 1,
+      bugs: 2,
+      found: 1,
+      recall: 0.5,
+      cleanCases: 1,
+      cleanFindings: 1,
+      costUsd: 1.5,
+    });
+
+    // One clone, at the case head, untouched: run dirs live in the eval run, not the checkout.
+    const checkout = path.join(checkouts, "upstream__lib");
+    expect(await readdir(checkouts)).toEqual(["upstream__lib"]);
+    expect(git(checkout, "rev-parse", "HEAD")).toBe(head);
+    expect(git(checkout, "status", "--porcelain", "--ignored")).toBe("");
+
+    const caseDirs = await readdir(path.join(result.root, "cases"));
+    expect(caseDirs.toSorted()).toEqual(["clean", "hit", "miss"]);
+    await stat(path.join(result.root, "cases", "hit", "report.md"));
+
+    const saved = JSON.parse(await readFile(path.join(result.root, "cases.json"), "utf8"));
+    expect(saved).toEqual(result.cases);
+
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.cases).toEqual(result.cases);
+    expect(loaded.run).toMatchObject({
+      status: "ok",
+      dataset: { dir: "eval/cases", subset: null, cases: ["hit", "miss", "clean", "gone"] },
+      scores: result.scores,
+    });
+    expect(loaded.run.flow?.children.map((c) => c.name)).toEqual([
+      "case:hit",
+      "case:miss",
+      "case:clean",
+      "case:gone",
+    ]);
+    const steps = flattenTree(loaded.run.flow);
+    expect([...steps.keys()]).toEqual([
+      "review",
+      "review/collect",
+      "review/find",
+      "review/find/review",
+      "review/find/verify",
+      "review/report",
+    ]);
+    expect(steps.get("review/find/review")).toMatchObject({ calls: 3, costUsd: 0.75 });
+    expect(steps.get("review/find/verify")).toMatchObject({ calls: 3, costUsd: 0.75 });
+    expect(loaded.run.totals).toMatchObject({ calls: 6, costUsd: 1.5, unknownCostCalls: 0 });
+    // Each case's review is a run of its own, like a review outside an eval.
+    const caseRun = JSON.parse(
+      await readFile(path.join(result.root, "cases", "hit", "run.json"), "utf8"),
+    );
+    expect(caseRun).toMatchObject({ format: 2, status: "ok", flow: { name: "review" } });
+    expect(caseRun.totals).toMatchObject({ calls: 2, costUsd: 0.5 });
+
+    expect(await readIndex(results)).toEqual([
+      expect.objectContaining({
+        id: path.basename(result.root),
+        kind: "eval",
+        status: "ok",
+        cases: 4,
+        scores: result.scores,
+        costUsd: 1.5,
+      }),
+    ]);
+  });
+
+  it("scores rough edges apart from findings when asked for", async () => {
+    const edge = (localId: string): ReviewOutput["roughEdges"][number] => ({
+      localId,
+      title: `edge ${localId}`,
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      priority: "medium",
+      observation: "o",
+      suggestion: "s",
+    });
+    const withEdges: ReviewOutput = { ...review, roughEdges: ["1", "2", "3"].map(edge) };
+    const checks: RoughEdgeChecks = {
+      checks: [
+        { localId: "R-001", status: "accurate", note: "n", priority: "medium" },
+        { localId: "R-002", status: "unclear", note: "n", priority: "medium" },
+        { localId: "R-003", status: "inaccurate", note: "n", priority: "medium" },
+      ],
+    };
+    const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? withEdges
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? checks
+            : confirmed;
+      return {
+        status: "success",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        costUsd: 0.25,
+        usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([bugCase("hit", 2), evalCase("clean")], runAgent),
+      roughEdges: true,
+    });
+
+    const counts = { accurate: 1, unclear: 1, inaccurate: 1, checkCostUsd: 0.25 };
+    expect(result.cases.map((c) => c.roughEdges)).toEqual([counts, counts]);
+    // Findings are scored as without rough edges.
+    expect(result.scores).toMatchObject({ found: 1, cleanFindings: 1, costUsd: 1.5 });
+    expect(result.scores.roughEdges).toEqual({
+      cases: 2,
+      accurate: 2,
+      unclear: 2,
+      inaccurate: 2,
+      keptPerCase: 2,
+      keptPerCleanCase: 2,
+      checkCostUsd: 0.5,
+      unknownCheckCost: 0,
+    });
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    expect(loaded.run.roughEdges).toBe(true);
+    expect(flattenTree(loaded.run.flow).get("review/find/check")).toMatchObject({
+      calls: 2,
+      costUsd: 0.5,
+    });
+  });
+
+  it("grades rough edges with the rubric judge, in the checkout, apart from the run's cost", async () => {
+    const edge: ReviewOutput["roughEdges"][number] = {
+      localId: "1",
+      title: "edge",
+      file: "a.txt",
+      lineStart: 1,
+      lineEnd: 2,
+      lens: "design",
+      priority: "medium",
+      observation: "o",
+      suggestion: "s",
+    };
+    const reviewer: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      const answer =
+        task.role === "reviewer"
+          ? { ...review, roughEdges: [edge] }
+          : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+            ? {
+                checks: [{ localId: "R-001", status: "inaccurate", note: "n", priority: "medium" }],
+              }
+            : confirmed;
+      return {
+        status: "success",
+        output: task.schema.parse(answer),
+        rawText: "",
+        raw: {},
+        costUsd: 0.25,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const judged: AgentTask<unknown>[] = [];
+    const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      judged.push(task as AgentTask<unknown>);
+      const grade = {
+        reason: "r",
+        accurate: true,
+        notLocal: true,
+        concrete: true,
+        worthPosting: true,
+      };
+      return {
+        status: "success",
+        output: task.schema.parse({ edges: [{ id: "R-001", ...grade }] }),
+        rawText: "",
+        raw: {},
+        costUsd: 0.4,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([evalCase("clean")], reviewer),
+      roughEdges: true,
+      edgeJudge: {
+        harness: "cursor",
+        model: { model: "judge-model", effort: null },
+        runAgent: judge,
+      },
+    });
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.cwd).toContain(checkouts);
+    expect(result.cases[0]?.roughEdges?.judge).toMatchObject({
+      status: "ok",
+      kept: 0,
+      dropped: 1,
+      droppedPostable: 1,
+    });
+    expect(result.scores.roughEdges?.judge).toMatchObject({
+      droppedAcceptedRate: 1,
+      postableRate: 1,
+      costUsd: 0.4,
+    });
+    // The judge's cost isn't the run's: reviewer, verifier, and checker at $0.25 each.
+    expect(result.scores.costUsd).toBe(0.75);
+    const saved = JSON.parse(
+      await readFile(path.join(result.root, "cases", "clean", "rough-edge-judge.json"), "utf8"),
+    );
+    expect(saved).toEqual([
+      {
+        id: "R-001",
+        title: "edge",
+        check: "inaccurate",
+        grade: expect.objectContaining({ worthPosting: true }),
+      },
+    ]);
+    // The judge's call is the eval's: in its calls.jsonl and totals, on the judge's harness.
+    const calls = (await readFile(path.join(result.root, "calls.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(calls).toEqual([
+      expect.objectContaining({
+        taskId: "judge-rough-edges-clean",
+        path: "eval/case:clean/edge-judge",
+        harness: "cursor",
+        costUsd: 0.4,
+      }),
+    ]);
+    const loaded = await loadRun(result.root);
+    if (loaded.kind !== "eval") throw new Error("expected an eval run");
+    // Detached: in the tree, but not in the eval's totals or per-path views.
+    expect(loaded.run.totals).toMatchObject({ calls: 3, costUsd: 0.75 });
+    const caseNode = loaded.run.flow?.children[0];
+    expect(caseNode?.children.map((c) => [c.name, c.detached ?? false])).toEqual([
+      ["review", false],
+      ["edge-judge", true],
+    ]);
+    expect(caseNode?.totals).toMatchObject({ calls: 3, costUsd: 0.75 });
+    expect([...flattenTree(loaded.run.flow).keys()]).not.toContain("edge-judge");
+    expect(loaded.run.edgeJudge).toEqual({
+      harness: "cursor",
+      model: { model: "judge-model", effort: null },
+    });
+  });
+
+  it("records the bug judge's calls but keeps them out of the eval's totals", async () => {
+    const reviewer = stubAgent();
+    const runAgent: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      if (task.role !== "judge") return reviewer(task);
+      return {
+        status: "success",
+        output: task.schema.parse({
+          bugs: [{ bug: 0, matches: [{ finding: "F-001", reason: "same defect" }] }],
+        }),
+        rawText: "",
+        raw: {},
+        costUsd: 0.4,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const result = await runEval({
+      ...options([bugCase("hit", 30), evalCase("clean")], runAgent),
+      judge: { model: "judge-model", effort: null },
+    });
+
+    // The judge matched the finding the location didn't.
+    expect(result.cases[0]?.bugs?.[0]?.found).toBe(true);
+    const calls = (await readFile(path.join(result.root, "calls.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(calls).toEqual([
+      expect.objectContaining({ taskId: "judge-hit", path: "eval/case:hit/judge", costUsd: 0.4 }),
+    ]);
+    await stat(path.join(result.root, "prompts", "judge-hit.md"));
+    await stat(path.join(result.root, "raw", "judge-hit.json"));
+
+    // Totals are the case reviews' alone, as before judges were recorded.
+    const caseTotals = await Promise.all(
+      ["hit", "clean"].map(async (id) => {
+        const run = JSON.parse(
+          await readFile(path.join(result.root, "cases", id, "run.json"), "utf8"),
+        );
+        return run.totals as { calls: number; costUsd: number };
+      }),
+    );
+    const loaded = await loadRun(result.root);
+    expect(loaded.run.totals).toMatchObject({
+      calls: caseTotals.reduce((sum, t) => sum + t.calls, 0),
+      costUsd: caseTotals.reduce((sum, t) => sum + t.costUsd, 0),
+    });
+    expect(loaded.run.totals).toMatchObject({ calls: 4, costUsd: 1 });
+    expect([...flattenTree(loaded.run.flow).keys()]).not.toContain("judge");
+    expect(await readIndex(results)).toEqual([expect.objectContaining({ costUsd: 1 })]);
+  });
+
+  it("leaves rough edges out of the results by default", async () => {
+    const result = await runEval(options([evalCase("clean")]));
+    expect(result.cases[0]).not.toHaveProperty("roughEdges");
+    expect(result.scores).not.toHaveProperty("roughEdges");
+  });
+
+  it("judges two evals' kept rough edges pairwise, in the checkout", async () => {
+    const withEdge =
+      (title: string, status: "accurate" | "inaccurate"): RunAgent =>
+      async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+        const answer =
+          task.role === "reviewer"
+            ? {
+                ...review,
+                roughEdges: [
+                  {
+                    localId: "1",
+                    title,
+                    file: "a.txt",
+                    lineStart: 1,
+                    lineEnd: 2,
+                    lens: "design",
+                    priority: "medium",
+                    observation: "o",
+                    suggestion: "s",
+                  },
+                ],
+              }
+            : task.taskId === ROUGH_EDGE_CHECKER_TASK_ID
+              ? { checks: [{ localId: "R-001", status, note: "n", priority: "medium" }] }
+              : confirmed;
+        return {
+          status: "success",
+          output: task.schema.parse(answer),
+          rawText: "",
+          raw: {},
+          costUsd: 0.25,
+          usage: null,
+          durationMs: 10,
+        };
+      };
+    const cases = [evalCase("clean")];
+    const a = await runEval({
+      ...options(cases, withEdge("edge A", "accurate")),
+      roughEdges: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const b = await runEval({
+      ...options(cases, withEdge("edge B", "inaccurate")),
+      roughEdges: true,
+    });
+
+    const judged: AgentTask<unknown>[] = [];
+    const judge: RunAgent = async <T>(task: AgentTask<T>): Promise<AgentResult<T>> => {
+      judged.push(task as AgentTask<unknown>);
+      return {
+        status: "success",
+        output: task.schema.parse({ reason: "r", preferred: "1" }),
+        rawText: "",
+        raw: {},
+        costUsd: 0.3,
+        usage: null,
+        durationMs: 10,
+      };
+    };
+    const record = await pairwiseEvals({
+      a: { root: a.root, cases: a.cases },
+      b: { root: b.root, cases: b.cases },
+      dataset: cases,
+      checkoutsDir: checkouts,
+      model: { model: "judge-model", effort: null },
+      runAgent: judge,
+      log: () => {},
+      random: () => 0.1,
+    });
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.cwd).toBe(path.join(checkouts, "upstream__lib"));
+    // B's only rough edge was dropped by its checker, so the judge sees an empty set.
+    expect(judged[0]?.prompt).toContain("edge A");
+    expect(judged[0]?.prompt).not.toContain("edge B");
+    expect(record.cases).toEqual([
+      expect.objectContaining({ id: "clean", winner: "a", kept: { a: 1, b: 0 } }),
+    ]);
+    expect(record.scores).toMatchObject({ aWins: 1, bWinRate: 0, costUsd: 0.3 });
+    const saved = JSON.parse(
+      await readFile(path.join(a.root, `pairwise-${path.basename(b.root)}.json`), "utf8"),
+    );
+    expect(saved.scores).toEqual(record.scores);
+
+    // A case that fails before the judge is recorded as failed; the record is still saved.
+    await rm(runDirPaths(evalRunPaths(a.root).caseRoot("clean")).diffPath);
+    const failed = await pairwiseEvals({
+      a: { root: a.root, cases: a.cases },
+      b: { root: b.root, cases: b.cases },
+      dataset: cases,
+      checkoutsDir: checkouts,
+      model: { model: "judge-model", effort: null },
+      runAgent: judge,
+      log: () => {},
+    });
+    expect(judged).toHaveLength(1);
+    expect(failed.cases).toEqual([
+      expect.objectContaining({
+        id: "clean",
+        winner: null,
+        error: expect.stringContaining("ENOENT"),
+      }),
+    ]);
+    expect(failed.scores).toMatchObject({ cases: 0, failed: 1 });
+  });
+
+  it("refuses a pairwise judge when no case ran with rough edges in both evals", async () => {
+    const a = await runEval(options([evalCase("clean")]));
+    await expect(
+      pairwiseEvals({
+        a: { root: a.root, cases: a.cases },
+        b: { root: a.root, cases: a.cases },
+        dataset: [evalCase("clean")],
+        checkoutsDir: checkouts,
+        model: { model: null, effort: null },
+        runAgent: stubAgent(),
+        log: () => {},
+      }),
+    ).rejects.toThrow("No case ran with rough edges in both evals.");
+  });
+
+  it("reuses the clone on the next eval", async () => {
+    await runEval(options([bugCase("hit", 2)]));
+    // A new upstream commit is fetched when a case needs it.
+    await writeFile(path.join(remote, "a.txt"), "a\nb\nc\n");
+    git(remote, "commit", "-qam", "more");
+    const next = git(remote, "rev-parse", "HEAD");
+    // Not the same second as the first eval's run dir.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const result = await runEval(
+      options([bugCase("hit", 2), evalCase("next", { base: head, head: next })]),
+    );
+    expect(result.cases.map((c) => c.status)).toEqual(["ok", "ok"]);
+    expect(git(path.join(checkouts, "upstream__lib"), "rev-parse", "HEAD")).toBe(next);
+  });
+
+  it("stops when an agent changes the checkout, keeping the cases it finished", async () => {
+    const runAgent = stubAgent();
+    // Calls 1 and 2 review and verify the first case; call 3 is the second case's reviewer.
+    let calls = 0;
+    const writing: RunAgent = async (task) => {
+      calls++;
+      if (calls === 3) await writeFile(path.join(task.cwd, "stray.txt"), "x");
+      return runAgent(task);
+    };
+    const error = await runEval(
+      options([bugCase("first", 2), bugCase("second", 2)], writing),
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorkingTreeChangedError);
+
+    const [entry] = await readIndex(results);
+    expect(entry).toMatchObject({ kind: "eval", status: "failed" });
+    const root = path.join(results, ".review-flow", "runs", entry?.id ?? "");
+    const cases = JSON.parse(await readFile(path.join(root, "cases.json"), "utf8")) as CaseResult[];
+    expect(cases.map((c) => c.id)).toEqual(["first"]);
+    const loaded = await loadRun(root);
+    expect(loaded.run).toMatchObject({ status: "failed", scores: { cases: 1, found: 1 } });
+  });
+});

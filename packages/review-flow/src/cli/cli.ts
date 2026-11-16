@@ -2,8 +2,6 @@
 import { Command, Option } from "commander";
 import { getAgent } from "../agents/index.ts";
 import {
-  DEFAULT_DATASET_DIR,
-  defaultFixesDir,
   EFFORTS,
   HARNESSES,
   HARNESS_ENFORCEMENT,
@@ -19,12 +17,10 @@ import {
   defaultBase,
   ensureStateDir,
   fetchPr,
+  isReviewEntry,
   parsePrTarget,
   postableItems,
   postableRoughEdges,
-  defaultCheckoutsDir,
-  loadDataset,
-  loadRun,
   readIndex,
   readUserConfig,
   resolveEdgeJudge,
@@ -32,20 +28,28 @@ import {
   resolveModels,
   resolveRepoRoot,
   resolveRun,
-  pairwiseEvals,
-  rescoreEval,
-  runEval,
   runReview,
   saveUserHarness,
   userConfigPath,
-  type EdgeJudge,
   type Effort,
-  type EvalSubset,
   type Harness,
   type Preflight,
   type Trust,
   type TrustLevel,
-} from "../core/index.ts";
+} from "../review/index.ts";
+import {
+  DEFAULT_DATASET_DIR,
+  defaultFixesDir,
+  defaultCheckoutsDir,
+  loadDataset,
+  loadRun,
+  pairwiseEvals,
+  rescoreEval,
+  runEval,
+  type EdgeJudge,
+  type EvalSubset,
+  type IndexEntry,
+} from "../eval/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { askCommand, type AskOptions } from "./ask.ts";
@@ -62,25 +66,14 @@ import {
   formatRuns,
 } from "./runs.ts";
 
-// pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
-const userCwd = process.env.INIT_CWD ?? process.cwd();
+// The package.json at the package root, from both src/cli/ and dist/cli/.
+const { version } = JSON.parse(
+  await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
+
+const program = new Command("review-flow").version(version);
+
 const colorOptions = () => ({ color: process.stdout.hasColors?.() ?? false });
-
-interface AgentOptions {
-  harness?: Harness;
-  model?: string;
-  verifierModel?: string;
-  summarizerModel?: string;
-  effort?: Effort;
-  verifierEffort?: Effort;
-  summarizerEffort?: Effort;
-  judgeModel?: string;
-  judgeEffort?: Effort;
-  claudeBin: string;
-  cursorBin: string;
-}
-
-type Log = (message: string) => void;
 
 /** The pipeline's progress hooks. */
 const progressHooks = (progress: Progress) => ({
@@ -95,63 +88,8 @@ const progressHooks = (progress: Progress) => ({
     (answerer.model === null ? "" : ` --model ${answerer.model}`),
 });
 
-/** --harness, else the saved one, else asked in a TTY and saved for next time. */
-async function resolveHarness(flag: Harness | undefined): Promise<Harness> {
-  if (flag !== undefined) return flag;
-  const saved = (await readUserConfig()).harness;
-  if (saved !== undefined) return saved;
-  if (!interactive()) throw new Error(`No harness set. Pass --harness (${HARNESSES.join(", ")}).`);
-  const harness = await choose("Harness", HARNESSES, "claude");
-  if (harness === null) throw new Error("No harness chosen.");
-  await saveUserHarness(harness);
-  note.info(`Saved to ${userConfigPath()}; --harness overrides it.`);
-  return harness;
-}
-
-async function resolveAgent(options: AgentOptions) {
-  const harness = await resolveHarness(options.harness);
-  return {
-    harness,
-    models: resolveModels(harness, {
-      model: options.model ?? null,
-      verifierModel: options.verifierModel ?? null,
-      summarizerModel: options.summarizerModel ?? null,
-      effort: options.effort ?? null,
-      verifierEffort: options.verifierEffort ?? null,
-      summarizerEffort: options.summarizerEffort ?? null,
-    }),
-    runAgent: getAgent(harness, {
-      claudeBin: options.claudeBin,
-      cursorBin: options.cursorBin,
-    }),
-  };
-}
-
-/** Harness, model, effort, and binary options, shared by review and eval. */
-function addAgentOptions(command: Command): Command {
-  return command
-    .addOption(
-      new Option(
-        "-H, --harness <name>",
-        "agent harness; default: the one saved in the user config, asked for in a TTY",
-      ).choices(HARNESSES),
-    )
-    .option(
-      "--model <id>",
-      "model for every role (summarizer, reviewer, verifier), unless overridden",
-    )
-    .option("--verifier-model <id>", "model for the verifiers")
-    .option("--summarizer-model <id>", "model for the summarizer")
-    .addOption(
-      new Option("--effort <level>", "effort for every role, unless overridden").choices(EFFORTS),
-    )
-    .addOption(new Option("--verifier-effort <level>", "effort for the verifiers").choices(EFFORTS))
-    .addOption(
-      new Option("--summarizer-effort <level>", "effort for the summarizer").choices(EFFORTS),
-    )
-    .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
-    .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent");
-}
+// pnpm runs scripts from the workspace root; INIT_CWD is where the user ran the command.
+const userCwd = process.env.INIT_CWD ?? process.cwd();
 
 const verboseOption = () =>
   new Option(
@@ -160,446 +98,6 @@ const verboseOption = () =>
   )
     .default(false)
     .conflicts("quiet");
-
-interface ReviewOptions extends AgentOptions {
-  base?: string;
-  /** false with --no-summary. */
-  summary: boolean;
-  /** false for `review-flow summary`. */
-  find: boolean;
-  committedOnly: boolean;
-  trust?: TrustLevel;
-  allowUnenforced: boolean;
-  repo: string;
-  quiet: boolean;
-  verbose: boolean;
-}
-
-/**
- * Applies --trust and the harness policy, and in a TTY returns the pre-flight confirmation that
- * the pipeline asks for external targets.
- */
-function applyTrust(
-  detected: Trust,
-  harness: Harness,
-  options: ReviewOptions,
-  progress: Progress,
-): { trust: Trust; confirmSpend?: (preflight: Preflight) => Promise<boolean> } {
-  const trust = overrideTrust(detected, options.trust);
-  const warning = checkHarnessTrust(
-    harness,
-    HARNESS_ENFORCEMENT[harness],
-    trust,
-    options.allowUnenforced,
-  );
-  if (warning !== null) progress.warn(warning);
-  if (interactive()) return { trust, confirmSpend };
-  if (trust.level === "external") {
-    progress.warn(`Reviewing an external target (${trust.reason}) without asking: no terminal.`);
-  }
-  return { trust };
-}
-
-/**
- * Shows the diff size and the cost estimate, and asks before any agent runs. Drawn on stderr with
- * the prompt, so --quiet still shows what the yes is for.
- */
-async function confirmSpend({ trust, diff, estimate }: Preflight): Promise<boolean> {
-  const range =
-    estimate === null
-      ? "no past runs to estimate from"
-      : `${formatCost(estimate.minUsd)}–${formatCost(estimate.maxUsd)}, from ${estimate.runs} past run(s) of similar size`;
-  const rows = [
-    ["Trust", `${trust.level} (${trust.reason})`],
-    ["Diff", `${diff.files} file(s), +${diff.additions} −${diff.deletions}`],
-    ["Estimate", range],
-  ];
-  note.box(
-    rows.map(([label, value]) => `${label!.padEnd(8)}  ${value}`).join("\n"),
-    "Before spending",
-  );
-  return confirm("Review it?");
-}
-
-/** The default base, fetched from origin; in a TTY the user can confirm or replace it. */
-async function askBase(repo: string, log: Log): Promise<string> {
-  log("No --base given; fetching the default branch from origin...");
-  const { ref, warning } = await defaultBase(repo);
-  if (warning !== null) note.warn(warning);
-  if (!interactive()) return ref;
-  const base = await ask("Base", ref);
-  if (base === null) throw new Error("No base chosen.");
-  return base;
-}
-
-/**
- * Fetches the PR, checks out its head in a temporary worktree, and reviews it there against the
- * PR's base. The worktree is removed afterwards, also on Ctrl-C, unless an `ask` holds it.
- */
-async function reviewPr(
-  target: string,
-  agent: Awaited<ReturnType<typeof resolveAgent>>,
-  options: ReviewOptions,
-  progress: Progress,
-) {
-  const { log } = progress;
-  if (options.base !== undefined) throw new Error("--base can't be used with a PR target.");
-  const repo = await resolveRepoRoot(options.repo);
-  log(`Fetching PR ${target}...`);
-  const { pr, body, base } = await fetchPr(repo, target);
-  progress.logTable(`PR #${pr.number}`, [
-    ["Title", pr.title],
-    ["Base", base],
-    ["Head", pr.headSha.slice(0, 7)],
-  ]);
-  const trust = applyTrust(prTrust(pr), agent.harness, options, progress);
-
-  await ensureStateDir(repo);
-  const worktree = await createReviewWorktree(repo, pr.headSha);
-  const onSigint = () => {
-    worktree.removeSync();
-    process.exit(130);
-  };
-  process.once("SIGINT", onSigint);
-  try {
-    const result = await runReview({
-      ...agent,
-      ...trust,
-      cwd: worktree.dir,
-      stateRepo: repo,
-      pr,
-      prBody: body,
-      base,
-      committedOnly: true,
-      summarize: options.summary,
-      find: options.find,
-      ...progressHooks(progress),
-      verbose: options.verbose,
-    });
-    return { ...result, base, trust: trust.trust };
-  } finally {
-    process.off("SIGINT", onSigint);
-    await worktree.remove();
-  }
-}
-
-async function review(target: string | undefined, options: ReviewOptions): Promise<void> {
-  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
-  const prTarget = target === undefined ? null : parsePrTarget(target);
-  if (target !== undefined && prTarget === null) {
-    throw new Error(
-      `Unsupported target "${target}". Only PR numbers and URLs are supported so far.`,
-    );
-  }
-  let result;
-  try {
-    const agent = await resolveAgent(options);
-    if (prTarget !== null) {
-      result = await reviewPr(prTarget, agent, options, progress);
-    } else {
-      const trust = applyTrust(OWN_CHECKOUT, agent.harness, options, progress);
-      const base = options.base ?? (await askBase(options.repo, progress.log));
-      result = {
-        ...(await runReview({
-          ...agent,
-          ...trust,
-          cwd: options.repo,
-          base,
-          committedOnly: options.committedOnly,
-          summarize: options.summary,
-          find: options.find,
-          ...progressHooks(progress),
-          verbose: options.verbose,
-        })),
-        base,
-        trust: trust.trust,
-      };
-    }
-  } catch (error) {
-    progress.end();
-    if (error instanceof DeclinedError) {
-      note.info(error.message);
-      return;
-    }
-    if (!(error instanceof NoChangesError)) throw error;
-    // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
-    note.info(`Nothing to review: ${error.message}`);
-    return;
-  }
-  progress.end();
-
-  if (options.quiet) {
-    // Only the run dir, so scripts can do: R=$(review-flow review --quiet ...)
-    console.log(result.runDir.root);
-    return;
-  }
-  const format = { ...colorOptions(), width: Math.min(process.stdout.columns ?? 100, 100) };
-  // A live display already showed the summary (or warned that it failed) during the run.
-  if (result.summary !== null && progress.onSummary === undefined) {
-    console.log(formatSummary(result.summary, result.trust.level, format));
-  }
-  if (!options.find) {
-    console.log(`\nReport: ${result.runDir.reportPath}\n`);
-    return;
-  }
-  console.log(formatFindings({ ...result, reportPath: result.runDir.reportPath }, format));
-
-  if (prTarget !== null && interactive()) {
-    const postable =
-      result.summary?.status === "ok" ||
-      postableItems(result.findings, result.verdicts).length > 0 ||
-      postableRoughEdges(result.roughEdges).length > 0;
-    if (postable && (await confirm("Post to the PR?"))) {
-      await postRun(result.runDir.root, colorOptions());
-    } else if (postable) {
-      console.log(`Post later with: ${launcher()} post ${path.basename(result.runDir.root)}`);
-    }
-  }
-}
-
-async function post(ref: string | undefined, options: { repo: string }): Promise<void> {
-  const repo = await resolveRepoRoot(options.repo);
-  let id = ref;
-  if (id === undefined) {
-    const latest = (await readIndex(repo)).findLast(
-      (e) => e.kind === "review" && e.pr !== undefined,
-    );
-    if (latest === undefined) throw new Error("No PR review to post. Review a PR first.");
-    id = latest.id;
-  }
-  await postRun((await resolveRun(repo, id, userCwd)).root, colorOptions());
-}
-
-/** The judge's model and effort; its default is the verifier's. */
-function addJudgeOptions(command: Command): Command {
-  return command
-    .option("--judge-model <id>", "model for the judge that matches findings to known bugs")
-    .option("--no-fix-diff", "don't show the judge each bug's fix diff, only its description")
-    .addOption(new Option("--judge-effort <level>", "effort for the judge").choices(EFFORTS));
-}
-
-function judgeOf(agent: Awaited<ReturnType<typeof resolveAgent>>, options: AgentOptions) {
-  return resolveJudge(agent.harness, agent, {
-    model: options.judgeModel ?? null,
-    effort: options.judgeEffort ?? null,
-  });
-}
-
-/** The rough-edge judge: on the eval's harness unless --edge-judge-harness says otherwise. */
-function edgeJudgeOf(
-  agent: Awaited<ReturnType<typeof resolveAgent>>,
-  options: EvalOptions,
-  progress: Progress,
-): EdgeJudge {
-  const harness = options.edgeJudgeHarness ?? agent.harness;
-  const model = resolveEdgeJudge(harness, {
-    model: options.edgeJudgeModel ?? null,
-    effort: options.edgeJudgeEffort ?? null,
-  });
-  if (harness === agent.harness && model.model === agent.models.reviewer.model) {
-    progress.warn(
-      `The rough-edge judge uses the reviewer's model (${model.model ?? "harness default"}); it may prefer its own output.`,
-    );
-  }
-  return {
-    harness,
-    model,
-    runAgent:
-      harness === agent.harness
-        ? agent.runAgent
-        : getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
-  };
-}
-
-interface EvalOptions extends AgentOptions {
-  /** false with --no-fix-diff. */
-  fixDiff: boolean;
-  /** false with --no-judge. */
-  judge: boolean;
-  roughEdges: boolean;
-  edgeJudgeHarness?: Harness;
-  edgeJudgeModel?: string;
-  edgeJudgeEffort?: Effort;
-  smoke: boolean;
-  full: boolean;
-  summary: boolean;
-  case?: string[];
-  dataset: string;
-  checkouts: string;
-  repo: string;
-  quiet: boolean;
-  verbose: boolean;
-}
-
-async function evaluate(options: EvalOptions): Promise<void> {
-  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
-  const dataset = path.resolve(userCwd, options.dataset);
-  if (options.smoke && options.full) throw new Error("Use --smoke or --full, not both.");
-  // Without a subset flag, the baseline set; chosen cases (--case) may come from any set.
-  const subset: EvalSubset = options.smoke
-    ? "smoke"
-    : options.full || options.case
-      ? "full"
-      : "baseline";
-  let result;
-  try {
-    const agent = await resolveAgent(options);
-    result = await runEval({
-      ...agent,
-      judge: options.judge ? judgeOf(agent, options) : undefined,
-      edgeJudge:
-        options.judge && options.roughEdges ? edgeJudgeOf(agent, options, progress) : undefined,
-      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
-      cwd: options.repo,
-      cases: await loadDataset(dataset, { subset, ids: options.case ?? [] }),
-      dataset,
-      subset,
-      summarize: options.summary,
-      roughEdges: options.roughEdges,
-      checkoutsDir: path.resolve(userCwd, options.checkouts),
-      ...progressHooks(progress),
-      verbose: options.verbose,
-    });
-  } finally {
-    progress.end();
-  }
-  // Like review: --quiet prints only the run dir.
-  console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
-}
-
-interface RescoreCliOptions extends AgentOptions {
-  /** false with --no-fix-diff. */
-  fixDiff: boolean;
-  dataset: string;
-  repo: string;
-  quiet: boolean;
-  verbose: boolean;
-}
-
-/** Scores a finished eval again with the judge; the eval's own files stay as they were. */
-async function rescore(ref: string, options: RescoreCliOptions): Promise<void> {
-  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
-  const repo = await resolveRepoRoot(options.repo);
-  const { root } = await resolveRun(repo, ref, userCwd);
-  const agent = await resolveAgent(options);
-  let result;
-  try {
-    result = await rescoreEval({
-      root,
-      cases: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
-      judge: judgeOf(agent, options),
-      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
-      runAgent: agent.runAgent,
-      log: progress.log,
-      warn: progress.warn,
-    });
-  } finally {
-    progress.end();
-  }
-  console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
-}
-
-async function runs(options: { repo: string; limit: string }): Promise<void> {
-  const limit = Number(options.limit);
-  if (!Number.isInteger(limit) || limit < 1) throw new Error("--limit must be a positive integer");
-  const entries = await readIndex(await resolveRepoRoot(options.repo));
-  console.log(formatRuns(entries.slice(-limit), colorOptions()));
-}
-
-interface CompareOptions {
-  repo: string;
-  judgeRoughEdges: boolean;
-  edgeJudgeHarness?: Harness;
-  edgeJudgeModel?: string;
-  edgeJudgeEffort?: Effort;
-  claudeBin: string;
-  cursorBin: string;
-  dataset: string;
-  checkouts: string;
-}
-
-async function compare(a: string, b: string, options: CompareOptions): Promise<void> {
-  const repo = await resolveRepoRoot(options.repo);
-  const [rootA, rootB] = await Promise.all(
-    [a, b].map(async (ref) => (await resolveRun(repo, ref, userCwd)).root),
-  );
-  const [runA, runB] = await Promise.all([rootA, rootB].map((root) => loadRun(root!)));
-  if (runA?.kind === "eval" && runB?.kind === "eval") {
-    console.log(formatEvalCompare(runA, runB, colorOptions()));
-    if (!options.judgeRoughEdges) return;
-    // Blind to both evals' reviewers; on A's harness unless told otherwise.
-    const harness = options.edgeJudgeHarness ?? runA.run.harness;
-    const model = resolveEdgeJudge(harness, {
-      model: options.edgeJudgeModel ?? null,
-      effort: options.edgeJudgeEffort ?? null,
-    });
-    const progress = createProgress({ quiet: false, verbose: false, cwd: userCwd });
-    for (const run of [runA.run, runB.run]) {
-      if (run.harness === harness && run.models.reviewer.model === model.model) {
-        progress.warn(
-          `The pairwise judge uses a reviewer's model (${model.model ?? "harness default"}); it may prefer that eval's rough edges.`,
-        );
-        break;
-      }
-    }
-    let record;
-    try {
-      record = await pairwiseEvals({
-        a: { root: rootA!, cases: runA.cases },
-        b: { root: rootB!, cases: runB.cases },
-        dataset: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
-        checkoutsDir: path.resolve(userCwd, options.checkouts),
-        model,
-        runAgent: getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
-        log: progress.log,
-        warn: progress.warn,
-      });
-    } finally {
-      progress.end();
-    }
-    console.log(`\n${formatPairwise(record, colorOptions())}`);
-  } else if (options.judgeRoughEdges) {
-    throw new Error("--judge-rough-edges compares two eval runs.");
-  } else if (runA?.kind === "review" && runB?.kind === "review") {
-    console.log(formatCompare(runA, runB, colorOptions()));
-  } else {
-    throw new Error("Can't compare a review run with an eval run.");
-  }
-}
-
-// The package.json at the package root, from both src/cli/ and dist/cli/.
-const { version } = JSON.parse(
-  await readFile(new URL("../../package.json", import.meta.url), "utf8"),
-) as { version: string };
-
-const program = new Command("review-flow").version(version);
-
-/** Target, base, and output options, shared by review and summary. */
-function addTargetOptions(command: Command): Command {
-  return addAgentOptions(
-    command
-      .argument("[target]", "PR number or URL; default: the current branch")
-      .option(
-        "-b, --base <ref>",
-        "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
-      ),
-  )
-    .option("--repo <path>", "repository to review", userCwd)
-    .option("--committed-only", "review HEAD only, without uncommitted changes", false)
-    .addOption(
-      new Option(
-        "--trust <level>",
-        "trust level of the target; default: detected (own checkout, same-repo PR, fork PR)",
-      ).choices(TRUST_LEVELS),
-    )
-    .option(
-      "--allow-unenforced",
-      "allow a harness that can't enforce read-only agents on an external target",
-      false,
-    )
-    .option("-q, --quiet", "no progress or other output; print only the run dir path", false)
-    .addOption(verboseOption());
-}
 
 addTargetOptions(
   program
@@ -752,4 +250,509 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
+}
+
+/** Target, base, and output options, shared by review and summary. */
+function addTargetOptions(command: Command): Command {
+  return addAgentOptions(
+    command
+      .argument("[target]", "PR number or URL; default: the current branch")
+      .option(
+        "-b, --base <ref>",
+        "base ref to diff against (merge-base...HEAD); default: origin/main, fetched, confirmed in a TTY",
+      ),
+  )
+    .option("--repo <path>", "repository to review", userCwd)
+    .option("--committed-only", "review HEAD only, without uncommitted changes", false)
+    .addOption(
+      new Option(
+        "--trust <level>",
+        "trust level of the target; default: detected (own checkout, same-repo PR, fork PR)",
+      ).choices(TRUST_LEVELS),
+    )
+    .option(
+      "--allow-unenforced",
+      "allow a harness that can't enforce read-only agents on an external target",
+      false,
+    )
+    .option("-q, --quiet", "no progress or other output; print only the run dir path", false)
+    .addOption(verboseOption());
+}
+
+/** Harness, model, effort, and binary options, shared by review and eval. */
+function addAgentOptions(command: Command): Command {
+  return command
+    .addOption(
+      new Option(
+        "-H, --harness <name>",
+        "agent harness; default: the one saved in the user config, asked for in a TTY",
+      ).choices(HARNESSES),
+    )
+    .option(
+      "--model <id>",
+      "model for every role (summarizer, reviewer, verifier), unless overridden",
+    )
+    .option("--verifier-model <id>", "model for the verifiers")
+    .option("--summarizer-model <id>", "model for the summarizer")
+    .addOption(
+      new Option("--effort <level>", "effort for every role, unless overridden").choices(EFFORTS),
+    )
+    .addOption(new Option("--verifier-effort <level>", "effort for the verifiers").choices(EFFORTS))
+    .addOption(
+      new Option("--summarizer-effort <level>", "effort for the summarizer").choices(EFFORTS),
+    )
+    .option("--claude-bin <path>", "Claude Code CLI binary", "claude")
+    .option("--cursor-bin <path>", "Cursor agent CLI binary", "agent");
+}
+
+interface ReviewOptions extends AgentOptions {
+  base?: string;
+  /** false with --no-summary. */
+  summary: boolean;
+  /** false for `review-flow summary`. */
+  find: boolean;
+  committedOnly: boolean;
+  trust?: TrustLevel;
+  allowUnenforced: boolean;
+  repo: string;
+  quiet: boolean;
+  verbose: boolean;
+}
+
+interface AgentOptions {
+  harness?: Harness;
+  model?: string;
+  verifierModel?: string;
+  summarizerModel?: string;
+  effort?: Effort;
+  verifierEffort?: Effort;
+  summarizerEffort?: Effort;
+  judgeModel?: string;
+  judgeEffort?: Effort;
+  claudeBin: string;
+  cursorBin: string;
+}
+
+async function review(target: string | undefined, options: ReviewOptions): Promise<void> {
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
+  const prTarget = target === undefined ? null : parsePrTarget(target);
+  if (target !== undefined && prTarget === null) {
+    throw new Error(
+      `Unsupported target "${target}". Only PR numbers and URLs are supported so far.`,
+    );
+  }
+  let result;
+  try {
+    const agent = await resolveAgent(options);
+    if (prTarget !== null) {
+      result = await reviewPr(prTarget, agent, options, progress);
+    } else {
+      const trust = applyTrust(OWN_CHECKOUT, agent.harness, options, progress);
+      const base = options.base ?? (await askBase(options.repo, progress.log));
+      result = {
+        ...(await runReview({
+          ...agent,
+          ...trust,
+          cwd: options.repo,
+          base,
+          committedOnly: options.committedOnly,
+          summarize: options.summary,
+          find: options.find,
+          ...progressHooks(progress),
+          verbose: options.verbose,
+        })),
+        base,
+        trust: trust.trust,
+      };
+    }
+  } catch (error) {
+    progress.end();
+    if (error instanceof DeclinedError) {
+      note.info(error.message);
+      return;
+    }
+    if (!(error instanceof NoChangesError)) throw error;
+    // Nothing to review is a clean exit; stderr keeps --quiet's stdout empty (no run dir).
+    note.info(`Nothing to review: ${error.message}`);
+    return;
+  }
+  progress.end();
+
+  if (options.quiet) {
+    // Only the run dir, so scripts can do: R=$(review-flow review --quiet ...)
+    console.log(result.runDir.root);
+    return;
+  }
+  const format = { ...colorOptions(), width: Math.min(process.stdout.columns ?? 100, 100) };
+  // A live display already showed the summary (or warned that it failed) during the run.
+  if (result.summary !== null && progress.onSummary === undefined) {
+    console.log(formatSummary(result.summary, result.trust.level, format));
+  }
+  if (!options.find) {
+    console.log(`\nReport: ${result.runDir.reportPath}\n`);
+    return;
+  }
+  console.log(formatFindings({ ...result, reportPath: result.runDir.reportPath }, format));
+
+  if (prTarget !== null && interactive()) {
+    const postable =
+      result.summary?.status === "ok" ||
+      postableItems(result.findings, result.verdicts).length > 0 ||
+      postableRoughEdges(result.roughEdges).length > 0;
+    if (postable && (await confirm("Post to the PR?"))) {
+      await postRun(result.runDir.root, colorOptions());
+    } else if (postable) {
+      console.log(`Post later with: ${launcher()} post ${path.basename(result.runDir.root)}`);
+    }
+  }
+}
+
+async function resolveAgent(options: AgentOptions) {
+  const harness = await resolveHarness(options.harness);
+  return {
+    harness,
+    models: resolveModels(harness, {
+      model: options.model ?? null,
+      verifierModel: options.verifierModel ?? null,
+      summarizerModel: options.summarizerModel ?? null,
+      effort: options.effort ?? null,
+      verifierEffort: options.verifierEffort ?? null,
+      summarizerEffort: options.summarizerEffort ?? null,
+    }),
+    runAgent: getAgent(harness, {
+      claudeBin: options.claudeBin,
+      cursorBin: options.cursorBin,
+    }),
+  };
+}
+
+/** --harness, else the saved one, else asked in a TTY and saved for next time. */
+async function resolveHarness(flag: Harness | undefined): Promise<Harness> {
+  if (flag !== undefined) return flag;
+  const saved = (await readUserConfig()).harness;
+  if (saved !== undefined) return saved;
+  if (!interactive()) throw new Error(`No harness set. Pass --harness (${HARNESSES.join(", ")}).`);
+  const harness = await choose("Harness", HARNESSES, "claude");
+  if (harness === null) throw new Error("No harness chosen.");
+  await saveUserHarness(harness);
+  note.info(`Saved to ${userConfigPath()}; --harness overrides it.`);
+  return harness;
+}
+
+/**
+ * Fetches the PR, checks out its head in a temporary worktree, and reviews it there against the
+ * PR's base. The worktree is removed afterwards, also on Ctrl-C, unless an `ask` holds it.
+ */
+async function reviewPr(
+  target: string,
+  agent: Awaited<ReturnType<typeof resolveAgent>>,
+  options: ReviewOptions,
+  progress: Progress,
+) {
+  const { log } = progress;
+  if (options.base !== undefined) throw new Error("--base can't be used with a PR target.");
+  const repo = await resolveRepoRoot(options.repo);
+  log(`Fetching PR ${target}...`);
+  const { pr, body, base } = await fetchPr(repo, target);
+  progress.logTable(`PR #${pr.number}`, [
+    ["Title", pr.title],
+    ["Base", base],
+    ["Head", pr.headSha.slice(0, 7)],
+  ]);
+  const trust = applyTrust(prTrust(pr), agent.harness, options, progress);
+
+  await ensureStateDir(repo);
+  const worktree = await createReviewWorktree(repo, pr.headSha);
+  const onSigint = () => {
+    worktree.removeSync();
+    process.exit(130);
+  };
+  process.once("SIGINT", onSigint);
+  try {
+    const result = await runReview({
+      ...agent,
+      ...trust,
+      cwd: worktree.dir,
+      stateRepo: repo,
+      pr,
+      prBody: body,
+      base,
+      committedOnly: true,
+      summarize: options.summary,
+      find: options.find,
+      ...progressHooks(progress),
+      verbose: options.verbose,
+    });
+    return { ...result, base, trust: trust.trust };
+  } finally {
+    process.off("SIGINT", onSigint);
+    await worktree.remove();
+  }
+}
+
+/**
+ * Applies --trust and the harness policy, and in a TTY returns the pre-flight confirmation that
+ * the pipeline asks for external targets.
+ */
+function applyTrust(
+  detected: Trust,
+  harness: Harness,
+  options: ReviewOptions,
+  progress: Progress,
+): { trust: Trust; confirmSpend?: (preflight: Preflight) => Promise<boolean> } {
+  const trust = overrideTrust(detected, options.trust);
+  const warning = checkHarnessTrust(
+    harness,
+    HARNESS_ENFORCEMENT[harness],
+    trust,
+    options.allowUnenforced,
+  );
+  if (warning !== null) progress.warn(warning);
+  if (interactive()) return { trust, confirmSpend };
+  if (trust.level === "external") {
+    progress.warn(`Reviewing an external target (${trust.reason}) without asking: no terminal.`);
+  }
+  return { trust };
+}
+
+/**
+ * Shows the diff size and the cost estimate, and asks before any agent runs. Drawn on stderr with
+ * the prompt, so --quiet still shows what the yes is for.
+ */
+async function confirmSpend({ trust, diff, estimate }: Preflight): Promise<boolean> {
+  const range =
+    estimate === null
+      ? "no past runs to estimate from"
+      : `${formatCost(estimate.minUsd)}–${formatCost(estimate.maxUsd)}, from ${estimate.runs} past run(s) of similar size`;
+  const rows = [
+    ["Trust", `${trust.level} (${trust.reason})`],
+    ["Diff", `${diff.files} file(s), +${diff.additions} −${diff.deletions}`],
+    ["Estimate", range],
+  ];
+  note.box(
+    rows.map(([label, value]) => `${label!.padEnd(8)}  ${value}`).join("\n"),
+    "Before spending",
+  );
+  return confirm("Review it?");
+}
+
+type Log = (message: string) => void;
+
+/** The default base, fetched from origin; in a TTY the user can confirm or replace it. */
+async function askBase(repo: string, log: Log): Promise<string> {
+  log("No --base given; fetching the default branch from origin...");
+  const { ref, warning } = await defaultBase(repo);
+  if (warning !== null) note.warn(warning);
+  if (!interactive()) return ref;
+  const base = await ask("Base", ref);
+  if (base === null) throw new Error("No base chosen.");
+  return base;
+}
+
+/** The judge's model and effort; its default is the verifier's. */
+function addJudgeOptions(command: Command): Command {
+  return command
+    .option("--judge-model <id>", "model for the judge that matches findings to known bugs")
+    .option("--no-fix-diff", "don't show the judge each bug's fix diff, only its description")
+    .addOption(new Option("--judge-effort <level>", "effort for the judge").choices(EFFORTS));
+}
+
+interface EvalOptions extends AgentOptions {
+  /** false with --no-fix-diff. */
+  fixDiff: boolean;
+  /** false with --no-judge. */
+  judge: boolean;
+  roughEdges: boolean;
+  edgeJudgeHarness?: Harness;
+  edgeJudgeModel?: string;
+  edgeJudgeEffort?: Effort;
+  smoke: boolean;
+  full: boolean;
+  summary: boolean;
+  case?: string[];
+  dataset: string;
+  checkouts: string;
+  repo: string;
+  quiet: boolean;
+  verbose: boolean;
+}
+
+async function evaluate(options: EvalOptions): Promise<void> {
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
+  const dataset = path.resolve(userCwd, options.dataset);
+  if (options.smoke && options.full) throw new Error("Use --smoke or --full, not both.");
+  // Without a subset flag, the baseline set; chosen cases (--case) may come from any set.
+  const subset: EvalSubset = options.smoke
+    ? "smoke"
+    : options.full || options.case
+      ? "full"
+      : "baseline";
+  let result;
+  try {
+    const agent = await resolveAgent(options);
+    result = await runEval({
+      ...agent,
+      judge: options.judge ? judgeOf(agent, options) : undefined,
+      edgeJudge:
+        options.judge && options.roughEdges ? edgeJudgeOf(agent, options, progress) : undefined,
+      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
+      cwd: options.repo,
+      cases: await loadDataset(dataset, { subset, ids: options.case ?? [] }),
+      dataset,
+      subset,
+      summarize: options.summary,
+      roughEdges: options.roughEdges,
+      checkoutsDir: path.resolve(userCwd, options.checkouts),
+      ...progressHooks(progress),
+      verbose: options.verbose,
+    });
+  } finally {
+    progress.end();
+  }
+  // Like review: --quiet prints only the run dir.
+  console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
+}
+
+function judgeOf(agent: Awaited<ReturnType<typeof resolveAgent>>, options: AgentOptions) {
+  return resolveJudge(agent.harness, agent, {
+    model: options.judgeModel ?? null,
+    effort: options.judgeEffort ?? null,
+  });
+}
+
+/** The rough-edge judge: on the eval's harness unless --edge-judge-harness says otherwise. */
+function edgeJudgeOf(
+  agent: Awaited<ReturnType<typeof resolveAgent>>,
+  options: EvalOptions,
+  progress: Progress,
+): EdgeJudge {
+  const harness = options.edgeJudgeHarness ?? agent.harness;
+  const model = resolveEdgeJudge(harness, {
+    model: options.edgeJudgeModel ?? null,
+    effort: options.edgeJudgeEffort ?? null,
+  });
+  if (harness === agent.harness && model.model === agent.models.reviewer.model) {
+    progress.warn(
+      `The rough-edge judge uses the reviewer's model (${model.model ?? "harness default"}); it may prefer its own output.`,
+    );
+  }
+  return {
+    harness,
+    model,
+    runAgent:
+      harness === agent.harness
+        ? agent.runAgent
+        : getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
+  };
+}
+
+interface RescoreCliOptions extends AgentOptions {
+  /** false with --no-fix-diff. */
+  fixDiff: boolean;
+  dataset: string;
+  repo: string;
+  quiet: boolean;
+  verbose: boolean;
+}
+
+/** Scores a finished eval again with the judge; the eval's own files stay as they were. */
+async function rescore(ref: string, options: RescoreCliOptions): Promise<void> {
+  const progress = createProgress({ quiet: options.quiet, verbose: options.verbose, cwd: userCwd });
+  const repo = await resolveRepoRoot(options.repo);
+  const { root } = await resolveRun(repo, ref, userCwd);
+  const agent = await resolveAgent(options);
+  let result;
+  try {
+    result = await rescoreEval({
+      root,
+      cases: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
+      judge: judgeOf(agent, options),
+      fixesDir: options.fixDiff ? defaultFixesDir() : undefined,
+      runAgent: agent.runAgent,
+      log: progress.log,
+      warn: progress.warn,
+    });
+  } finally {
+    progress.end();
+  }
+  console.log(options.quiet ? result.root : `\n${formatEval(result, colorOptions())}`);
+}
+
+async function post(ref: string | undefined, options: { repo: string }): Promise<void> {
+  const repo = await resolveRepoRoot(options.repo);
+  let id = ref;
+  if (id === undefined) {
+    const latest = (await readIndex(repo)).findLast((e) => isReviewEntry(e) && e.pr !== undefined);
+    if (latest === undefined) throw new Error("No PR review to post. Review a PR first.");
+    id = latest.id;
+  }
+  await postRun((await resolveRun(repo, id, userCwd)).root, colorOptions());
+}
+
+async function runs(options: { repo: string; limit: string }): Promise<void> {
+  const limit = Number(options.limit);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("--limit must be a positive integer");
+  const entries = await readIndex<IndexEntry>(await resolveRepoRoot(options.repo));
+  console.log(formatRuns(entries.slice(-limit), colorOptions()));
+}
+
+interface CompareOptions {
+  repo: string;
+  judgeRoughEdges: boolean;
+  edgeJudgeHarness?: Harness;
+  edgeJudgeModel?: string;
+  edgeJudgeEffort?: Effort;
+  claudeBin: string;
+  cursorBin: string;
+  dataset: string;
+  checkouts: string;
+}
+
+async function compare(a: string, b: string, options: CompareOptions): Promise<void> {
+  const repo = await resolveRepoRoot(options.repo);
+  const [rootA, rootB] = await Promise.all(
+    [a, b].map(async (ref) => (await resolveRun(repo, ref, userCwd)).root),
+  );
+  const [runA, runB] = await Promise.all([rootA, rootB].map((root) => loadRun(root!)));
+  if (runA?.kind === "eval" && runB?.kind === "eval") {
+    console.log(formatEvalCompare(runA, runB, colorOptions()));
+    if (!options.judgeRoughEdges) return;
+    // Blind to both evals' reviewers; on A's harness unless told otherwise.
+    const harness = options.edgeJudgeHarness ?? runA.run.harness;
+    const model = resolveEdgeJudge(harness, {
+      model: options.edgeJudgeModel ?? null,
+      effort: options.edgeJudgeEffort ?? null,
+    });
+    const progress = createProgress({ quiet: false, verbose: false, cwd: userCwd });
+    for (const run of [runA.run, runB.run]) {
+      if (run.harness === harness && run.models.reviewer.model === model.model) {
+        progress.warn(
+          `The pairwise judge uses a reviewer's model (${model.model ?? "harness default"}); it may prefer that eval's rough edges.`,
+        );
+        break;
+      }
+    }
+    let record;
+    try {
+      record = await pairwiseEvals({
+        a: { root: rootA!, cases: runA.cases },
+        b: { root: rootB!, cases: runB.cases },
+        dataset: await loadDataset(path.resolve(userCwd, options.dataset), { subset: "full" }),
+        checkoutsDir: path.resolve(userCwd, options.checkouts),
+        model,
+        runAgent: getAgent(harness, { claudeBin: options.claudeBin, cursorBin: options.cursorBin }),
+        log: progress.log,
+        warn: progress.warn,
+      });
+    } finally {
+      progress.end();
+    }
+    console.log(`\n${formatPairwise(record, colorOptions())}`);
+  } else if (options.judgeRoughEdges) {
+    throw new Error("--judge-rough-edges compares two eval runs.");
+  } else if (runA?.kind === "review" && runB?.kind === "review") {
+    console.log(formatCompare(runA, runB, colorOptions()));
+  } else {
+    throw new Error("Can't compare a review run with an eval run.");
+  }
 }

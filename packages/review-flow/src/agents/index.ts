@@ -1,6 +1,9 @@
-import type { Harness, RunAgent } from "../core/index.ts";
+import type { RunAgent } from "../runtime/index.ts";
+import type { Harness } from "../review/index.ts";
 import { createClaudeAgent } from "./claude.ts";
 import { createCursorAgent } from "./cursor.ts";
+
+export { openInteractive } from "./open.ts";
 
 export interface AgentOptions {
   claudeBin: string;
@@ -15,5 +18,3 @@ export function getAgent(harness: Harness, options: AgentOptions): RunAgent {
       return createCursorAgent({ bin: options.cursorBin });
   }
 }
-
-export { openInteractive } from "./open.ts";

@@ -2,6 +2,8 @@
 
 Today's pipeline on the baseline set (12 cases: 7 bug, 5 clean), one run per configuration, 2026-11-02, summary on, all roles on the same model. Run dirs are under `.review-flow/runs/` (not committed). Cursor cost is computed from the price table; Cursor runs of Claude models use Cursor's own model ids (`claude-sonnet-5-5-high`; the bracket syntax `[effort=high]` is rejected for them).
 
+These runs predate the flow-tree record format (`format: 2` in `run.json`), so `compare` can't read them; to compare a change against a baseline, run the baseline again.
+
 | Harness | Model                     | Run                    | Recall | Reviewer recall | Findings per clean case | Cost per case | Time per case | Missed                                                  |
 | ------- | ------------------------- | ---------------------- | ------ | --------------- | ----------------------- | ------------- | ------------- | ------------------------------------------------------- |
 | claude  | Sonnet 5.5 high (default) | `20261102-142053-eval` | 6/7    | 6/7             | 2.20                    | $0.22         | 47 s          | typer-1128                                              |

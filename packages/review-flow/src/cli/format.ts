@@ -1,8 +1,8 @@
 import { styleText } from "node:util";
+import { formatDuration } from "../runtime/index.ts";
 import {
   formatCodeRef,
   formatCost,
-  formatDuration,
   formatLocation,
   goalNote,
   finalPriority,
@@ -17,15 +17,7 @@ import {
   type SummaryOutcome,
   type TrustLevel,
   type Verdict,
-} from "../core/index.ts";
-
-type Style = Parameters<typeof styleText>[0];
-
-export interface FormatOptions {
-  color: boolean;
-  /** Total line width to wrap text to. */
-  width: number;
-}
+} from "../review/index.ts";
 
 export interface FindingsSummary {
   findings: NormalizedFinding[];
@@ -37,125 +29,13 @@ export interface FindingsSummary {
   durationMs: number;
 }
 
-const SEVERITY_STYLE: Record<Severity, Style> = {
-  critical: ["bold", "white", "bgRed"],
-  high: ["bold", "red"],
-  medium: ["bold", "yellow"],
-  low: ["bold", "blue"],
-};
-
-// Not the severity colors: a priority is not a defect level.
-const PRIORITY_STYLE: Record<Priority, Style> = {
-  high: ["bold"],
-  medium: [],
-  low: ["dim"],
-};
-
-const VERDICT_STYLE: Record<Verdict["verdict"], Style> = {
-  confirmed: ["bold", "red"],
-  inconclusive: ["bold", "yellow"],
-  refuted: ["dim"],
-};
-
-const FIX_LABEL: Record<FixAssessment["assessment"], string> = {
-  sound: "sound",
-  flawed: "flawed",
-  incomplete: "incomplete",
-  not_applicable: "n/a",
-};
-
-const LABEL_WIDTH = 10;
-const INDENT = "  ";
-
-/** Greedy word wrap; words longer than the width are kept whole rather than split. */
-export function wrap(text: string, width: number): string[] {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    let line = "";
-    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-      if (line === "") line = word;
-      else if (line.length + 1 + word.length <= width) line += ` ${word}`;
-      else {
-        lines.push(line);
-        line = word;
-      }
-    }
-    lines.push(line);
-  }
-  return lines;
+export interface FormatOptions {
+  color: boolean;
+  /** Total line width to wrap text to. */
+  width: number;
 }
 
-/** The summary, printed before the findings. */
-export function formatSummary(
-  outcome: SummaryOutcome,
-  trust: TrustLevel,
-  options: FormatOptions,
-): string {
-  const paint = (style: Style, text: string) =>
-    options.color ? styleText(style, text, { validateStream: false }) : text;
-  const header = ["", paint("bold", "Summary")];
-  if (outcome.status === "failed") {
-    header.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
-    return header.join("\n");
-  }
-  const body = formatSummaryFields(outcome.summary, trust, {
-    ...options,
-    width: options.width - INDENT.length,
-  });
-  return [
-    ...header,
-    ...body.split("\n").map((line) => (line === "" ? "" : `${INDENT}${line}`)),
-  ].join("\n");
-}
-
-/** The summary's fields as labelled, wrapped lines, without a heading or indent. */
-export function formatSummaryFields(
-  summary: Summary,
-  trust: TrustLevel,
-  options: FormatOptions,
-): string {
-  const paint = (style: Style, text: string) =>
-    options.color ? styleText(style, text, { validateStream: false }) : text;
-  const out: string[] = [];
-  const { goal, changes, achieved, lookAt } = summary;
-  const textWidth = Math.max(40, options.width - LABEL_WIDTH);
-  // A blank line between fields, so each reads as its own section.
-  const gap = () => {
-    if (out.length > 0) out.push("");
-  };
-  const field = (label: string, text: string) => {
-    gap();
-    wrap(text, textWidth).forEach((line, index) => {
-      const prefix =
-        index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
-      out.push(`${prefix}${line}`);
-    });
-  };
-  const bullets = (label: string, items: string[]) => {
-    if (items.length > 0) gap();
-    items.forEach((item, index) => {
-      const lines = wrap(item, textWidth - 2);
-      lines.forEach((line, at) => {
-        const prefix =
-          index === 0 && at === 0
-            ? paint("dim", label.padEnd(LABEL_WIDTH))
-            : " ".repeat(LABEL_WIDTH);
-        out.push(`${prefix}${at === 0 ? "- " : "  "}${line}`);
-      });
-    });
-  };
-  const ref = (item: Parameters<typeof formatCodeRef>[0]) =>
-    `${paint("cyan", formatCodeRef(item))} ${item.detail}`;
-
-  const note = goalNote(goal, trust);
-  field("Goal", note === null ? goal.text : `${goal.text} (${note})`);
-  bullets("Changes", changes);
-  field("Goal met", achieved.verdict);
-  bullets("Gaps", achieved.gaps.map(ref));
-  bullets("Extras", achieved.extras.map(ref));
-  bullets("Look at", lookAt.map(ref));
-  return out.join("\n");
-}
+type Style = Parameters<typeof styleText>[0];
 
 export function formatFindings(summary: FindingsSummary, options: FormatOptions): string {
   const paint = (style: Style, text: string) =>
@@ -260,5 +140,126 @@ export function formatFindings(summary: FindingsSummary, options: FormatOptions)
   }
 
   out.push(paint("dim", `Report: ${summary.reportPath}`), "");
+  return out.join("\n");
+}
+
+const VERDICT_STYLE: Record<Verdict["verdict"], Style> = {
+  confirmed: ["bold", "red"],
+  inconclusive: ["bold", "yellow"],
+  refuted: ["dim"],
+};
+
+const INDENT = "  ";
+
+const LABEL_WIDTH = 10;
+
+/** Greedy word wrap; words longer than the width are kept whole rather than split. */
+export function wrap(text: string, width: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      if (line === "") line = word;
+      else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+      else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+const SEVERITY_STYLE: Record<Severity, Style> = {
+  critical: ["bold", "white", "bgRed"],
+  high: ["bold", "red"],
+  medium: ["bold", "yellow"],
+  low: ["bold", "blue"],
+};
+
+const FIX_LABEL: Record<FixAssessment["assessment"], string> = {
+  sound: "sound",
+  flawed: "flawed",
+  incomplete: "incomplete",
+  not_applicable: "n/a",
+};
+
+// Not the severity colors: a priority is not a defect level.
+const PRIORITY_STYLE: Record<Priority, Style> = {
+  high: ["bold"],
+  medium: [],
+  low: ["dim"],
+};
+
+/** The summary, printed before the findings. */
+export function formatSummary(
+  outcome: SummaryOutcome,
+  trust: TrustLevel,
+  options: FormatOptions,
+): string {
+  const paint = (style: Style, text: string) =>
+    options.color ? styleText(style, text, { validateStream: false }) : text;
+  const header = ["", paint("bold", "Summary")];
+  if (outcome.status === "failed") {
+    header.push(paint("yellow", `${INDENT}Missing: the summarizer failed (${outcome.error}).`));
+    return header.join("\n");
+  }
+  const body = formatSummaryFields(outcome.summary, trust, {
+    ...options,
+    width: options.width - INDENT.length,
+  });
+  return [
+    ...header,
+    ...body.split("\n").map((line) => (line === "" ? "" : `${INDENT}${line}`)),
+  ].join("\n");
+}
+
+/** The summary's fields as labelled, wrapped lines, without a heading or indent. */
+export function formatSummaryFields(
+  summary: Summary,
+  trust: TrustLevel,
+  options: FormatOptions,
+): string {
+  const paint = (style: Style, text: string) =>
+    options.color ? styleText(style, text, { validateStream: false }) : text;
+  const out: string[] = [];
+  const { goal, changes, achieved, lookAt } = summary;
+  const textWidth = Math.max(40, options.width - LABEL_WIDTH);
+  // A blank line between fields, so each reads as its own section.
+  const gap = () => {
+    if (out.length > 0) out.push("");
+  };
+  const field = (label: string, text: string) => {
+    gap();
+    wrap(text, textWidth).forEach((line, index) => {
+      const prefix =
+        index === 0 ? paint("dim", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
+      out.push(`${prefix}${line}`);
+    });
+  };
+  const bullets = (label: string, items: string[]) => {
+    if (items.length > 0) gap();
+    items.forEach((item, index) => {
+      const lines = wrap(item, textWidth - 2);
+      lines.forEach((line, at) => {
+        const prefix =
+          index === 0 && at === 0
+            ? paint("dim", label.padEnd(LABEL_WIDTH))
+            : " ".repeat(LABEL_WIDTH);
+        out.push(`${prefix}${at === 0 ? "- " : "  "}${line}`);
+      });
+    });
+  };
+  const ref = (item: Parameters<typeof formatCodeRef>[0]) =>
+    `${paint("cyan", formatCodeRef(item))} ${item.detail}`;
+
+  const note = goalNote(goal, trust);
+  field("Goal", note === null ? goal.text : `${goal.text} (${note})`);
+  bullets("Changes", changes);
+  field("Goal met", achieved.verdict);
+  bullets("Gaps", achieved.gaps.map(ref));
+  bullets("Extras", achieved.extras.map(ref));
+  bullets("Look at", lookAt.map(ref));
   return out.join("\n");
 }

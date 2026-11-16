@@ -12,6 +12,108 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+const [command, ...cliArgs] = process.argv.slice(2);
+
+/** Clean cases picked from `clean` output: behavior changes, not refactors, docs, or deprecations. */
+const CLEAN_CASES = [
+  "pallets/werkzeug#3163",
+  "Kludex/starlette#3143",
+  "encode/httpx#3373",
+  "psf/requests#6154",
+  "python-attrs/attrs#1463",
+  "tj/commander.js#2405",
+  "honojs/hono#4862",
+  "h3js/h3#1328",
+  "spf13/cobra#1559",
+  "go-chi/chi#986",
+];
+
+/** The baseline set: small diffs across languages, plus larger ones with more clean cases. */
+const BASELINE = new Set([
+  "sindresorhus/execa#199",
+  "spf13/cobra#1559",
+  "psf/requests#6154",
+  "Kludex/starlette#3143",
+  "pallets/click#2829",
+  "pallets/werkzeug#1540",
+  "fastapi/typer#1128",
+  "honojs/hono#5133",
+  "h3js/h3#1372",
+  "urfave/cli#2245",
+  "pallets/werkzeug#3163",
+  "go-chi/chi#986",
+]);
+
+/** The smoke set: the smallest cases, for a quick end-to-end check. */
+const SMOKE = new Set([
+  "pallets/click#2829",
+  "h3js/h3#1372",
+  "urfave/cli#2245",
+  "pallets/werkzeug#3163",
+  "go-chi/chi#986",
+]);
+
+interface Location {
+  file: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Where blame misses the bug. chi#926 added `Discard` but left the `Flush` methods writing to
+ * the original writer; the fix only inserted code, so no intro line was blamed.
+ */
+const LOCATION_OVERRIDES: Record<string, Location[]> = {
+  "go-chi/chi#926 fix#1185": [
+    { file: "middleware/wrap_writer.go", start: 135, end: 137 },
+    { file: "middleware/wrap_writer.go", start: 144, end: 147 },
+    { file: "middleware/wrap_writer.go", start: 169, end: 172 },
+    { file: "middleware/wrap_writer.go", start: 191, end: 194 },
+  ],
+};
+
+/**
+ * Bug cases picked by hand from `locate` output: the fix is a real bug fix (not docs, CI, typing
+ * or performance), the intro PR changes at most about 500 lines, at most 3 per repo, and the
+ * blamed lines point at the faulty code.
+ */
+const BUG_CASES = [
+  "pallets/click#3126",
+  "pallets/click#2829",
+  "pallets/flask#2256",
+  "pallets/jinja#858",
+  "pallets/werkzeug#1540",
+  "pallets/werkzeug#891",
+  "Kludex/starlette#3410",
+  "marshmallow-code/marshmallow#2894",
+  "fastapi/typer#1128",
+  "fastapi/typer#1018",
+  "psf/requests#6655",
+  "psf/requests#4718",
+  "pytest-dev/pluggy#210",
+  "yargs/yargs#556",
+  "sindresorhus/execa#199",
+  "h3js/h3#1428",
+  "h3js/h3#1372",
+  "honojs/hono#5133",
+  "honojs/hono#5205",
+  "honojs/hono#2080",
+  "spf13/cobra#889",
+  "urfave/cli#2163",
+  "urfave/cli#2245",
+  "urfave/cli#2237",
+  "go-chi/chi#926",
+];
+
+/** Paths that aren't code under review: tests, docs, CI, changelogs, config. */
+const NOT_CODE =
+  /(^|\/)(tests?|__tests__|testing|docs?|examples?|\.github|benchmarks?)\/|(^|\/)(test_[^/]*|[^/]*_test\.\w+|[^/]*\.(test|spec)\.\w+)$|\.(md|mdx|rst|txt|ya?ml|json|lock|toml|cfg|ini)$|(^|\/)CHANGES/i;
+
+const FIX_SUBJECT = /\b(fix(es|ed)?|bug|revert|regress(ion)?|broke|hotfix)\b/i;
+
+const SKIP_SUBJECT =
+  /\b(fix(es|ed)?|bug|revert|regress|typo|docs?|chore|ci|deps?|bump|release|version|tests?|lint|format)\b/i;
+
 export const REPOS = [
   "pallets/click",
   "pallets/flask",
@@ -42,8 +144,11 @@ export const REPOS = [
   "spf13/viper",
 ];
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** A keyword near a PR reference, either order: "regression introduced by #12", "#12 broke". */
 const KEYWORDS = "introduced|regression|regressed|caused|broke|broken|since";
+
 const REFERENCE = new RegExp(
   `(?:\\b(?:${KEYWORDS})\\b[^\\n#]{0,60}?(?:#|/pull/)(\\d+))|(?:(?:#|/pull/)(\\d+)[^\\n#]{0,30}?\\b(?:${KEYWORDS})\\b)`,
   "gi",
@@ -62,16 +167,12 @@ const SEARCH_TERMS = [
   "caused",
 ];
 
-/** Paths that aren't code under review: tests, docs, CI, changelogs, config. */
-const NOT_CODE =
-  /(^|\/)(tests?|__tests__|testing|docs?|examples?|\.github|benchmarks?)\/|(^|\/)(test_[^/]*|[^/]*_test\.\w+|[^/]*\.(test|spec)\.\w+)$|\.(md|mdx|rst|txt|ya?ml|json|lock|toml|cfg|ini)$|(^|\/)CHANGES/i;
-
-interface Pr {
-  number: number;
-  title: string;
-  url: string;
-  body?: string;
-}
+if (command === "search") await search(cliArgs[0]!);
+else if (command === "locate") locateAll(cliArgs[0]!, cliArgs[1]!, cliArgs[2]!);
+else if (command === "clean") clean(cliArgs[0]!, cliArgs[1]!);
+else if (command === "build")
+  build(cliArgs[0]!, cliArgs[1]!, cliArgs[2]!, path.join(import.meta.dirname, "..", "cases"));
+else throw new Error("usage: mine.ts search | locate | clean | build (see the header comment)");
 
 interface Candidate {
   repo: string;
@@ -80,24 +181,12 @@ interface Candidate {
   mention: string;
 }
 
-function run(cmd: string, args: string[], cwd?: string): string {
-  return execFileSync(cmd, args, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 256 << 20,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+interface Pr {
+  number: number;
+  title: string;
+  url: string;
+  body?: string;
 }
-
-function gh<T>(endpoint: string): T {
-  return JSON.parse(run("gh", ["api", endpoint]));
-}
-
-function git(repoDir: string, ...args: string[]): string {
-  return run("git", args, repoDir);
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function search(out: string): Promise<void> {
   const candidates: Candidate[] = [];
@@ -142,6 +231,15 @@ async function search(out: string): Promise<void> {
   writeFileSync(out, `${JSON.stringify(candidates, null, 2)}\n`);
 }
 
+function run(cmd: string, args: string[], cwd?: string): string {
+  return execFileSync(cmd, args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 << 20,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 interface PullInfo {
   number: number;
   title: string;
@@ -151,6 +249,62 @@ interface PullInfo {
   additions: number;
   deletions: number;
   changed_files: number;
+}
+
+function locateAll(input: string, clonesDir: string, out: string): void {
+  const candidates: Candidate[] = JSON.parse(readFileSync(input, "utf8"));
+  const results = [];
+  for (const candidate of candidates) {
+    const repoDir = path.join(clonesDir, candidate.repo.replace("/", "__"));
+    if (!existsSync(repoDir))
+      run("git", ["clone", "--quiet", `https://github.com/${candidate.repo}`, repoDir]);
+    const label = `${candidate.repo}#${candidate.intro} (fix #${candidate.fix.number})`;
+    let intro: PullInfo;
+    let fix: PullInfo;
+    try {
+      intro = gh<PullInfo>(`repos/${candidate.repo}/pulls/${candidate.intro}`);
+      fix = gh<PullInfo>(`repos/${candidate.repo}/pulls/${candidate.fix.number}`);
+    } catch {
+      console.log(`${label}: not a PR`);
+      continue;
+    }
+    const introRange = prRange(repoDir, intro);
+    const fixRange = prRange(repoDir, fix);
+    if (!introRange || !fixRange) {
+      console.log(`${label}: unclear commit range`);
+      continue;
+    }
+    const locations = locate(repoDir, introRange, fixRange.head);
+    console.log(
+      `${label}: ${locations.length} locations, intro +${intro.additions} -${intro.deletions}`,
+    );
+    results.push({
+      repo: candidate.repo,
+      intro: {
+        number: intro.number,
+        title: intro.title,
+        url: intro.html_url,
+        ...introRange,
+        files: intro.changed_files,
+        additions: intro.additions,
+        deletions: intro.deletions,
+      },
+      fix: {
+        number: fix.number,
+        title: fix.title,
+        url: fix.html_url,
+        sha: fixRange.head,
+        body: candidate.fix.body,
+      },
+      mention: candidate.mention,
+      locations,
+    });
+  }
+  writeFileSync(out, `${JSON.stringify(results, null, 2)}\n`);
+}
+
+function gh<T>(endpoint: string): T {
+  return JSON.parse(run("gh", ["api", endpoint]));
 }
 
 /** Base and head of a merged PR on the default branch, or null when its commit range is unclear. */
@@ -170,6 +324,10 @@ function prRange(repoDir: string, pr: PullInfo): { base: string; head: string } 
   return { base, head };
 }
 
+function git(repoDir: string, ...args: string[]): string {
+  return run("git", args, repoDir);
+}
+
 function shortstat(repoDir: string, base: string, head: string): [number, number] {
   const stat = git(repoDir, "diff", "--shortstat", base, head);
   return [
@@ -183,45 +341,6 @@ interface BlameLine {
   origLine: number;
   finalLine: number;
   file: string;
-}
-
-function blame(
-  repoDir: string,
-  rev: string,
-  file: string,
-  start?: number,
-  end?: number,
-): BlameLine[] {
-  const range = start === undefined ? [] : ["-L", `${start},${end}`];
-  let output: string;
-  try {
-    output = git(repoDir, "blame", "--line-porcelain", ...range, rev, "--", file);
-  } catch {
-    return [];
-  }
-  const lines: BlameLine[] = [];
-  let current: BlameLine | undefined;
-  for (const line of output.split("\n")) {
-    const header = /^([0-9a-f]{40}) (\d+) (\d+)/.exec(line);
-    if (header) {
-      current = {
-        sha: header[1]!,
-        origLine: Number(header[2]),
-        finalLine: Number(header[3]),
-        file,
-      };
-      lines.push(current);
-    } else if (line.startsWith("filename ") && current) {
-      current.file = line.slice("filename ".length);
-    }
-  }
-  return lines;
-}
-
-interface Location {
-  file: string;
-  start: number;
-  end: number;
 }
 
 /** Lines the fix removed or inserted next to, traced to the intro PR and mapped to its head. */
@@ -285,61 +404,38 @@ function locate(
   return locations;
 }
 
-function locateAll(input: string, clonesDir: string, out: string): void {
-  const candidates: Candidate[] = JSON.parse(readFileSync(input, "utf8"));
-  const results = [];
-  for (const candidate of candidates) {
-    const repoDir = path.join(clonesDir, candidate.repo.replace("/", "__"));
-    if (!existsSync(repoDir))
-      run("git", ["clone", "--quiet", `https://github.com/${candidate.repo}`, repoDir]);
-    const label = `${candidate.repo}#${candidate.intro} (fix #${candidate.fix.number})`;
-    let intro: PullInfo;
-    let fix: PullInfo;
-    try {
-      intro = gh<PullInfo>(`repos/${candidate.repo}/pulls/${candidate.intro}`);
-      fix = gh<PullInfo>(`repos/${candidate.repo}/pulls/${candidate.fix.number}`);
-    } catch {
-      console.log(`${label}: not a PR`);
-      continue;
-    }
-    const introRange = prRange(repoDir, intro);
-    const fixRange = prRange(repoDir, fix);
-    if (!introRange || !fixRange) {
-      console.log(`${label}: unclear commit range`);
-      continue;
-    }
-    const locations = locate(repoDir, introRange, fixRange.head);
-    console.log(
-      `${label}: ${locations.length} locations, intro +${intro.additions} -${intro.deletions}`,
-    );
-    results.push({
-      repo: candidate.repo,
-      intro: {
-        number: intro.number,
-        title: intro.title,
-        url: intro.html_url,
-        ...introRange,
-        files: intro.changed_files,
-        additions: intro.additions,
-        deletions: intro.deletions,
-      },
-      fix: {
-        number: fix.number,
-        title: fix.title,
-        url: fix.html_url,
-        sha: fixRange.head,
-        body: candidate.fix.body,
-      },
-      mention: candidate.mention,
-      locations,
-    });
+function blame(
+  repoDir: string,
+  rev: string,
+  file: string,
+  start?: number,
+  end?: number,
+): BlameLine[] {
+  const range = start === undefined ? [] : ["-L", `${start},${end}`];
+  let output: string;
+  try {
+    output = git(repoDir, "blame", "--line-porcelain", ...range, rev, "--", file);
+  } catch {
+    return [];
   }
-  writeFileSync(out, `${JSON.stringify(results, null, 2)}\n`);
+  const lines: BlameLine[] = [];
+  let current: BlameLine | undefined;
+  for (const line of output.split("\n")) {
+    const header = /^([0-9a-f]{40}) (\d+) (\d+)/.exec(line);
+    if (header) {
+      current = {
+        sha: header[1]!,
+        origLine: Number(header[2]),
+        finalLine: Number(header[3]),
+        file,
+      };
+      lines.push(current);
+    } else if (line.startsWith("filename ") && current) {
+      current.file = line.slice("filename ".length);
+    }
+  }
+  return lines;
 }
-
-const FIX_SUBJECT = /\b(fix(es|ed)?|bug|revert|regress(ion)?|broke|hotfix)\b/i;
-const SKIP_SUBJECT =
-  /\b(fix(es|ed)?|bug|revert|regress|typo|docs?|chore|ci|deps?|bump|release|version|tests?|lint|format)\b/i;
 
 /**
  * Clean candidates: merged PRs (squash or merge commits on the default branch) from 2022 to
@@ -404,96 +500,6 @@ function clean(clonesDir: string, out: string): void {
   writeFileSync(out, `${JSON.stringify(results, null, 2)}\n`);
 }
 
-/**
- * Bug cases picked by hand from `locate` output: the fix is a real bug fix (not docs, CI, typing
- * or performance), the intro PR changes at most about 500 lines, at most 3 per repo, and the
- * blamed lines point at the faulty code.
- */
-const BUG_CASES = [
-  "pallets/click#3126",
-  "pallets/click#2829",
-  "pallets/flask#2256",
-  "pallets/jinja#858",
-  "pallets/werkzeug#1540",
-  "pallets/werkzeug#891",
-  "Kludex/starlette#3410",
-  "marshmallow-code/marshmallow#2894",
-  "fastapi/typer#1128",
-  "fastapi/typer#1018",
-  "psf/requests#6655",
-  "psf/requests#4718",
-  "pytest-dev/pluggy#210",
-  "yargs/yargs#556",
-  "sindresorhus/execa#199",
-  "h3js/h3#1428",
-  "h3js/h3#1372",
-  "honojs/hono#5133",
-  "honojs/hono#5205",
-  "honojs/hono#2080",
-  "spf13/cobra#889",
-  "urfave/cli#2163",
-  "urfave/cli#2245",
-  "urfave/cli#2237",
-  "go-chi/chi#926",
-];
-
-/** Clean cases picked from `clean` output: behavior changes, not refactors, docs, or deprecations. */
-const CLEAN_CASES = [
-  "pallets/werkzeug#3163",
-  "Kludex/starlette#3143",
-  "encode/httpx#3373",
-  "psf/requests#6154",
-  "python-attrs/attrs#1463",
-  "tj/commander.js#2405",
-  "honojs/hono#4862",
-  "h3js/h3#1328",
-  "spf13/cobra#1559",
-  "go-chi/chi#986",
-];
-
-/** The smoke set: the smallest cases, for a quick end-to-end check. */
-const SMOKE = new Set([
-  "pallets/click#2829",
-  "h3js/h3#1372",
-  "urfave/cli#2245",
-  "pallets/werkzeug#3163",
-  "go-chi/chi#986",
-]);
-
-/** The baseline set: small diffs across languages, plus larger ones with more clean cases. */
-const BASELINE = new Set([
-  "sindresorhus/execa#199",
-  "spf13/cobra#1559",
-  "psf/requests#6154",
-  "Kludex/starlette#3143",
-  "pallets/click#2829",
-  "pallets/werkzeug#1540",
-  "fastapi/typer#1128",
-  "honojs/hono#5133",
-  "h3js/h3#1372",
-  "urfave/cli#2245",
-  "pallets/werkzeug#3163",
-  "go-chi/chi#986",
-]);
-
-/** The smallest set a case belongs to (`smoke` within `baseline` within `full`). */
-function presetOf(key: string): "smoke" | "baseline" | "full" {
-  return SMOKE.has(key) ? "smoke" : BASELINE.has(key) ? "baseline" : "full";
-}
-
-/**
- * Where blame misses the bug. chi#926 added `Discard` but left the `Flush` methods writing to
- * the original writer; the fix only inserted code, so no intro line was blamed.
- */
-const LOCATION_OVERRIDES: Record<string, Location[]> = {
-  "go-chi/chi#926 fix#1185": [
-    { file: "middleware/wrap_writer.go", start: 135, end: 137 },
-    { file: "middleware/wrap_writer.go", start: 144, end: 147 },
-    { file: "middleware/wrap_writer.go", start: 169, end: 172 },
-    { file: "middleware/wrap_writer.go", start: 191, end: 194 },
-  ],
-};
-
 interface Located {
   repo: string;
   intro: {
@@ -516,23 +522,6 @@ interface CleanCandidate {
   title: string;
   base: string;
   head: string;
-}
-
-function caseId(key: string): string {
-  const [repo, number] = key.split("#") as [string, string];
-  const name = repo === "urfave/cli" ? "urfave-cli" : repo.split("/")[1]!.replace(/\.js$/, "");
-  return `${name}-${number}`;
-}
-
-function diffSize(repoDir: string, base: string, head: string) {
-  const size = { files: 0, additions: 0, deletions: 0 };
-  for (const row of git(repoDir, "diff", "--numstat", base, head).split("\n").filter(Boolean)) {
-    const [added, removed] = row.split("\t");
-    size.files++;
-    size.additions += Number(added) || 0;
-    size.deletions += Number(removed) || 0;
-  }
-  return size;
 }
 
 function build(locatedPath: string, cleanPath: string, clonesDir: string, casesDir: string): void {
@@ -590,10 +579,24 @@ function build(locatedPath: string, cleanPath: string, clonesDir: string, casesD
   }
 }
 
-const [command, ...args] = process.argv.slice(2);
-if (command === "search") await search(args[0]!);
-else if (command === "locate") locateAll(args[0]!, args[1]!, args[2]!);
-else if (command === "clean") clean(args[0]!, args[1]!);
-else if (command === "build")
-  build(args[0]!, args[1]!, args[2]!, path.join(import.meta.dirname, "..", "cases"));
-else throw new Error("usage: mine.ts search | locate | clean | build (see the header comment)");
+function caseId(key: string): string {
+  const [repo, number] = key.split("#") as [string, string];
+  const name = repo === "urfave/cli" ? "urfave-cli" : repo.split("/")[1]!.replace(/\.js$/, "");
+  return `${name}-${number}`;
+}
+
+/** The smallest set a case belongs to (`smoke` within `baseline` within `full`). */
+function presetOf(key: string): "smoke" | "baseline" | "full" {
+  return SMOKE.has(key) ? "smoke" : BASELINE.has(key) ? "baseline" : "full";
+}
+
+function diffSize(repoDir: string, base: string, head: string) {
+  const size = { files: 0, additions: 0, deletions: 0 };
+  for (const row of git(repoDir, "diff", "--numstat", base, head).split("\n").filter(Boolean)) {
+    const [added, removed] = row.split("\t");
+    size.files++;
+    size.additions += Number(added) || 0;
+    size.deletions += Number(removed) || 0;
+  }
+  return size;
+}
