@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -186,16 +187,26 @@ describe("runReview", () => {
     });
   });
 
-  it("shows the checkout and the ask command in the review box", async () => {
+  it("shows the checkout and the ask command in the review box, once ask can read the run", async () => {
     const { runAgent } = stubAgent();
+    let diffWhenShown = false;
     const tables: [string, (readonly [string, string])[]][] = [];
     const { runDir } = await runReview({
       ...baseOptions,
       cwd: repo,
       runAgent,
       askCommand: (id, a) => `review-flow ask ${id} --harness ${a.harness}`,
-      logTable: (title, rows) => tables.push([title, [...rows]]),
+      logTable: (title, rows) => {
+        if (title === "Review") {
+          const root = rows.find(([label]) => label === "Run dir")![1];
+          diffWhenShown = ["diff.patch", "intent.json"].every((f) =>
+            existsSync(path.join(root, f)),
+          );
+        }
+        tables.push([title, [...rows]]);
+      },
     });
+    expect(diffWhenShown).toBe(true);
     const rows = new Map(tables.find(([title]) => title === "Review")![1]);
     expect(rows.get("Checkout")).toBe(await realpath(repo));
     expect(rows.get("Ask")).toBe(`review-flow ask ${path.basename(runDir.root)} --harness claude`);

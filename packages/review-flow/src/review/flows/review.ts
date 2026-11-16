@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RunAgent } from "../../runtime/agent.ts";
 import type { TaskActivity } from "../../runtime/call.ts";
 import { startRun, type FlowContext, type TimedStep } from "../../runtime/flow.ts";
 import { formatDuration } from "../../runtime/format.ts";
+import { writeJson } from "../../runtime/json.ts";
 import { findNode, type FlowNode, type RunRecordBase } from "../../runtime/records.ts";
 import { describeModel } from "../format.ts";
 import {
@@ -158,6 +160,9 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
     runRoot === undefined
       ? await createRunDir(stateRepo, await shortSha(input.repo, "HEAD"), prepared.startedAt)
       : runDirPaths((await createRunDirAt(runRoot)).root);
+  // Before the Ask hint and the `running` run.json, so an `ask` that finds the run can read them.
+  await writeFile(runDir.diffPath, input.diff);
+  await writeJson(runDir.intentPath, input.intent);
   const logTable: LogTable =
     options.logTable ??
     ((_, rows) => {
@@ -409,7 +414,7 @@ export function reviewRows(
  */
 export async function review(input: ReviewInput, ctx: FlowContext): Promise<ReviewRunResult> {
   const { repo, change, diff, models, steps, hooks = {} } = input;
-  // Read by `ask` while the review goes on.
+  // Read by `ask` while the review goes on. `runReview` writes them before the run starts too.
   await ctx.writeFile(RUN_FILES.diff, diff);
   await ctx.writeFile(RUN_FILES.intent, input.intent);
 
