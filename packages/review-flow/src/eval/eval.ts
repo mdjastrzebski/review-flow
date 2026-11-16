@@ -23,7 +23,12 @@ import {
 } from "../review/git.ts";
 import type { Harness, ModelChoice, RoleModels } from "../review/models.ts";
 import { ensureStateDir, formatRunTimestamp, runDirPaths } from "../review/run-dir.ts";
-import { appendIndexEntry, runsPath } from "../review/run-index.ts";
+import {
+  appendIndexEntry,
+  runsPath,
+  type IndexEntryBase,
+  type ReviewIndexEntry,
+} from "../review/run-index.ts";
 import type { NormalizedFinding, Verdict } from "../review/schemas.ts";
 import type { Trust } from "../review/trust.ts";
 import { checkoutName, type EvalCase, type EvalSubset } from "./dataset.ts";
@@ -53,6 +58,18 @@ export interface EvalRunRecord extends RunRecordBase {
   edgeJudge?: { harness: Harness; model: ModelChoice };
   dataset: { dir: string; subset: EvalSubset | null; cases: string[] };
   /** Updated after each case. */
+  scores: EvalScores;
+}
+
+/** Any line of `.review-flow/index.jsonl`: review runs and eval runs share the index. */
+export type IndexEntry = ReviewIndexEntry | EvalIndexEntry;
+
+/** The index line of an eval run. */
+export interface EvalIndexEntry extends IndexEntryBase {
+  kind: "eval";
+  subset: EvalSubset | null;
+  /** Cases selected; `scores.cases` counts those that ran. */
+  cases: number;
   scores: EvalScores;
 }
 
@@ -294,7 +311,7 @@ export async function runEval(options: EvalRunOptions): Promise<EvalRunResult> {
         scores: summarizeCases(results),
       },
       onFinish: async (record) => {
-        await appendIndexEntry(repo, {
+        await appendIndexEntry<EvalIndexEntry>(repo, {
           id: path.basename(root),
           kind: "eval",
           startedAt: record.startedAt,

@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Harness } from "./models.ts";
-import type { DiffStats, IndexEntry } from "./run-index.ts";
+import { isReviewEntry, type DiffStats, type IndexEntryBase } from "./run-index.ts";
 
 /** Cost range of past runs, the basis of the pre-flight estimate. */
 export interface CostEstimate {
@@ -15,7 +15,7 @@ export interface CostEstimate {
  * size is closest to this one. null when there are none with a full cost.
  */
 export function estimateCost(
-  entries: readonly IndexEntry[],
+  entries: readonly IndexEntryBase[],
   harness: Harness,
   diff: DiffStats,
   find: boolean,
@@ -23,7 +23,7 @@ export function estimateCost(
   const lines = (stats: DiffStats) => stats.additions + stats.deletions;
   const costs = entries
     .flatMap((e) =>
-      e.kind === "review" &&
+      isReviewEntry(e) &&
       e.status === "ok" &&
       e.harness === harness &&
       (e.findings !== null) === find &&

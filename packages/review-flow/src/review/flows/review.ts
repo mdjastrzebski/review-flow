@@ -27,6 +27,7 @@ import {
   diffStats,
   readIndex,
   type DiffStats,
+  type ReviewIndexEntry,
   type VerdictCounts,
 } from "../run-index.ts";
 import type { CheckedRoughEdge, NormalizedFinding, Summary, Verdict } from "../schemas.ts";
@@ -199,7 +200,7 @@ export async function runReview(options: ReviewRunOptions): Promise<ReviewRunRes
           onFinish: async (record) => {
             node = record.flow;
             if (runRoot !== undefined) return;
-            await appendIndexEntry(stateRepo, {
+            await appendIndexEntry<ReviewIndexEntry>(stateRepo, {
               id: path.basename(runDir.root),
               kind: "review",
               startedAt: record.startedAt,

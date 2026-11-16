@@ -1,7 +1,5 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { EvalSubset } from "../eval/dataset.ts";
-import type { EvalScores } from "../eval/score.ts";
 import type { Harness, RoleModels } from "./models.ts";
 import { STATE_DIR } from "./run-dir.ts";
 import type { Verdict } from "./schemas.ts";
@@ -50,18 +48,27 @@ async function isDirectory(file: string): Promise<boolean> {
   }
 }
 
-/** One line of `.review-flow/index.jsonl`: a run summary. Details stay in the run dir. */
-export type IndexEntry = ReviewIndexEntry | EvalIndexEntry;
-
-export interface ReviewIndexEntry {
+/**
+ * One line of `.review-flow/index.jsonl`: a run summary. Details stay in the run dir.
+ * Review writes `ReviewIndexEntry`; layers built on review (eval) add their own kinds.
+ */
+export interface IndexEntryBase {
   /** The run dir name under `.review-flow/runs/`. */
   id: string;
-  kind: "review";
+  kind: string;
   startedAt: string;
   durationMs: number;
   status: "ok" | "failed";
   harness: Harness;
   models: RoleModels;
+  /** null when no call has a cost. */
+  costUsd: number | null;
+  /** When above 0, `costUsd` is a lower bound. */
+  unknownCostCalls: number;
+}
+
+export interface ReviewIndexEntry extends IndexEntryBase {
+  kind: "review";
   base: { ref: string; sha: string };
   head: { sha: string; snapshotSha?: string };
   /** The PR number, for PR reviews. */
@@ -71,10 +78,6 @@ export interface ReviewIndexEntry {
   findings: number | null;
   /** null when the run failed before verification finished. */
   verdicts: VerdictCounts | null;
-  /** null when no call has a cost. */
-  costUsd: number | null;
-  /** When above 0, `costUsd` is a lower bound. */
-  unknownCostCalls: number;
 }
 
 export interface DiffStats {
@@ -85,24 +88,17 @@ export interface DiffStats {
 
 export type VerdictCounts = Record<Verdict["verdict"], number>;
 
-export interface EvalIndexEntry {
-  id: string;
-  kind: "eval";
-  startedAt: string;
-  durationMs: number;
-  status: "ok" | "failed";
-  harness: Harness;
-  models: RoleModels;
-  subset: EvalSubset | null;
-  /** Cases selected; `scores.cases` counts those that ran. */
-  cases: number;
-  scores: EvalScores;
-  costUsd: number | null;
-  unknownCostCalls: number;
+export function isReviewEntry(entry: IndexEntryBase): entry is ReviewIndexEntry {
+  return entry.kind === "review";
 }
 
-/** Entries in the order they were written (oldest first). Unparsable lines are skipped. */
-export async function readIndex(repo: string): Promise<IndexEntry[]> {
+/**
+ * Entries in the order they were written (oldest first). Unparsable lines are skipped.
+ * `E` is the entry kinds the caller knows of; lines are not validated against it.
+ */
+export async function readIndex<E extends IndexEntryBase = IndexEntryBase>(
+  repo: string,
+): Promise<E[]> {
   let content: string;
   try {
     content = await readFile(indexPath(repo), "utf8");
@@ -113,7 +109,7 @@ export async function readIndex(repo: string): Promise<IndexEntry[]> {
   return content.split("\n").flatMap((line) => {
     if (line.trim() === "") return [];
     try {
-      return [JSON.parse(line) as IndexEntry];
+      return [JSON.parse(line) as E];
     } catch {
       return [];
     }
@@ -124,7 +120,10 @@ export function indexPath(repo: string): string {
   return path.join(repo, STATE_DIR, "index.jsonl");
 }
 
-export async function appendIndexEntry(repo: string, entry: IndexEntry): Promise<void> {
+export async function appendIndexEntry<E extends IndexEntryBase>(
+  repo: string,
+  entry: E,
+): Promise<void> {
   await appendFile(indexPath(repo), `${JSON.stringify(entry)}\n`);
 }
 

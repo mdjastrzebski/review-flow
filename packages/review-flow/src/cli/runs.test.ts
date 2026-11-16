@@ -1,11 +1,10 @@
-import type {
-  EvalIndexEntry,
-  LoadedRun,
-  NormalizedFinding,
-  ReviewIndexEntry,
-  Verdict,
-} from "../review/index.ts";
-import { summarizeCases, type CaseResult, type LoadedEval } from "../eval/index.ts";
+import type { LoadedRun, NormalizedFinding, ReviewIndexEntry, Verdict } from "../review/index.ts";
+import {
+  summarizeCases,
+  type CaseResult,
+  type EvalIndexEntry,
+  type LoadedEval,
+} from "../eval/index.ts";
 import type { FlowNode } from "../runtime/index.ts";
 import { describe, expect, it } from "vitest";
 import {

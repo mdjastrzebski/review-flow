@@ -10,7 +10,7 @@ import {
   readIndex,
   resolveRun,
   runsPath,
-  type IndexEntry,
+  type ReviewIndexEntry,
 } from "./run-index.ts";
 
 let repo: string;
@@ -24,7 +24,7 @@ afterEach(async () => {
   await rm(repo, { recursive: true, force: true });
 });
 
-function entry(id: string): IndexEntry {
+function entry(id: string): ReviewIndexEntry {
   return {
     id,
     kind: "review",

@@ -8,7 +8,6 @@ import {
   rankFindings,
   compareSteps,
   describeModel,
-  type IndexEntry,
   type StepTotals,
   type LoadedRun,
   type ModelChoice,
@@ -23,6 +22,7 @@ import {
   type RoughEdgeScores,
   type EvalRunResult,
   type EvalScores,
+  type IndexEntry,
   type LoadedEval,
   type PairwiseRecord,
 } from "../eval/index.ts";

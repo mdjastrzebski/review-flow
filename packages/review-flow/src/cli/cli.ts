@@ -17,6 +17,7 @@ import {
   defaultBase,
   ensureStateDir,
   fetchPr,
+  isReviewEntry,
   parsePrTarget,
   postableItems,
   postableRoughEdges,
@@ -47,6 +48,7 @@ import {
   runEval,
   type EdgeJudge,
   type EvalSubset,
+  type IndexEntry,
 } from "../eval/index.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -680,9 +682,7 @@ async function post(ref: string | undefined, options: { repo: string }): Promise
   const repo = await resolveRepoRoot(options.repo);
   let id = ref;
   if (id === undefined) {
-    const latest = (await readIndex(repo)).findLast(
-      (e) => e.kind === "review" && e.pr !== undefined,
-    );
+    const latest = (await readIndex(repo)).findLast((e) => isReviewEntry(e) && e.pr !== undefined);
     if (latest === undefined) throw new Error("No PR review to post. Review a PR first.");
     id = latest.id;
   }
@@ -692,7 +692,7 @@ async function post(ref: string | undefined, options: { repo: string }): Promise
 async function runs(options: { repo: string; limit: string }): Promise<void> {
   const limit = Number(options.limit);
   if (!Number.isInteger(limit) || limit < 1) throw new Error("--limit must be a positive integer");
-  const entries = await readIndex(await resolveRepoRoot(options.repo));
+  const entries = await readIndex<IndexEntry>(await resolveRepoRoot(options.repo));
   console.log(formatRuns(entries.slice(-limit), colorOptions()));
 }
 
